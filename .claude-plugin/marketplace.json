@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "abrose-plugins",
+  "description": "Alfred Brose's personal Claude Code plugin collection.",
+  "owner": {
+    "name": "Alfred Brose"
+  },
+  "plugins": [
+    {
+      "name": "adhd-explanatory-mode",
+      "description": "SessionStart hook that reshapes explanatory output for an ADHD reader: lead with the action, number steps, restate state, make wins visible, cut preamble/closers. Toggle per session.",
+      "source": "./plugins/adhd-explanatory-mode",
+      "category": "productivity"
+    }
+  ]
+}
