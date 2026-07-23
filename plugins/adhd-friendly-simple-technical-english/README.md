@@ -31,12 +31,6 @@ Only one output style is active at a time. Choose this one from the menu:
 The change takes effect after `/clear` or in a new session (the system prompt is cached at
 session start). To go back, select **Default** in the same menu.
 
-## Note: do not stack with the hook plugins
-
-This plugin overlaps with the `adhd-explanatory-mode` and `simplified-technical-english` hook
-plugins. If you run all three at once, the same rules arrive more than one time. While you use
-this output style, disable those two plugins (or start with `CLAUDE_ADHD=0 CLAUDE_STE=0`).
-
 ## Credit
 
 - ADHD shape adapted from the MIT-licensed
