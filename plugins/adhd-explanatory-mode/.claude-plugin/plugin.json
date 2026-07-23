@@ -1,8 +1,0 @@
-{
-  "name": "adhd-explanatory-mode",
-  "version": "1.0.0",
-  "description": "Explanatory output, restructured for an ADHD reader. Injects action-first / numbered / skimmable output rules as SessionStart additionalContext.",
-  "author": {
-    "name": "Alfred Brose"
-  }
-}
