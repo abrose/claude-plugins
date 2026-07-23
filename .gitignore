@@ -1,0 +1,5 @@
+# Local reference material only — not distributed.
+# Contains the copyrighted ASD-STE100 standard PDF used while authoring the
+# simplified-technical-english plugins. The rules are distilled into each
+# plugin's instructions/ and output-styles/ files; the PDF is not needed at runtime.
+plugins/simplified-technical-english/docs/

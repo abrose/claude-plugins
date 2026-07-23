@@ -1,0 +1,8 @@
+{
+  "name": "simplified-technical-english",
+  "version": "1.0.0",
+  "description": "Writes all prose in Simplified Technical English (ASD-STE100): short sentences, active voice, imperative instructions, consistent terms. Injected as SessionStart additionalContext.",
+  "author": {
+    "name": "Alfred Brose"
+  }
+}

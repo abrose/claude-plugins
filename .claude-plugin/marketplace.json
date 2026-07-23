@@ -11,6 +11,18 @@
       "description": "SessionStart hook that reshapes explanatory output for an ADHD reader: lead with the action, number steps, restate state, make wins visible, cut preamble/closers. Toggle per session.",
       "source": "./plugins/adhd-explanatory-mode",
       "category": "productivity"
+    },
+    {
+      "name": "simplified-technical-english",
+      "description": "SessionStart hook that writes all prose in Simplified Technical English (ASD-STE100): short sentences, active voice, imperative instructions, one meaning per word, consistent terms. Exempts code. Toggle per session.",
+      "source": "./plugins/simplified-technical-english",
+      "category": "productivity"
+    },
+    {
+      "name": "adhd-friendly-simple-technical-english",
+      "description": "Ships one output style combining Simplified Technical English (short, direct sentences) with an ADHD-friendly, action-first shape, and keeps the teaching insight blocks. Select it from /config.",
+      "source": "./adhd-friendly-simple-technical-english",
+      "category": "productivity"
     }
   ]
 }
