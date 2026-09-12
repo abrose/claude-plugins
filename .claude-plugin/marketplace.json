@@ -11,6 +11,12 @@
       "description": "Ships one output style combining Simplified Technical English (short, direct sentences) with an ADHD-friendly, action-first shape, and keeps the teaching insight blocks. Select it from /config.",
       "source": "./plugins/adhd-friendly-simple-technical-english",
       "category": "productivity"
+    },
+    {
+      "name": "quota-statusline",
+      "description": "Quota-spend projection engine for statuslines. Reads the Claude Code rate-limit payload, logs a rolling per-profile usage sample, and emits a JSON verdict per window (5h/7d): are you on pace to blow the limit before it resets, or coasting under it? Weekly projection counts active hours, not 24/7. Bring your own rendering.",
+      "source": "./plugins/quota-statusline",
+      "category": "productivity"
     }
   ]
 }

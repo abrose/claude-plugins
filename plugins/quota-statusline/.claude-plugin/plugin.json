@@ -1,0 +1,8 @@
+{
+  "name": "quota-statusline",
+  "version": "1.0.0",
+  "description": "Quota-spend projection engine (bin/quota-statusline). Reads the Claude Code rate-limit payload and emits a per-window JSON verdict for statuslines; the 7d projection counts active hours, not 24/7.",
+  "author": {
+    "name": "Alfred Brose"
+  }
+}

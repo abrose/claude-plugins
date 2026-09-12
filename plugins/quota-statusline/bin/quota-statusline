@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""quota-statusline - quota-spend projection engine for Claude Code statuslines.
+
+Reads the statusline JSON payload on stdin (uses only .rate_limits). Appends a
+rolling per-profile usage sample, then prints a JSON verdict per rate-limit
+window. Rendering is the caller's job. See SPEC.md for the model and the field
+contract.
+"""
+import json
+import os
+import sys
+import time
+
+# Window table: label -> (window_seconds, log_key, mode).
+WINDOWS = {
+    "5h": (18000, "h5", "recent"),
+    "7d": (604800, "d7", "active"),
+}
+# Which rate_limits key feeds which log key.
+PAYLOAD_KEY = {"h5": "five_hour", "d7": "seven_day"}
+
+
+def env_num(name, default):
+    try:
+        return type(default)(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+def now_ts():
+    return int(os.environ.get("CQUOTA_NOW") or time.time())
+
+
+def log_path():
+    if "CQUOTA_LOG_PATH" in os.environ:
+        return os.environ["CQUOTA_LOG_PATH"]
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude"
+    )
+    return os.path.join(config_dir, "usage-log.jsonl")
+
+
+def log_sample(data, now):
+    """Append one throttled, retained sample from the payload's rate_limits."""
+    rl = data.get("rate_limits")
+    if not rl:
+        return
+    retain = env_num("CQUOTA_RETAIN_DAYS", 10) * 86400
+    throttle = env_num("CQUOTA_THROTTLE", 300)
+    entry = {"t": now}
+    for log_key, payload_key in PAYLOAD_KEY.items():
+        w = rl.get(payload_key)
+        if w:
+            entry[log_key] = {"u": w.get("used_percentage", 0), "r": w.get("resets_at", 0)}
+    path = log_path()
+    kept, newest = [], None
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    t = json.loads(line).get("t", 0)
+                except ValueError:
+                    continue
+                if t >= now - retain:
+                    kept.append(line)
+                    if newest is None or t > newest:
+                        newest = t
+    except FileNotFoundError:
+        pass
+    if newest is None or now - newest >= throttle:
+        kept.append(json.dumps(entry))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        f.write("\n".join(kept) + "\n")
+
+
+def load_points(path, key, resets_at, now):
+    """Samples for this window instance: matching reset, within retention, sorted."""
+    retain = env_num("CQUOTA_RETAIN_DAYS", 10) * 86400
+    pts = []
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                w = e.get(key)
+                if not w or float(w.get("r", 0)) != resets_at:
+                    continue
+                t = float(e.get("t", 0))
+                if t >= now - retain:
+                    pts.append((t, float(w.get("u", 0))))
+    except FileNotFoundError:
+        pass
+    pts.sort()
+    return pts
+
+
+def project(used, resets_at, win, now, pts, mode):
+    """Return the verdict dict for one window. Pure: pts already loaded."""
+    active_gap = env_num("CQUOTA_ACTIVE_GAP", 900)
+    rate_window = env_num("CQUOTA_RATE_WINDOW", 86400)
+    min_active = env_num("CQUOTA_MIN_ACTIVE", 900)
+    learn_min = env_num("CQUOTA_LEARN_MIN_DAYS", 3) * 86400
+    active_hpd_default = float(env_num("CQUOTA_ACTIVE_HPD_DEFAULT", 8))
+
+    used_pct = int(used)
+    if used >= 100:
+        return _verdict("max", "CAP", None, used_pct, None)
+    elapsed = now - (resets_at - win)
+    remaining = resets_at - now
+    if elapsed <= 0 or remaining <= 0 or elapsed / win < 0.05:
+        return _verdict("warm", "~", None, used_pct, None)
+
+    def wall_project(rate_sec):
+        if rate_sec <= 0:
+            return None
+        return (used + rate_sec * remaining,
+                round(((100 - used) / rate_sec - remaining) / 3600))
+
+    cumulative = used / elapsed if elapsed > 0 else 0.0
+    landing = diff_h = None
+
+    if mode == "active":
+        tot_active = rec_active = rec_burn = 0.0
+        for i in range(1, len(pts)):
+            t0, u0 = pts[i - 1]
+            t1, u1 = pts[i]
+            gap = t1 - t0
+            if gap <= 0 or gap > active_gap:
+                continue
+            tot_active += gap
+            if t1 >= now - rate_window:
+                rec_active += gap
+                rec_burn += max(0.0, u1 - u0)
+        span = pts[-1][0] - pts[0][0] if len(pts) >= 2 else 0.0
+        active_hpd = active_hpd_default
+        if span >= learn_min and tot_active > 0:
+            active_hpd = min(24.0, max(1.0, tot_active / span * 24.0))
+        if rec_active >= min_active:
+            rate_h = rec_burn / rec_active * 3600.0
+            if rate_h > 0:
+                wall_to_cap = (100 - used) / rate_h * (86400.0 / active_hpd)
+                landing = used + rate_h * active_hpd * (remaining / 86400.0)
+                diff_h = round((wall_to_cap - remaining) / 3600)
+        else:
+            res = wall_project(cumulative)
+            if res:
+                landing, diff_h = res
+    else:  # recent velocity (5h)
+        lb = min(4 * 3600, win / 4)
+        rp = [p for p in pts if p[0] >= now - lb]
+        slope = None
+        if len(rp) >= 2:
+            n = len(rp)
+            ts = [p[0] for p in rp]
+            us = [p[1] for p in rp]
+            tb = sum(ts) / n
+            ub = sum(us) / n
+            den = sum((t - tb) ** 2 for t in ts)
+            if den > 0:
+                slope = sum((ts[i] - tb) * (us[i] - ub) for i in range(n)) / den
+        res = wall_project(slope if slope is not None else cumulative)
+        if res:
+            landing, diff_h = res
+
+    if landing is None:
+        return _verdict("safe", "∞", None, used_pct, None)
+    if diff_h > 168:
+        info = "∞"
+    elif diff_h > 0:
+        info = f"+{diff_h}h"
+    elif diff_h < 0:
+        info = f"{diff_h}h"
+    else:
+        info = "0h"
+    sev = "hot" if landing > 100 else "near" if landing >= 80 else "safe"
+    return _verdict(sev, info, diff_h, used_pct, round(landing, 1))
+
+
+def _verdict(severity, info, diff_h, used_pct, landing_pct):
+    return {
+        "severity": severity,
+        "info": info,
+        "diff_h": diff_h,
+        "used_pct": used_pct,
+        "landing_pct": landing_pct,
+    }
+
+
+def verdict_for(label, data, now, path):
+    win, key, mode = WINDOWS[label]
+    rl = data.get("rate_limits") or {}
+    w = rl.get(PAYLOAD_KEY[key])
+    if not w or w.get("used_percentage") is None or w.get("resets_at") is None:
+        return None
+    used = float(w["used_percentage"])
+    resets_at = float(w["resets_at"])
+    pts = load_points(path, key, resets_at, now)
+    return project(used, resets_at, win, now, pts, mode)
+
+
+def main(argv):
+    do_log = True
+    only = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--no-log":
+            do_log = False
+        elif a == "--window":
+            i += 1
+            only = argv[i]
+        else:
+            sys.stderr.write(f"quota-statusline: unknown arg {a}\n")
+            return 2
+        i += 1
+    if only is not None and only not in WINDOWS:
+        sys.stderr.write(f"quota-statusline: unknown window {only}\n")
+        return 2
+
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        data = {}
+    now = now_ts()
+    if do_log:
+        log_sample(data, now)
+    path = log_path()
+
+    if only is not None:
+        v = verdict_for(only, data, now, path)
+        print(json.dumps(v))
+        return 0
+    out = {}
+    for label in WINDOWS:
+        v = verdict_for(label, data, now, path)
+        if v is not None:
+            out[label] = v
+    print(json.dumps(out))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

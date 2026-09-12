@@ -1,11 +1,11 @@
 # claude-plugins
 
-Alfred Brose's personal Claude Code **marketplace** (`abrose-plugins`). It ships one
-output-shaping plugin as a custom output style.
+Alfred Brose's personal Claude Code **marketplace** (`abrose-plugins`).
 
 | Plugin | Mechanism | What it does |
 |--------|-----------|--------------|
 | [`adhd-friendly-simple-technical-english`](plugins/adhd-friendly-simple-technical-english/) | Output style | Combines Simplified Technical English (ASD-STE100) short, direct sentences with an ADHD action-first shape — numbered, skimmable, no fluff — and keeps the depth (the "why" and the `★ Insight ─────` blocks). Code is exempt. Select it from `/config`. |
+| [`quota-statusline`](plugins/quota-statusline/) | `bin/` executable | A quota-spend projection engine (`quota-statusline`). Reads the Claude Code rate-limit payload, logs a rolling per-profile usage sample, and prints a JSON verdict per window (5h/7d): on pace to blow the limit before it resets, or coasting under it? The weekly projection counts active hours, not 24/7. Bring your own rendering. |
 
 ## Install
 
@@ -35,6 +35,13 @@ session.
 plugins/adhd-friendly-simple-technical-english/ # output-style plugin
 ├── .claude-plugin/plugin.json                  # plugin manifest
 ├── output-styles/adhd-friendly-ste.md          # the output style (frontmatter + rules)
+├── README.md
+└── LICENSE
+
+plugins/quota-statusline/                        # bin/ executable plugin
+├── .claude-plugin/plugin.json                  # plugin manifest
+├── bin/quota-statusline                         # the projection engine (python3)
+├── tests/test_cquota.py                         # unit + behaviour tests
 ├── README.md
 └── LICENSE
 ```
