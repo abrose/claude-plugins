@@ -107,6 +107,55 @@ class ProjectUnitTests(unittest.TestCase):
         v = cq.project(30.7, D7_RESET, 604800, NOW, [], "active")
         self.assertEqual(v["used_pct"], 30)
 
+    def low_duty_history(self, extra=None):
+        """A bursty low-duty 7d history: a dense active cluster ~3 days ago, a
+        multi-day idle gap, and a short active cluster ending at NOW. `extra`
+        appends one later sample so a second render can push span past the
+        3-day learn threshold.
+        """
+        pts = [(NOW - 259000 + i * 300, 40.0 + 2.0 * i / 8) for i in range(9)]
+        pts += [(NOW - 2700 + i * 300, 50.0 + 4.0 * i / 9) for i in range(10)]
+        if extra is not None:
+            pts.append(extra)
+        pts.sort()
+        return pts
+
+    def test_landing_does_not_jump_when_span_crosses_learn_min(self):
+        # Two renders 10 min apart. The second adds one flat sample that tips
+        # span from just under 3 days to just over. used% is unchanged, so the
+        # verdict must not lurch.
+        before = self.low_duty_history()
+        after = self.low_duty_history(extra=(NOW + 600, 54.0))
+
+        v_before = cq.project(54.0, D7_RESET, 604800, NOW, before, "active")
+        v_after = cq.project(54.0, D7_RESET, 604800, NOW + 600, after, "active")
+
+        self.assertEqual(v_after["severity"], v_before["severity"])
+        self.assertLess(
+            abs(v_after["landing_pct"] - v_before["landing_pct"]),
+            0.25 * v_before["landing_pct"],
+        )
+
+    def two_cluster_history(self, earlier_start):
+        """A ~4h active cluster ending at NOW plus a second ~4h cluster starting
+        at `earlier_start`. Both clusters carry identical active time; only the
+        idle gap between them changes with `earlier_start`.
+        """
+        recent = [(NOW - 14100 + i * 300, 50.0 + 4.0 * i / 47) for i in range(48)]
+        earlier = [(earlier_start + i * 300, 40.0) for i in range(48)]
+        return sorted(earlier + recent)
+
+    def test_idle_days_between_bursts_do_not_dilute_duty(self):
+        # Same active work, same recent burst - only the idle gap grows. Duty is
+        # hours-per-active-day, so widening the gap must not relax the landing.
+        near = self.two_cluster_history(NOW - 3 * 86400 - 3600)
+        far = self.two_cluster_history(NOW - 6 * 86400 - 3600)
+
+        v_near = cq.project(54.0, D7_RESET, 604800, NOW, near, "active")
+        v_far = cq.project(54.0, D7_RESET, 604800, NOW, far, "active")
+
+        self.assertEqual(v_near["landing_pct"], v_far["landing_pct"])
+
 
 class CliBehaviourTests(unittest.TestCase):
     """Run the engine the way Claude Code does: JSON on stdin, JSON out."""
@@ -178,10 +227,12 @@ class CliBehaviourTests(unittest.TestCase):
     # --- active-mode projection (7d, duty-cycle aware) ---
 
     def test_active_burst_projected_over_worked_hours_not_247(self):
-        # 24->30 over the last 4h; at 8 worked-hours/day lands well under cap.
+        # 24->30 over the last 4h. Duty is learned with growing confidence, so
+        # 4h of same-day activity nudges active-hpd just below the 8h default and
+        # the margin lands a few hours wider than a pure-default projection.
         self.seed(*gen_samples("d7", 24, 30, 48, 1789185600, D7_RESET))
         out = self.run_engine(payload(h5_used=3, d7_used=30))
-        self.assertEqual(out["7d"]["info"], "+56h")
+        self.assertEqual(out["7d"]["info"], "+60h")
         self.assertEqual(out["7d"]["severity"], "safe")
 
     def test_active_coast_reads_infinity(self):

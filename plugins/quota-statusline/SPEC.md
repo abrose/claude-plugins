@@ -114,8 +114,9 @@ day:
 
 ```
 active_rate_h = recent_active_burn / recent_active_time * 3600      # %/active-hour, over last RATE_WINDOW
-active_hpd    = clamp(total_active_time / span * 24, 1, 24)  if span >= LEARN_MIN_DAYS
-              = ACTIVE_HPD_DEFAULT                            otherwise   # hybrid: default -> learned
+learned_hpd   = clamp(total_active_time / active_days / 3600, 1, 24)   # hours per *working* day
+confidence    = min(1, span / LEARN_MIN_DAYS)                          # 0 with no history, 1 at LEARN_MIN_DAYS
+active_hpd    = (1 - confidence) * ACTIVE_HPD_DEFAULT + confidence * learned_hpd
 wall_to_cap   = (100 - used) / active_rate_h * (86400 / active_hpd)
 diff_h        = round((wall_to_cap - remaining) / 3600)
 landing_pct   = used + active_rate_h * active_hpd * (remaining / 86400)
@@ -123,6 +124,13 @@ landing_pct   = used + active_rate_h * active_hpd * (remaining / 86400)
 
 - A gap `> ACTIVE_GAP` between two samples = the session was closed/idle: that
   span is **not** counted as active time. Overnight gaps do not leak in.
+- `active_days` is the count of **distinct calendar days on which active time
+  accrued**, not the calendar span. Dividing by working days, not span, means a
+  profile used in short bursts every few days learns its true hours-per-working-
+  day - long idle gaps never dilute the rate.
+- `active_hpd` blends the default toward the learned duty as `confidence` grows
+  from 0 (no history) to 1 (at `LEARN_MIN_DAYS`). The blend is continuous, so the
+  projection never jumps when the log first spans `LEARN_MIN_DAYS`.
 - Recent-present-but-flat reads as a coast (`active_rate_h = 0` -> `∞`).
 - Fallback (recent active time `< MIN_ACTIVE`): whole-window average
   `used/elapsed`. Keeps the display correct right after a deploy or a reset.
@@ -159,7 +167,7 @@ real users change.
 | `CQUOTA_ACTIVE_GAP` | `900` | Max gap (s) between samples still counted as "session present". |
 | `CQUOTA_RATE_WINDOW` | `86400` | Window (s) for the recent active burn rate. |
 | `CQUOTA_MIN_ACTIVE` | `900` | Minimum recent active time (s) before trusting the active rate. |
-| `CQUOTA_LEARN_MIN_DAYS` | `3` | Learn `active_hpd` from the log only past this span. |
+| `CQUOTA_LEARN_MIN_DAYS` | `3` | Span at which confidence in the learned duty reaches full. Below it, `active_hpd` blends toward `ACTIVE_HPD_DEFAULT`. |
 | `CQUOTA_RETAIN_DAYS` | `10` | Prune samples older than this. |
 | `CQUOTA_THROTTLE` | `300` | Minimum seconds between appended samples. |
 
@@ -359,6 +367,7 @@ def project(used, resets_at, win, now, pts, mode):
 
     if mode == "active":
         tot_active = rec_active = rec_burn = 0.0
+        active_days = set()
         for i in range(1, len(pts)):
             t0, u0 = pts[i - 1]
             t1, u1 = pts[i]
@@ -366,13 +375,17 @@ def project(used, resets_at, win, now, pts, mode):
             if gap <= 0 or gap > active_gap:
                 continue
             tot_active += gap
+            active_days.add(int(t0 // 86400))
+            active_days.add(int(t1 // 86400))
             if t1 >= now - rate_window:
                 rec_active += gap
                 rec_burn += max(0.0, u1 - u0)
         span = pts[-1][0] - pts[0][0] if len(pts) >= 2 else 0.0
         active_hpd = active_hpd_default
-        if span >= learn_min and tot_active > 0:
-            active_hpd = min(24.0, max(1.0, tot_active / span * 24.0))
+        if tot_active > 0 and active_days:
+            learned = min(24.0, max(1.0, tot_active / len(active_days) / 3600.0))
+            confidence = 1.0 if learn_min <= 0 else min(1.0, span / learn_min)
+            active_hpd = (1.0 - confidence) * active_hpd_default + confidence * learned
         if rec_active >= min_active:
             rate_h = rec_burn / rec_active * 3600.0
             if rate_h > 0:
