@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Start a team agent in a Herdr pane and record it under $TEAM_SCRATCH/.team.
+# Exit codes: 0 ok, 2 bad arguments, 3 pre-flight failed, 4 herdr error.
+set -euo pipefail
+
+usage() {
+  echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down)" >&2
+  echo "       [--effort low|medium|high] [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
+  exit 2
+}
+
+json_get() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)"; }
+
+[ $# -ge 2 ] || usage
+name="$1"; role="$2"; shift 2
+[[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "bad name: $name" >&2; exit 2; }
+
+case "$role" in
+  investigator) def_effort=medium; model=claude-opus-4-8; bar_model=Opus ;;
+  implementer)  def_effort=medium; model=claude-sonnet-5; bar_model=Sonnet ;;
+  tester)       def_effort=low;    model=claude-sonnet-5; bar_model=Sonnet ;;
+  *) echo "unknown role: $role" >&2; exit 2 ;;
+esac
+
+pane=""; split_pane=""; split_dir=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pane)   pane="${2:?}"; shift 2 ;;
+    --split)  split_pane="${2:?}"; split_dir="${3:?}"; shift 3 ;;
+    --effort) effort="${2:?}"; shift 2 ;;
+    --mode)   mode="${2:?}"; shift 2 ;;
+    --cwd)    cwd="${2:?}"; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+effort="${effort:-$def_effort}"
+[ -n "$pane" ] || [ -n "$split_pane" ] || usage
+case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
+
+if [ -n "$dry_run" ]; then
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --effort $effort --permission-mode $mode"
+  exit 0
+fi
+
+if [ -z "$pane" ]; then
+  out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" --no-focus) || exit 4
+  pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
+fi
+
+start() {
+  herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
+    --agent "team-$role" --effort "$effort" --permission-mode "$mode"
+}
+
+out=$(start) || exit 4
+if [ "$(echo "$out" | json_get "d.get('result',{}).get('status','')")" = "agent_not_ready" ]; then
+  snap=$(herdr agent read "$name" --source detection --lines 20) || exit 4
+  if echo "$snap" | grep -qiE 'trust|mcp server|\[y/n\]'; then
+    herdr agent send-keys "$name" enter >/dev/null || exit 4
+  fi
+  out=$(start) || exit 4
+  if [ "$(echo "$out" | json_get "d.get('result',{}).get('status','')")" = "agent_not_ready" ]; then
+    echo "agent not ready after answering the startup dialog" >&2
+    exit 3
+  fi
+fi
+
+bar=$(herdr agent read "$name" --source detection --lines 20) || exit 4
+if ! { echo "$bar" | grep -qF "$bar_model" \
+    && echo "$bar" | grep -qF "$mode" \
+    && echo "$bar" | grep -qF "$cwd"; }; then
+  echo "status bar mismatch (want $bar_model/$mode/$cwd):" >&2
+  echo "$bar" >&2
+  exit 3
+fi
+
+session=$(echo "$out" | json_get "d['result']['agent']['agent_session']['value']")
+session="${session:0:8}"
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+teamdir="${TEAM_SCRATCH:-scratchpad}/.team"
+mkdir -p "$teamdir"
+printf '{"role":"%s","topic":"","brief":"","pane":"%s","session":"%s","started":"%s"}\n' \
+  "$role" "$pane" "$session" "$started" >"$teamdir/$name.json"
+
+printf '{"name":"%s","role":"%s","pane":"%s","session":"%s","model":"%s","mode":"%s"}\n' \
+  "$name" "$role" "$pane" "$session" "$model" "$mode"

@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# Compose a brief file from templates + overlay, or send its kick-off prompt.
+# Exit codes: 0 ok, 1 refused (brief exists), 2 bad arguments, 4 herdr error,
+#             5 prompt stalled, 6 agent blocked.
+set -euo pipefail
+
+usage() {
+  echo "usage: team-brief compose <name> <topic> [--template <t>] [--var key=value ...]" >&2
+  echo "       team-brief send <name> [--topic <topic>]" >&2
+  exit 2
+}
+
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+templates="$plugin_root/skills/team-orchestration/templates"
+overlay="${TEAM_OVERLAY:-.claude/team}"
+scratch="${TEAM_SCRATCH:-scratchpad}"
+teamdir="$scratch/.team"
+
+json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
+
+valid_name() { [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; }
+valid_topic() { case "$1" in ""|*/*|*..*) return 1 ;; *) return 0 ;; esac; }
+
+role_of() {
+  local f="$teamdir/$1.json"
+  [ -f "$f" ] && json_get role <"$f"
+}
+
+render() {  # render <file>  (substitutes {{key}} from $VARS_JSON, leaves unknown tokens)
+  VARS_JSON="$1" python3 - "$2" <<'PY'
+import sys, os, json, re
+tpl = open(sys.argv[1]).read()
+vars = json.loads(os.environ["VARS_JSON"])
+sys.stdout.write(re.sub(r"\{\{(\w+)\}\}", lambda m: str(vars.get(m.group(1), m.group(0))), tpl))
+PY
+}
+
+cmd="${1:-}"; shift || usage
+
+case "$cmd" in
+compose)
+  [ $# -ge 2 ] || usage
+  name="$1"; topic="$2"; shift 2
+  valid_name "$name" || { echo "bad name: $name" >&2; exit 2; }
+  valid_topic "$topic" || { echo "bad topic: $topic" >&2; exit 2; }
+  tmpl=""; declare -a extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --template) tmpl="${2:?}"; shift 2 ;;
+      --var) extra+=("${2:?}"); shift 2 ;;
+      *) echo "unknown argument: $1" >&2; usage ;;
+    esac
+  done
+
+  role="$(role_of "$name" || true)"
+  for kv in "${extra[@]:-}"; do
+    case "$kv" in role=*) role="${kv#role=}" ;; esac
+  done
+  [ -n "$role" ] || { echo "no role for $name (run team-start first, or --var role=...)" >&2; exit 2; }
+
+  case "$role" in
+    investigator) def_tmpl=brief-analysis ;;
+    implementer)  def_tmpl=brief-implementation ;;
+    tester)       def_tmpl=brief-tester ;;
+    *) echo "unknown role: $role" >&2; exit 2 ;;
+  esac
+  tmpl="${tmpl:-$def_tmpl}"
+  [[ "$tmpl" =~ ^[a-z][a-z0-9-]+$ ]] || { echo "bad template: $tmpl" >&2; exit 2; }
+  [ -f "$templates/$tmpl.md" ] || { echo "no template: $tmpl" >&2; exit 2; }
+
+  ticket=""; orchestrator=orchestrator; decisions=""
+  [ -f "$teamdir/config.json" ] && {
+    ticket="$(json_get ticket <"$teamdir/config.json")"
+    o="$(json_get orchestrator <"$teamdir/config.json")"; [ -n "$o" ] && orchestrator="$o"
+  }
+  for kv in "${extra[@]:-}"; do
+    case "$kv" in
+      ticket=*) ticket="${kv#ticket=}" ;;
+      orchestrator=*) orchestrator="${kv#orchestrator=}" ;;
+      decisions=*) decisions="${kv#decisions=}" ;;
+    esac
+  done
+  [ -n "$decisions" ] || decisions="decisions-${ticket}.md"
+
+  VARS_JSON="$(python3 - "$name" "$topic" "$role" "$ticket" "$orchestrator" "$decisions" "${extra[@]:-}" <<'PY'
+import sys, json
+name, topic, role, ticket, orch, decisions = sys.argv[1:7]
+d = {"name": name, "topic": topic, "role": role, "ticket": ticket,
+     "orchestrator": orch, "decisions": decisions}
+for kv in sys.argv[7:]:
+    if "=" in kv:
+        k, v = kv.split("=", 1)
+        d[k] = v
+print(json.dumps(d))
+PY
+)"
+  export VARS_JSON
+
+  mkdir -p "$scratch"
+  out_file="$scratch/brief-$name-$topic.md"
+  [ -e "$out_file" ] && { echo "brief exists: $out_file (compose a new topic, e.g. ${topic}-rev2)" >&2; exit 1; }
+
+  {
+    render "$VARS_JSON" "$templates/$tmpl.md"
+    [ -f "$overlay/roles/$role.md" ] && { echo; cat "$overlay/roles/$role.md"; }
+    [ -f "$overlay/env.md" ] && { echo; echo "## Environment"; echo; cat "$overlay/env.md"; }
+    [ -f "$overlay/gate.md" ] && { echo; echo "## Gate"; echo; cat "$overlay/gate.md"; }
+    echo
+    render "$VARS_JSON" "$templates/brief.md" | sed -n '/^## Report back/,$p'
+  } >"$out_file"
+  echo "$out_file"
+  ;;
+
+send)
+  [ $# -ge 1 ] || usage
+  name="$1"; shift
+  valid_name "$name" || { echo "bad name: $name" >&2; exit 2; }
+  topic=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --topic) topic="${2:?}"; shift 2 ;;
+      *) echo "unknown argument: $1" >&2; usage ;;
+    esac
+  done
+  jf="$teamdir/$name.json"
+  [ -f "$jf" ] || { echo "no agent record: $jf" >&2; exit 2; }
+  [ -n "$topic" ] || topic="$(json_get topic <"$jf")"
+  [ -n "$topic" ] || { echo "no topic (pass --topic)" >&2; exit 2; }
+  valid_topic "$topic" || { echo "bad topic: $topic" >&2; exit 2; }
+  brief="$scratch/brief-$name-$topic.md"
+  [ -f "$brief" ] || { echo "no brief: $brief" >&2; exit 2; }
+
+  TOPIC="$topic" BRIEF="$brief" python3 - "$jf" <<'PY'
+import sys, os, json
+f = sys.argv[1]
+d = json.load(open(f))
+d["topic"] = os.environ["TOPIC"]
+d["brief"] = os.environ["BRIEF"]
+json.dump(d, open(f, "w"))
+PY
+
+  prompt="Read $brief and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
+  err="$(mktemp)"
+  trap 'rm -f "$err"' EXIT
+  if out=$(herdr agent prompt "$name" --wait "$prompt" 2>"$err"); then
+    echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['state'])"
+    exit 0
+  fi
+  code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$err" 2>/dev/null || true)"
+  case "$code" in
+    agent_prompt_stalled)
+      echo "STALLED: $name did not start a turn; not re-sending." >&2
+      herdr agent read "$name" --source recent-unwrapped --lines 20 >&2 || true
+      exit 5 ;;
+    agent_blocked)
+      echo "BLOCKED: $name is at a dialog:" >&2
+      cat "$err" >&2
+      exit 6 ;;
+    *)
+      cat "$err" >&2
+      exit 4 ;;
+  esac
+  ;;
+
+*) usage ;;
+esac

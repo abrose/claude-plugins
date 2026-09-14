@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Create a worktree + Herdr tab for one slice.
+# Exit codes: 0 ok, 2 bad arguments, 4 herdr error.
+set -euo pipefail
+
+usage() {
+  echo 'usage: team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--copy <dir> ...]' >&2
+  exit 2
+}
+
+overlay="${TEAM_OVERLAY:-.claude/team}"
+project="$overlay/project.yaml"
+
+yget() {  # yget <key> ; reads $project, prints scalar value or empty
+  python3 - "$project" "$1" <<'PY'
+import sys, re
+try:
+    text = open(sys.argv[1]).read()
+except OSError:
+    sys.exit(0)
+for line in text.splitlines():
+    m = re.match(r"\s*" + re.escape(sys.argv[2]) + r"\s*:\s*(.*)$", line)
+    if m:
+        v = m.group(1).strip()
+        if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
+            v = v[1:-1]
+        print(v)
+        break
+PY
+}
+
+[ $# -ge 2 ] || usage
+branch="$1"; parent="$2"; shift 2
+for ref in "$branch" "$parent"; do
+  [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "bad git ref: $ref" >&2; exit 2; }
+  case "$ref" in *..*) echo "bad git ref: $ref" >&2; exit 2 ;; esac
+done
+label=""; ticket=""; declare -a copies=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --label)  label="${2:?}"; shift 2 ;;
+    --ticket) ticket="${2:?}"; shift 2 ;;
+    --copy)   copies+=("${2:?}"); shift 2 ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+[ -n "$label" ] || usage
+
+worktree_cmd="$(yget worktree_cmd)"
+[ -n "$worktree_cmd" ] || worktree_cmd='git worktree add -b {branch} ../{branch} {parent}'
+worktree_dir="$(yget worktree_dir)"
+[ -n "$worktree_dir" ] || worktree_dir="../$branch"
+
+cmd="${worktree_cmd//\{branch\}/$branch}"
+cmd="${cmd//\{parent\}/$parent}"
+wt="${worktree_dir//\{branch\}/$branch}"
+
+bash -c "$cmd"
+
+if [ "$(yget stacked)" = "true" ]; then
+  ( cd "$wt" && git m add "$branch" --onto "$parent" )
+fi
+
+if [ "${#copies[@]}" -gt 0 ]; then
+  mkdir -p "$wt/scratchpad"
+  for d in "${copies[@]}"; do cp -R "$d" "$wt/scratchpad/"; done
+  [ "$(yget spdd)" = "true" ] && echo "warning: untracked spdd files under a copied dir do not travel" >&2
+fi
+
+out=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?}" --cwd "$wt" --label "$label" --no-focus) || exit 4
+python3 -c "import sys,json;d=json.load(sys.stdin);print(json.dumps({'worktree':'$wt','tab':d['result']['tab']['tab_id'],'pane':d['result']['root_pane']['pane_id']}))" <<<"$out"
+
+if [ -f "$overlay/env.md" ]; then
+  awk '/^#+ *Slice kick-off/{f=1;next} /^#+ /{f=0} f' "$overlay/env.md"
+fi

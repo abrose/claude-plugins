@@ -6,6 +6,7 @@ Alfred Brose's personal Claude Code **marketplace** (`abrose-plugins`).
 |--------|-----------|--------------|
 | [`adhd-friendly-simple-technical-english`](plugins/adhd-friendly-simple-technical-english/) | Output style | Combines Simplified Technical English (ASD-STE100) short, direct sentences with an ADHD action-first shape — numbered, skimmable, no fluff — and keeps the depth (the "why" and the `★ Insight ─────` blocks). Code is exempt. Select it from `/config`. |
 | [`quota-statusline`](plugins/quota-statusline/) | `bin/` executable | A quota-spend projection engine (`quota-statusline`). Reads the Claude Code rate-limit payload, logs a rolling per-profile usage sample, and prints a JSON verdict per window (5h/7d): on pace to blow the limit before it resets, or coasting under it? The weekly projection counts active hours, not 24/7. Bring your own rendering. |
+| [`team`](plugins/team/) | Skills + agents + commands + hook + `bin/` | Orchestrator-plus-team-agents workflow with Herdr. One session you talk to, role agents in panes, briefs as files, a numbered decisions file, reports by a Stop hook. Kernel only; each project adds a small overlay. |
 
 ## Install
 
@@ -30,7 +31,7 @@ session.
 ## Repo layout
 
 ```
-.claude-plugin/marketplace.json                # this marketplace (lists one plugin)
+.claude-plugin/marketplace.json                # this marketplace
 
 plugins/adhd-friendly-simple-technical-english/ # output-style plugin
 ├── .claude-plugin/plugin.json                  # plugin manifest
@@ -42,6 +43,17 @@ plugins/quota-statusline/                        # bin/ executable plugin
 ├── .claude-plugin/plugin.json                  # plugin manifest
 ├── bin/quota-statusline                         # the projection engine (python3)
 ├── tests/test_cquota.py                         # unit + behaviour tests
+├── README.md
+└── LICENSE
+
+plugins/team/                                    # orchestration workflow plugin
+├── .claude-plugin/plugin.json                  # plugin manifest
+├── skills/                                      # protocol + role rules + templates
+├── agents/                                      # team-investigator, -implementer, -tester
+├── commands/                                     # /team:init, brief, status, release
+├── hooks/                                        # Stop hook: forwards reports
+├── bin/                                          # team-start, team-brief, team-slice, team-status
+├── tests/test_team.py                            # behaviour tests against fake CLIs
 ├── README.md
 └── LICENSE
 ```

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Merge `herdr agent list` with $TEAM_SCRATCH/.team/*.json into a roster.
+# Exit codes: 0 ok, 2 bad arguments, 4 herdr error.
+set -euo pipefail
+
+scratch="${TEAM_SCRATCH:-scratchpad}"
+teamdir="$scratch/.team"
+
+as_json=""; read_idle=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) as_json=1; shift ;;
+    --read-idle) read_idle=1; shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+list=$(herdr agent list) || exit 4
+
+# Pass 1: emit one TSV row per agent with a needread flag.
+rows=$(SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" python3 - <<'PY'
+import os, json, time
+scratch, teamdir = os.environ["SCRATCH"], os.environ["TEAMDIR"]
+now = int(os.environ.get("TEAM_NOW", int(time.time())))
+agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
+for a in agents:
+    name = a.get("name", "")
+    pane = a.get("pane_id", "")
+    session = a.get("agent_session", {}).get("value", "")[:8]
+    state = a.get("state", "unknown")
+    role = topic = ""
+    tf = os.path.join(teamdir, name + ".json")
+    if os.path.exists(tf):
+        rec = json.load(open(tf))
+        role, topic = rec.get("role", ""), rec.get("topic", "")
+    report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
+    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
+    age, r_mtime = "-", None
+    if os.path.exists(report):
+        r_mtime = os.path.getmtime(report)
+        s = int(now - r_mtime)
+        age = "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600) if s < 86400 else "%dd" % (s // 86400)
+    stale = (r_mtime is None) or (os.path.exists(brief) and r_mtime < os.path.getmtime(brief))
+    needread = 1 if (state in ("idle", "done") and stale) else 0
+    print("\t".join([name, pane, session, state, role, topic, age, str(needread)]))
+PY
+)
+
+final=""
+while IFS=$'\t' read -r name pane session state role topic age needread; do
+  [ -n "$name" ] || continue
+  note=""
+  if [ -n "$read_idle" ] && [ "$needread" = "1" ]; then
+    note=$(herdr agent read "$name" --source recent-unwrapped --lines 8 | awk 'NF{l=$0} END{print l}')
+  fi
+  final+="$name	$pane	$session	$state	$role	$topic	$age	$note"$'\n'
+done <<<"$rows"
+
+# Pass 2: render text (always to roster.md) and stdout (text or json).
+mkdir -p "$teamdir"
+AS_JSON="$as_json" ROSTER="$teamdir/roster.md" FINAL="$final" python3 - <<'PY'
+import os, json
+lines = [l for l in os.environ["FINAL"].splitlines() if l.strip()]
+recs = []
+text = []
+for l in lines:
+    p = (l.split("\t") + [""] * 8)[:8]
+    name, pane, session, state, role, topic, age, note = p
+    recs.append({"name": name, "pane": pane, "session": session, "state": state,
+                 "role": role, "topic": topic, "report_age": age})
+    row = "%s (%s, %s) %s %s %s %s" % (name, pane, session, state, role, topic or "-", age)
+    if note:
+        row += "  | " + note
+    text.append(row)
+open(os.environ["ROSTER"], "w").write("\n".join(text) + ("\n" if text else ""))
+if os.environ.get("AS_JSON"):
+    print(json.dumps(recs))
+else:
+    print("\n".join(text))
+PY

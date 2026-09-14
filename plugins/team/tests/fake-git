@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test double for git (and `git m`, git-machete). Records every invocation to
+# $FAKE_GIT_LOG and succeeds. On `worktree add`, it creates any path-shaped
+# argument so a following `cd <worktree>` works without a real worktree.
+set -euo pipefail
+printf '%s\n' "$*" >>"${FAKE_GIT_LOG:?FAKE_GIT_LOG unset}"
+if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -b|-B) shift 2 ;;
+      -*) shift ;;
+      *) mkdir -p "$1"; break ;;   # first positional is the worktree path
+    esac
+  done
+fi
+exit 0
