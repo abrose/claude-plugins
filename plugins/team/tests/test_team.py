@@ -212,6 +212,16 @@ class TeamBriefSend(Base):
                             scenario="prompt_blocked")
         self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
 
+    def test_send_positions_prompt_before_wait_flag(self):
+        self.prep()
+        p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        self.assertEqual(len(prompts), 1)
+        call = prompts[0]
+        self.assertTrue(call.startswith("agent prompt scout Read "), call)
+        self.assertTrue(call.endswith(" --wait"), call)
+
 
 class TeamSlice(Base):
     def test_default_worktree_cmd_no_machete(self):

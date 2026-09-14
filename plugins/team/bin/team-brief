@@ -142,7 +142,7 @@ PY
   prompt="Read $brief and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
   err="$(mktemp)"
   trap 'rm -f "$err"' EXIT
-  if out=$(herdr agent prompt "$name" --wait "$prompt" 2>"$err"); then
+  if out=$(herdr agent prompt "$name" "$prompt" --wait 2>"$err"); then
     echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['state'])"
     exit 0
   fi
