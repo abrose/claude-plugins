@@ -70,8 +70,8 @@ fi
 bar=$(herdr agent read "$name" --source detection --lines 20) || exit 4
 if ! { echo "$bar" | grep -qF "$bar_model" \
     && echo "$bar" | grep -qF "$mode" \
-    && echo "$bar" | grep -qF "$cwd"; }; then
-  echo "status bar mismatch (want $bar_model/$mode/$cwd):" >&2
+    && echo "$bar" | grep -qF "$(basename "$cwd")"; }; then
+  echo "status bar mismatch (want $bar_model/$mode/$(basename "$cwd")):" >&2
   echo "$bar" >&2
   exit 3
 fi

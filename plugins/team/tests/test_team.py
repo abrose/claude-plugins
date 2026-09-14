@@ -122,6 +122,14 @@ class TeamStart(Base):
         self.assertTrue(any(c.startswith("agent send-keys scout enter") for c in calls))
         self.assertEqual(sum(c.startswith("agent start ") for c in calls), 2)
 
+    def test_writes_record_when_bar_shows_basename_only(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj,
+                            env_extra=self.bar_env("Opus 4.8", cwd=os.path.basename(self.proj)))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["role"], "investigator")
+
     def test_aborts_on_wrong_model(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5"))
