@@ -164,6 +164,20 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent start scout ") for c in self.herdr_calls()))
 
+    def test_into_full_tab_spills_to_new_tab(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("tab create") for c in calls), calls)
+        self.assertTrue(any("agent start maker --kind claude --pane w1:p9" in c for c in calls))
+        tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
+        self.assertIn("w1:t9", tabs)
+
 
 class TeamBriefCompose(Base):
     def overlay(self):

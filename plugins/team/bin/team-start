@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down)" >&2
+  echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id>)" >&2
   echo "       [--effort low|medium|high] [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
   exit 2
 }
@@ -22,21 +22,26 @@ case "$role" in
   *) echo "unknown role: $role" >&2; exit 2 ;;
 esac
 
-pane=""; split_pane=""; split_dir=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""
+pane=""; split_pane=""; split_dir=""; into_tab=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --pane)   pane="${2:?}"; shift 2 ;;
-    --split)  split_pane="${2:?}"; split_dir="${3:?}"; shift 3 ;;
-    --effort) effort="${2:?}"; shift 2 ;;
-    --mode)   mode="${2:?}"; shift 2 ;;
-    --cwd)    cwd="${2:?}"; shift 2 ;;
-    --dry-run) dry_run=1; shift ;;
+    --pane)     pane="${2:?}"; shift 2 ;;
+    --split)    split_pane="${2:?}"; split_dir="${3:?}"; shift 3 ;;
+    --into-tab) into_tab="${2:?}"; shift 2 ;;
+    --effort)   effort="${2:?}"; shift 2 ;;
+    --mode)     mode="${2:?}"; shift 2 ;;
+    --cwd)      cwd="${2:?}"; shift 2 ;;
+    --dry-run)  dry_run=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
 
 effort="${effort:-$def_effort}"
-[ -n "$pane" ] || [ -n "$split_pane" ] || usage
+[ -n "$pane" ] || [ -n "$split_pane" ] || [ -n "$into_tab" ] || usage
+if [ -n "$into_tab" ] && { [ -n "$pane" ] || [ -n "$split_pane" ]; }; then
+  echo "--into-tab is mutually exclusive with --pane/--split" >&2
+  exit 2
+fi
 case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
 
 label="$name"
@@ -52,6 +57,26 @@ fi
 if [ -n "$dry_run" ]; then
   echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --effort $effort --permission-mode $mode"
   exit 0
+fi
+
+if [ -n "$into_tab" ]; then
+  count="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(sum(1 for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))")"
+  if [ "$count" -ge 6 ]; then
+    out=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?}" --cwd "$cwd" --no-focus) || exit 4
+    new_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
+    pane=$(echo "$out" | json_get "d['result']['root_pane']['pane_id']")
+    TAB="$new_tab" python3 - "${TEAM_SCRATCH:-scratchpad}/.team/tabs.json" <<'PY'
+import os, json, sys
+path = sys.argv[1]
+tabs = json.load(open(path)) if os.path.exists(path) else []
+t = os.environ["TAB"]
+if t not in tabs: tabs.append(t)
+json.dump(tabs, open(path, "w"))
+PY
+  else
+    out=$(herdr pane split --pane "$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print([p['pane_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t][0])")" --direction down --cwd "$cwd" --no-focus) || exit 4
+    pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
+  fi
 fi
 
 if [ -z "$pane" ]; then
