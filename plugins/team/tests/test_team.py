@@ -496,6 +496,28 @@ class TeamWatch(Base):
         self.run_script("team-watch", "--once", scenario="panes_overbudget")
         self.assertTrue(any("over budget" in c for c in self.herdr_calls()), self.herdr_calls())
 
+    def test_captures_own_pane_when_missing(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once")
+        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        self.assertEqual(state.get("own_pane"), "w1:p1")
+
+    def test_never_closes_own_pane(self):
+        self.cfg()
+        self.prep_tabs(["w1:t2"], own_pane="w1:p3")
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertFalse(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()))
+
+    def test_unknown_own_pane_closes_nothing(self):
+        self.cfg()
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        write_text(os.path.join(d, "watch-state.json"), json.dumps({"agents": {}, "_flagged": {}}))
+        self.run_script("team-watch", "--once", scenario="own_pane_blind")
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
+
 
 if __name__ == "__main__":
     unittest.main()

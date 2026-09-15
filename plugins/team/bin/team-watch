@@ -18,15 +18,18 @@ orch() { python3 -c "import sys,json;print(json.load(sys.stdin).get('orchestrato
 
 pass() {
   local list orchestrator op
-  if [ ! -f "$teamdir/watch-state.json" ]; then
-    op="$(herdr pane current | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])" 2>/dev/null || true)"
-    [ -n "$op" ] && printf '{"agents":{},"_flagged":{},"own_pane":"%s"}\n' "$op" >"$teamdir/watch-state.json"
+  # Determine our own pane; retry capture each pass until known, so a transient
+  # failure of `herdr pane current` never leaves own_pane unset (which would let
+  # the hygiene block close our own pane). While it is unknown, close nothing.
+  op="$(python3 -c "import json,os;f='$teamdir/watch-state.json';print(json.load(open(f)).get('own_pane','') if os.path.exists(f) else '')" 2>/dev/null || true)"
+  if [ -z "${op:-}" ]; then
+    op="$(herdr pane current 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])" 2>/dev/null || true)"
   fi
   list="$(herdr agent list)" || return 0
   orchestrator="$(orch)"
   # Compute the WATCH lines to send; the python prints one shell-safe line per push.
   local lines
-  lines="$(SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" python3 - <<'PY'
+  lines="$(SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" OWN_PANE="$op" python3 - <<'PY'
 import os, json, glob, time
 teamdir = os.environ["TEAMDIR"]
 records = {}
@@ -40,7 +43,7 @@ sp = os.path.join(teamdir, "watch-state.json")
 state_prev = json.load(open(sp)) if os.path.exists(sp) else {}
 prev = state_prev.get("agents", {})
 flag_prev = state_prev.get("_flagged", {})
-own_pane = state_prev.get("own_pane")
+own_pane = os.environ.get("OWN_PANE") or state_prev.get("own_pane")
 
 scratch = os.environ["SCRATCH"]
 def fresh_report(name):
@@ -93,13 +96,13 @@ PY
   local panes
   panes="$(herdr pane list)" || return 0
   local hy
-  hy="$(TEAMDIR="$teamdir" PANES="$panes" python3 - <<'PY'
+  hy="$(TEAMDIR="$teamdir" PANES="$panes" OWN_PANE="$op" python3 - <<'PY'
 import os, json
 teamdir = os.environ["TEAMDIR"]
 tabs_path = os.path.join(teamdir, "tabs.json")
 team_tabs = set(json.load(open(tabs_path))) if os.path.exists(tabs_path) else set()
 sp = os.path.join(teamdir, "watch-state.json")
-own_pane = json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None
+own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None)
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
 occupied = {"idle", "working", "blocked", "done"}
 by_tab = {}
@@ -120,7 +123,7 @@ for tab, plist in by_tab.items():
         status = p.get("agent_status", "unknown")
         if p.get("pane_id") == own_pane:
             continue
-        if status not in occupied:
+        if status not in occupied and own_pane:
             actions.append("close\t%s" % p.get("pane_id"))
         else:
             occupied_statuses.append(status)

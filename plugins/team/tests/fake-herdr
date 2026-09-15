@@ -25,7 +25,11 @@ case "$group $sub" in
   "pane split")
     emit '{"result":{"pane":{"pane_id":"w1:p9"}}}' ;;
   "pane current")
-    emit '{"result":{"pane":{"pane_id":"w1:p1"}}}' ;;
+    if [ "$scenario" = "own_pane_blind" ]; then
+      emit '{"result":{"pane":{}}}'
+    else
+      emit '{"result":{"pane":{"pane_id":"w1:p1"}}}'
+    fi ;;
   "pane run")
     emit '{"result":{"ok":true}}' ;;
   "pane layout")
@@ -85,7 +89,7 @@ case "$group $sub" in
     esac ;;
   "pane list")
     case "$scenario" in
-      panes_empty)
+      panes_empty | own_pane_blind)
         emit '{"result":{"panes":[
           {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"idle"},
           {"pane_id":"w1:p3","tab_id":"w1:t2","agent_status":"unknown"}
