@@ -7,6 +7,7 @@ scripts run against a real (fake) CLI, never a mock.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -327,6 +328,36 @@ class StopHook(Base):
         log = os.path.join(self.proj, "scratchpad", ".team", "hook.log")
         self.assertTrue(os.path.exists(log))
         self.assertIn("transcript unreadable", read_text(log))
+
+
+class TeamId(Base):
+    def test_slug_lowercases_and_dashes(self):
+        p = self.run_script("team-id", "slug", "APP-5066")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "app-5066")
+
+    def test_slug_collapses_and_trims_and_caps_12(self):
+        p = self.run_script("team-id", "slug", "  Feature/Big__Thing 42  ")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        s = p.stdout.strip()
+        self.assertTrue(re.match(r"^[a-z][a-z0-9-]*$", s), s)
+        self.assertLessEqual(len(s), 12)
+        self.assertFalse(s.endswith("-"))
+
+    def test_hash_is_six_char_base36_letter_first(self):
+        p = self.run_script("team-id", "hash")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(p.stdout.strip(), r"^[a-z][a-z0-9]{5}$")
+
+    def test_for_uses_slug_when_ticket_present_else_hash(self):
+        p = self.run_script("team-id", "for", "APP-1")
+        self.assertEqual(p.stdout.strip(), "app-1")
+        q = self.run_script("team-id", "for", "")
+        self.assertRegex(q.stdout.strip(), r"^[a-z][a-z0-9]{5}$")
+
+    def test_missing_subcommand_is_bad_args(self):
+        p = self.run_script("team-id")
+        self.assertEqual(p.returncode, 2)
 
 
 if __name__ == "__main__":
