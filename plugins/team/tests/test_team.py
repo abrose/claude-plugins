@@ -145,6 +145,25 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 2)
         self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
 
+    def test_prefixes_name_with_team_id_from_config(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start app-5066-scout ") for c in self.herdr_calls()))
+        self.assertTrue(os.path.exists(os.path.join(d, "app-5066-scout.json")))
+        out = json.loads(p.stdout)
+        self.assertEqual(out["name"], "app-5066-scout")
+
+    def test_no_team_id_keeps_bare_name(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start scout ") for c in self.herdr_calls()))
+
 
 class TeamBriefCompose(Base):
     def overlay(self):

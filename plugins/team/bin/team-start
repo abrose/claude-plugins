@@ -39,6 +39,16 @@ effort="${effort:-$def_effort}"
 [ -n "$pane" ] || [ -n "$split_pane" ] || usage
 case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
 
+label="$name"
+teamcfg="${TEAM_SCRATCH:-scratchpad}/.team/config.json"
+if [ -f "$teamcfg" ]; then
+  team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
+  if [ -n "${team_id:-}" ]; then
+    name="${team_id}-${label}"
+    [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "namespaced name too long: $name" >&2; exit 2; }
+  fi
+fi
+
 if [ -n "$dry_run" ]; then
   echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --effort $effort --permission-mode $mode"
   exit 0
