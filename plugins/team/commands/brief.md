@@ -16,3 +16,6 @@ Load the `team-orchestration` skill first. Then:
    - 5: the prompt stalled. Do not re-send. Read the pane and decide.
    - 6: the agent is blocked at a dialog. Inspect it and ask the human.
 4. Report the status line to the human as `name (pane, session) ...`.
+
+Agent names are `<team_id>-<label>`. Pass the full name to `team-brief`, not
+the bare label.

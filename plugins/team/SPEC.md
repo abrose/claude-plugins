@@ -517,3 +517,21 @@ review, then one slice) complete without a template edit, then `1.0.0`.
 - Commit only when Alfred asks; never add agent-attribution trailers.
 - The kernel must run with an empty overlay. Any line that fails the Rust-repo
   test goes to `references/lessons.md` or to the ProcureAI overlay, not here.
+
+## Increment 2026-09-15
+
+Plan: `docs/superpowers/plans/2026-09-15-team-watcher-and-layout.md`. Adds a
+per-team watcher, pane/tab layout hygiene, and a team id so multiple teams run
+at once without name collisions.
+
+New scripts: `team-id` (slug or hash a team id), `team-init` (team id,
+config, allowlist baseline, orchestrator tab record), `team-watch` (poll
+loop: state-diff reporting, block-dialog text, idle-without-report flag,
+layout hygiene). `team-start` gained team-id namespacing (`<team_id>-<label>`
+agent names) and `--into-tab` tab-aware placement.
+
+Budget rule: a team-managed tab holds at most 2 panes for the orchestrator
+tab (the orchestrator and its watcher) or 6 for a worker tab; a 7th agent in
+a worker tab spills to a new tab. Empty panes in team-managed tabs are closed
+automatically; the watcher's own pane and panes outside team-managed tabs are
+never touched.

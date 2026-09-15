@@ -48,3 +48,22 @@ never here.
 - When the human is away, log every own call to
   `scratchpad/orchestration-decisions.md` with its context. The human's own
   decisions stay in the numbered file. The two files never mix.
+
+## Deferred features
+
+These stay supported but sit off the default path; the minimal run does not
+use them.
+
+- Stacked branches: `project.yaml`'s `stacked: true` and the machete-based
+  worktree chain (`git m add`, `git m update`). For a stacked branch, an
+  implementer keeps the own-commit invariant described in
+  `templates/brief-implementation.md` and `team-role-implementer/SKILL.md`:
+  it commits only what it is responsible for on its own branch, never
+  reaching up or down the stack. Mirroring the decisions file into every
+  active worktree (see "Decisions" above) matters most here, where more than
+  one worktree is live at once.
+- Reviewer and post-notes work: briefs on `team-investigator` using the
+  `brief-review.md` and `brief-post-notes.md` templates.
+- The `spdd`, `crit`, and `tracker` keys in `project.yaml` and their
+  matching overlay files (`.claude/team/tracker.md`, spdd sync steps in
+  `brief-implementation.md`).

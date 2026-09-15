@@ -42,7 +42,7 @@ Or install from the marketplace once published:
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket>` | Confirm the tab and roles, create the tab, write the decisions file, write the first roster. |
+| `/team:init <ticket>` | Confirm the tab and roles, create the tab, write the decisions file, start the watcher, write the first roster. |
 | `/team:brief <name> <topic>` | Compose a brief, fill its task section, send the kick-off, report the status line. |
 | `/team:status` | Read the roster, read idle agents that owe a report, flag anything that needs you. |
 | `/team:release [name ...|all]` | Clear and close finished agents; refuse a working one. |
@@ -51,9 +51,12 @@ Or install from the marketplace once published:
 
 | Script | Does |
 |---|---|
+| `team-id slug\|hash\|for` | Compute a team id: slug a ticket, or a random hash. |
+| `team-init <ticket>` | Write the team id and config, seed the safe permission allowlist, record the orchestrator's tab. |
 | `team-start <name> <role>` | Start a role agent in a pane, verify its status bar, record it under `.team/`. |
 | `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
 | `team-slice <branch> <parent>` | Create a worktree and a Herdr tab for one slice. |
+| `team-watch` | Poll each team's agents, push `WATCH` lines on state change, and keep the layout within budget. |
 | `team-status` | Merge `herdr agent list` with `.team/` records into a roster. |
 
 ## Roles
@@ -66,6 +69,35 @@ Or install from the marketplace once published:
 
 Reviewer and post-notes work run on `team-investigator` with the `brief-review`
 and `brief-post-notes` templates. Mechanical jobs run on `team-implementer`.
+
+## Multiple teams
+
+`/team:init <ticket>` assigns the run a short team id (a slug of the ticket,
+or a random hash when there is no ticket) and writes it to
+`.team/config.json`. Every agent name becomes `<team_id>-<role>`, including
+the orchestrator itself (`<team_id>-orch`), so two teams can run in the same
+profile at once without name collisions. A team's watcher and layout hygiene
+only ever act on the agents and tabs recorded under its own `.team/`
+directory.
+
+## Watcher
+
+`/team:init` also starts a `team-watch` pane alongside the orchestrator, in
+the same tab. It polls `herdr agent list` and `herdr pane list`, and on every
+pass:
+
+- pushes one `WATCH <name>: <old> -> <new>` line to the orchestrator for
+  every team agent whose state changed (a transition into `blocked` includes
+  the dialog's first line);
+- flags an agent that is `idle` or `done` with no report file newer than its
+  brief, once per state;
+- closes any pane in a team-managed tab that hosts no live agent (never its
+  own pane);
+- flags a tab that is over its pane budget, and a worker tab whose every
+  agent is idle or done as a release candidate.
+
+`/team:status` surfaces the latest `WATCH` lines; `/team:release all` stops
+the watcher and removes its state files.
 
 ## Overlay contract
 
@@ -87,7 +119,8 @@ warning.
 All under `$TEAM_SCRATCH` (default `scratchpad/`, git-ignored):
 `decisions-<ticket>.md`, `orchestration-decisions.md`,
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.team/<name>.json`,
-`.team/config.json`, `.team/roster.md`.
+`.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
+`.team/roster.md`.
 
 ## Hook identity
 

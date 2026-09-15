@@ -7,7 +7,7 @@ description: The orchestrator-plus-team-agents protocol. One session you talk to
 
 You run or take part in a team workflow. One orchestrator session talks to the
 human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
-Reports arrive as files through a Stop hook. These thirteen rules bind everyone.
+Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
    does no operational work. Allowed exceptions: a one-off check that unblocks a
@@ -19,8 +19,7 @@ Reports arrive as files through a Stop hook. These thirteen rules bind everyone.
    Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
-   suffix (3a). Mirror the file into every active worktree's scratchpad after
-   every append.
+   suffix (3a).
 5. Agents report by name: `REPORT <name> <topic>: <summary>`. The deliverable is
    always a file. The report is a summary of at most ten lines. The orchestrator
    reads the file before discussing.
@@ -43,13 +42,19 @@ Reports arrive as files through a Stop hook. These thirteen rules bind everyone.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
+14. A watcher runs per team in the orchestrator tab. It reports every state
+    change, flags idle-without-report, and keeps the layout within budget.
+    Never sit blind: act on `WATCH` lines.
+15. Pane budgets: the orchestrator tab holds at most 2 panes (you and the
+    watcher); a worker tab holds at most 6. A 7th agent goes to a new tab.
+    Empty panes in team tabs are closed automatically.
 
 ## Tools
 
 The orchestrator drives agents through the plugin scripts on `PATH`:
-`team-start`, `team-brief`, `team-slice`, `team-status`. They wrap the Herdr CLI;
-never restate a Herdr command in prose. The Herdr skill is the reference for the
-CLI itself.
+`team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`, `team-watch`,
+`team-status`. They wrap the Herdr CLI; never restate a Herdr command in
+prose. The Herdr skill is the reference for the CLI itself.
 
 Deeper operational lessons live in `references/lessons.md`. It is not
 auto-loaded; read it when you plan a run.
