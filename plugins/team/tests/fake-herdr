@@ -73,6 +73,8 @@ case "$group $sub" in
           {"name":"app-1-scout","pane_id":"w1:p2","state":"blocked","agent_session":{"value":"aaaa1111"}},
           {"name":"app-2-maker","pane_id":"w2:p2","state":"working","agent_session":{"value":"bbbb2222"}}
         ]}}' ;;
+      watch_idle)
+        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"aaaa1111"}}]}}' ;;
       status_mixed)
         emit '{"result":{"agents":[
           {"name":"scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"11111111aaaa"}},

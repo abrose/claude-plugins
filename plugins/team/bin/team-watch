@@ -23,7 +23,7 @@ pass() {
   # Compute the WATCH lines to send; the python prints one shell-safe line per push.
   local lines
   lines="$(SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" python3 - <<'PY'
-import os, json, glob
+import os, json, glob, time
 teamdir = os.environ["TEAMDIR"]
 records = {}
 for f in glob.glob(os.path.join(teamdir, "*.json")):
@@ -33,19 +33,51 @@ for f in glob.glob(os.path.join(teamdir, "*.json")):
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
 cur = {a["name"]: a.get("state", "unknown") for a in agents if a.get("name") in records}
 sp = os.path.join(teamdir, "watch-state.json")
-prev = json.load(open(sp)).get("agents", {}) if os.path.exists(sp) else {}
+state_prev = json.load(open(sp)) if os.path.exists(sp) else {}
+prev = state_prev.get("agents", {})
+flag_prev = state_prev.get("_flagged", {})
+
+scratch = os.environ["SCRATCH"]
+def fresh_report(name):
+    rec_path = os.path.join(teamdir, name + ".json")
+    try:
+        rec = json.load(open(rec_path))
+    except Exception:
+        return False
+    topic = rec.get("topic", "")
+    report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
+    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
+    if not os.path.exists(report):
+        return False
+    if os.path.exists(brief) and os.path.getmtime(report) < os.path.getmtime(brief):
+        return False
+    return True
+
 out = []
+flagged = {}
 for name, state in cur.items():
     old = prev.get(name)
     if old is not None and old != state:
-        out.append("%s: %s -> %s" % (name, old, state))
-json.dump({"agents": cur}, open(sp, "w"))
-for line in out:
-    print(line)
+        if state == "blocked":
+            out.append(("blocked", name, "%s: %s -> %s" % (name, old, state)))
+        else:
+            out.append(("change", name, "%s: %s -> %s" % (name, old, state)))
+    if state in ("idle", "done") and not fresh_report(name):
+        if not flag_prev.get(name):
+            out.append(("noreport", name, "%s: idle, no report" % name))
+        flagged[name] = True
+
+json.dump({"agents": cur, "_flagged": flagged}, open(sp, "w"))
+for kind, name, line in out:
+    print("%s\t%s\t%s" % (kind, name, line))
 PY
 )"
-  while IFS= read -r line; do
+  while IFS=$'\t' read -r kind name line; do
     [ -n "$line" ] || continue
+    if [ "$kind" = "blocked" ]; then
+      dlg="$(herdr agent read "$name" --source detection --lines 20 2>/dev/null | awk 'NF{print; exit}')"
+      line="$line: $dlg"
+    fi
     herdr agent prompt "$orchestrator" "WATCH $line" >/dev/null 2>&1 || true
   done <<<"$lines"
 }

@@ -452,6 +452,23 @@ class TeamWatch(Base):
         state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
         self.assertNotIn("app-2-maker", state["agents"])
 
+    def test_blocked_line_includes_dialog(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_change")   # working
+        self.run_script("team-watch", "--once", scenario="watch_change")   # blocked
+        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
+        self.assertTrue(any("blocked:" in c for c in pushes), pushes)
+        self.assertTrue(any("agent read app-1-scout" in c for c in self.herdr_calls()))
+
+    def test_idle_without_report_is_flagged_once(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_idle")   # baseline, flags once
+        self.run_script("team-watch", "--once", scenario="watch_idle")   # same state, must NOT flag again
+        flags = [c for c in self.herdr_calls() if "no report" in c]
+        self.assertEqual(len(flags), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
