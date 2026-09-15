@@ -48,6 +48,8 @@ case "$group $sub" in
     fi ;;
   "agent get")
     emit '{"result":{"agent":{"state":"idle"}}}' ;;
+  "pane get")
+    emit '{"result":{"pane":{"pane_id":"w1:p1","tab_id":"w1:t1"}}}' ;;
   "agent send-keys")
     emit '{"result":{"ok":true}}' ;;
   "agent wait")

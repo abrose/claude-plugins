@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Establish a team: team id, config, allowlist baseline, orchestrator tab record.
+# Exit codes: 0 ok, 1 refused (already initialised), 2 bad arguments, 4 herdr error.
+set -euo pipefail
+
+usage() { echo "usage: team-init <ticket> [--orchestrator-pane <id>]" >&2; exit 2; }
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+scratch="${TEAM_SCRATCH:-scratchpad}"
+teamdir="$scratch/.team"
+
+[ $# -ge 1 ] || usage
+ticket="$1"; shift
+orch_pane=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --orchestrator-pane) orch_pane="${2:?}"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+mkdir -p "$teamdir"
+[ -e "$teamdir/config.json" ] && { echo "already initialised: $teamdir/config.json" >&2; exit 1; }
+
+team_id="$("$here/team-id" for "$ticket")"
+orch="${team_id}-orch"
+
+TICKET="$ticket" TEAM_ID="$team_id" ORCH="$orch" python3 - "$teamdir/config.json" <<'PY'
+import os, json, sys
+json.dump({"team_id": os.environ["TEAM_ID"], "ticket": os.environ["TICKET"],
+           "orchestrator": os.environ["ORCH"]}, open(sys.argv[1], "w"))
+PY
+
+# Seed the safe permission allowlist, adding only what is missing.
+python3 - <<'PY'
+import json, os
+path = os.path.join(".claude", "settings.local.json")
+base = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
+os.makedirs(".claude", exist_ok=True)
+data = {}
+if os.path.exists(path):
+    try: data = json.load(open(path))
+    except Exception: data = {}
+perms = data.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+for a in base:
+    if a not in allow:
+        allow.append(a)
+json.dump(data, open(path, "w"), indent=2)
+PY
+
+# Record the orchestrator's tab as team-managed.
+if [ -n "$orch_pane" ]; then
+  tab="$(herdr pane get "$orch_pane" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || exit 4
+  TAB="$tab" python3 - "$teamdir/tabs.json" <<'PY'
+import os, json, sys
+path = sys.argv[1]
+tabs = json.load(open(path)) if os.path.exists(path) else []
+t = os.environ["TAB"]
+if t not in tabs: tabs.append(t)
+json.dump(tabs, open(path, "w"))
+PY
+fi
+
+echo "team_id=$team_id config=$teamdir/config.json"

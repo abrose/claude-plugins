@@ -379,5 +379,41 @@ class TeamId(Base):
         self.assertEqual(p.returncode, 2)
 
 
+class TeamInit(Base):
+    ALLOW = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
+
+    def test_writes_config_with_team_id_and_orch(self):
+        p = self.run_script("team-init", "APP-5066")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "config.json")))
+        self.assertEqual(cfg["team_id"], "app-5066")
+        self.assertEqual(cfg["ticket"], "APP-5066")
+        self.assertEqual(cfg["orchestrator"], "app-5066-orch")
+
+    def test_refuses_second_init(self):
+        self.run_script("team-init", "APP-1")
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 1)
+
+    def test_seeds_allowlist_without_clobbering(self):
+        d = os.path.join(self.proj, ".claude")
+        os.makedirs(d)
+        write_text(os.path.join(d, "settings.local.json"),
+                   json.dumps({"permissions": {"allow": ["Bash(custom:*)"]}, "env": {"X": "1"}}))
+        self.run_script("team-init", "APP-1")
+        s = json.loads(read_text(os.path.join(d, "settings.local.json")))
+        self.assertEqual(s["env"], {"X": "1"})
+        self.assertIn("Bash(custom:*)", s["permissions"]["allow"])
+        for a in self.ALLOW:
+            self.assertIn(a, s["permissions"]["allow"])
+
+    def test_records_orchestrator_tab(self):
+        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+                            scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        tabs = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "tabs.json")))
+        self.assertIn("w1:t1", tabs)
+
+
 if __name__ == "__main__":
     unittest.main()
