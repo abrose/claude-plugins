@@ -17,7 +17,11 @@ done
 orch() { python3 -c "import sys,json;print(json.load(sys.stdin).get('orchestrator','orchestrator'))" <"$teamdir/config.json" 2>/dev/null || echo orchestrator; }
 
 pass() {
-  local list orchestrator
+  local list orchestrator op
+  if [ ! -f "$teamdir/watch-state.json" ]; then
+    op="$(herdr pane current | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])" 2>/dev/null || true)"
+    [ -n "$op" ] && printf '{"agents":{},"_flagged":{},"own_pane":"%s"}\n' "$op" >"$teamdir/watch-state.json"
+  fi
   list="$(herdr agent list)" || return 0
   orchestrator="$(orch)"
   # Compute the WATCH lines to send; the python prints one shell-safe line per push.
@@ -36,6 +40,7 @@ sp = os.path.join(teamdir, "watch-state.json")
 state_prev = json.load(open(sp)) if os.path.exists(sp) else {}
 prev = state_prev.get("agents", {})
 flag_prev = state_prev.get("_flagged", {})
+own_pane = state_prev.get("own_pane")
 
 scratch = os.environ["SCRATCH"]
 def fresh_report(name):
@@ -67,7 +72,10 @@ for name, state in cur.items():
             out.append(("noreport", name, "%s: idle, no report" % name))
         flagged[name] = True
 
-json.dump({"agents": cur, "_flagged": flagged}, open(sp, "w"))
+state_out = {"agents": cur, "_flagged": flagged}
+if own_pane:
+    state_out["own_pane"] = own_pane
+json.dump(state_out, open(sp, "w"))
 for kind, name, line in out:
     print("%s\t%s\t%s" % (kind, name, line))
 PY
@@ -75,11 +83,60 @@ PY
   while IFS=$'\t' read -r kind name line; do
     [ -n "$line" ] || continue
     if [ "$kind" = "blocked" ]; then
-      dlg="$(herdr agent read "$name" --source detection --lines 20 2>/dev/null | awk 'NF{print; exit}')"
+      dlg="$(herdr agent read "$name" --source detection --lines 20 2>/dev/null | awk 'NF{print; exit}' || true)"
       line="$line: $dlg"
     fi
     herdr agent prompt "$orchestrator" "WATCH $line" >/dev/null 2>&1 || true
   done <<<"$lines"
+
+  # Layout hygiene: close empty panes and flag budget/idle issues in team-managed tabs.
+  local panes
+  panes="$(herdr pane list)" || return 0
+  local hy
+  hy="$(TEAMDIR="$teamdir" PANES="$panes" python3 - <<'PY'
+import os, json
+teamdir = os.environ["TEAMDIR"]
+tabs_path = os.path.join(teamdir, "tabs.json")
+team_tabs = set(json.load(open(tabs_path))) if os.path.exists(tabs_path) else set()
+sp = os.path.join(teamdir, "watch-state.json")
+own_pane = json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None
+panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
+occupied = {"idle", "working", "blocked", "done"}
+by_tab = {}
+orch_tab = None  # the orchestrator tab is the one holding own_pane; budget 2 there, else 6
+for p in panes:
+    by_tab.setdefault(p.get("tab_id"), []).append(p)
+    if p.get("pane_id") == own_pane:
+        orch_tab = p.get("tab_id")
+actions = []  # "close <pane>" or "flag <text>"
+for tab, plist in by_tab.items():
+    if tab not in team_tabs:
+        continue
+    budget = 2 if tab == orch_tab else 6
+    if len(plist) > budget:
+        actions.append("flag\tlayout: tab %s over budget (%d/%d)" % (tab, len(plist), budget))
+    occupied_statuses = []
+    for p in plist:
+        status = p.get("agent_status", "unknown")
+        if p.get("pane_id") == own_pane:
+            continue
+        if status not in occupied:
+            actions.append("close\t%s" % p.get("pane_id"))
+        else:
+            occupied_statuses.append(status)
+    if tab != orch_tab and occupied_statuses and all(s in ("idle", "done") for s in occupied_statuses):
+        actions.append("flag\tlayout: tab %s idle, consider release" % tab)
+for a in actions:
+    print(a)
+PY
+)"
+  while IFS=$'\t' read -r verb rest; do
+    [ -n "$verb" ] || continue
+    case "$verb" in
+      close) herdr pane close "$rest" >/dev/null 2>&1 || true ;;
+      flag)  herdr agent prompt "$orchestrator" "WATCH $rest" >/dev/null 2>&1 || true ;;
+    esac
+  done <<<"$hy"
 }
 
 if [ -n "$once" ]; then pass; exit 0; fi

@@ -83,6 +83,26 @@ case "$group $sub" in
       *)
         emit '{"result":{"agents":[{"name":"scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"11111111aaaa"}}]}}' ;;
     esac ;;
+  "pane list")
+    case "$scenario" in
+      panes_empty)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"idle"},
+          {"pane_id":"w1:p3","tab_id":"w1:t2","agent_status":"unknown"}
+        ]}}' ;;
+      panes_overbudget)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p3","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p4","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p5","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p6","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p7","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p8","tab_id":"w1:t2","agent_status":"working"}
+        ]}}' ;;
+      *)
+        emit '{"result":{"panes":[]}}' ;;
+    esac ;;
   *)
     emit '{"result":{"ok":true}}' ;;
 esac

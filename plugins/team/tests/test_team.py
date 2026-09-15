@@ -469,6 +469,33 @@ class TeamWatch(Base):
         flags = [c for c in self.herdr_calls() if "no report" in c]
         self.assertEqual(len(flags), 1)
 
+    def prep_tabs(self, tabs, own_pane="w1:p9"):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(tabs))
+        write_text(os.path.join(d, "watch-state.json"),
+                   json.dumps({"agents": {}, "_flagged": {}, "own_pane": own_pane}))
+
+    def test_closes_empty_pane_in_team_tab(self):
+        self.cfg()
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertTrue(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()), self.herdr_calls())
+        # p2 hosts an agent (idle status) -> not closed
+        self.assertFalse(any(c.startswith("pane close w1:p2") for c in self.herdr_calls()))
+
+    def test_does_not_close_panes_in_foreign_tabs(self):
+        self.cfg()
+        self.prep_tabs(["w1:t9"])  # team owns t9, not t2
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
+
+    def test_flags_over_budget_worker_tab(self):
+        self.cfg()
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_overbudget")
+        self.assertTrue(any("over budget" in c for c in self.herdr_calls()), self.herdr_calls())
+
 
 if __name__ == "__main__":
     unittest.main()
