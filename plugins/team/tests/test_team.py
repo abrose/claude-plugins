@@ -414,6 +414,10 @@ class TeamInit(Base):
         tabs = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "tabs.json")))
         self.assertIn("w1:t1", tabs)
 
+    def test_missing_orchestrator_pane_value_is_bad_args(self):
+        p = self.run_script("team-init", "APP-1", "--orchestrator-pane")
+        self.assertEqual(p.returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
