@@ -472,8 +472,9 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
 }
 ```
 
-`plugin.json`: name `team`, version `0.1.0` until two runs (the colleague MR
-review, then one slice) complete without a template edit, then `1.0.0`.
+`plugin.json`: name `team`, starting at `0.1.0`, with point releases (e.g.
+`0.2.0`) as increments land; `1.0.0` after two runs (the colleague MR review,
+then one slice) complete without a template edit.
 
 ---
 

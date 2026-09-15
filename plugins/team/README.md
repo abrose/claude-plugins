@@ -74,7 +74,7 @@ and `brief-post-notes` templates. Mechanical jobs run on `team-implementer`.
 
 `/team:init <ticket>` assigns the run a short team id (a slug of the ticket,
 or a random hash when there is no ticket) and writes it to
-`.team/config.json`. Every agent name becomes `<team_id>-<role>`, including
+`.team/config.json`. Every agent name becomes `<team_id>-<label>`, including
 the orchestrator itself (`<team_id>-orch`), so two teams can run in the same
 profile at once without name collisions. A team's watcher and layout hygiene
 only ever act on the agents and tabs recorded under its own `.team/`
