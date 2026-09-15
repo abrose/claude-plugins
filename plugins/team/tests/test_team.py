@@ -419,5 +419,39 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 2)
 
 
+class TeamWatch(Base):
+    def cfg(self, orch="app-1-orch", team_id="app-1"):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": team_id, "orchestrator": orch}))
+        return d
+
+    def test_first_pass_records_state_and_pushes_nothing(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        p = self.run_script("team-watch", "--once", scenario="watch_change")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        self.assertEqual(state["agents"]["app-1-scout"], "working")
+
+    def test_second_pass_pushes_watch_line_on_change(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_change")   # baseline: working
+        self.run_script("team-watch", "--once", scenario="watch_change")   # now: blocked
+        pushes = [c for c in self.herdr_calls() if c.startswith("agent prompt app-1-orch WATCH")]
+        self.assertTrue(any("app-1-scout: working -> blocked" in c for c in pushes), self.herdr_calls())
+
+    def test_ignores_agents_not_in_records(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        # app-2-maker is live but has no record here; must be ignored.
+        self.run_script("team-watch", "--once", scenario="watch_two_teams")
+        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        self.assertNotIn("app-2-maker", state["agents"])
+
+
 if __name__ == "__main__":
     unittest.main()
