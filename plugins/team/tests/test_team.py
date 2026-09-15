@@ -178,6 +178,32 @@ class TeamStart(Base):
         tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
         self.assertIn("w1:t9", tabs)
 
+    def test_into_underbudget_tab_splits_in_place(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_empty",
+                            env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("tab create") for c in calls))
+        self.assertTrue(any(c.startswith("pane split") for c in calls), calls)
+        self.assertTrue(any("agent start maker --kind claude --pane w1:p9" in c for c in calls))
+
+    def test_into_tab_with_pane_is_bad_args(self):
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")
+        self.assertEqual(p.returncode, 2)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_into_empty_tab_is_bad_args(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 2)
+
 
 class TeamBriefCompose(Base):
     def overlay(self):
@@ -520,6 +546,15 @@ class TeamWatch(Base):
     def test_never_closes_own_pane(self):
         self.cfg()
         self.prep_tabs(["w1:t2"], own_pane="w1:p3")
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertFalse(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()))
+
+    def test_pending_pane_not_closed(self):
+        self.cfg()
+        self.prep_tabs(["w1:t2"])   # own_pane defaults to w1:p9
+        pend = os.path.join(self.proj, "scratchpad", ".team", "pending")
+        os.makedirs(pend, exist_ok=True)
+        open(os.path.join(pend, "w1_p3"), "w").close()   # mark w1:p3 pending
         self.run_script("team-watch", "--once", scenario="panes_empty")
         self.assertFalse(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()))
 

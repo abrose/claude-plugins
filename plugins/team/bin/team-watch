@@ -101,6 +101,9 @@ import os, json
 teamdir = os.environ["TEAMDIR"]
 tabs_path = os.path.join(teamdir, "tabs.json")
 team_tabs = set(json.load(open(tabs_path))) if os.path.exists(tabs_path) else set()
+pending_dir = os.path.join(teamdir, "pending")
+def is_pending(pane_id):
+    return os.path.exists(os.path.join(pending_dir, pane_id.replace(":", "_").replace("/", "_")))
 sp = os.path.join(teamdir, "watch-state.json")
 own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None)
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
@@ -123,7 +126,7 @@ for tab, plist in by_tab.items():
         status = p.get("agent_status", "unknown")
         if p.get("pane_id") == own_pane:
             continue
-        if status not in occupied and own_pane:
+        if status not in occupied and own_pane and not is_pending(p.get("pane_id")):
             actions.append("close\t%s" % p.get("pane_id"))
         else:
             occupied_statuses.append(status)

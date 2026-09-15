@@ -74,7 +74,9 @@ if t not in tabs: tabs.append(t)
 json.dump(tabs, open(path, "w"))
 PY
   else
-    out=$(herdr pane split --pane "$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print([p['pane_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t][0])")" --direction down --cwd "$cwd" --no-focus) || exit 4
+    target_pane="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print('\n'.join(p['pane_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))" | head -n1)"
+    [ -n "$target_pane" ] || { echo "target tab has no panes: $into_tab" >&2; exit 2; }
+    out=$(herdr pane split --pane "$target_pane" --direction down --cwd "$cwd" --no-focus) || exit 4
     pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
   fi
 fi
@@ -88,6 +90,12 @@ start() {
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
     --agent "team-$role" --effort "$effort" --permission-mode "$mode"
 }
+
+pending_dir="${TEAM_SCRATCH:-scratchpad}/.team/pending"
+mkdir -p "$pending_dir"
+pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
+: > "$pending_file"
+trap 'rm -f "$pending_file"' EXIT
 
 out=$(start) || exit 4
 if [ "$(echo "$out" | json_get "d.get('result',{}).get('status','')")" = "agent_not_ready" ]; then
