@@ -49,7 +49,13 @@ teamcfg="${TEAM_SCRATCH:-scratchpad}/.team/config.json"
 if [ -f "$teamcfg" ]; then
   team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
   if [ -n "${team_id:-}" ]; then
-    name="${team_id}-${label}"
+    # Prepend the team id, but tolerate a name that already carries it: the
+    # orchestrator refers to agents by their full <team_id>-<label> name, so it
+    # may pass that back here. Prepending again would double the id.
+    case "$label" in
+      "${team_id}-"*) name="$label" ;;
+      *) name="${team_id}-${label}" ;;
+    esac
     [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "namespaced name too long: $name" >&2; exit 2; }
   fi
 fi

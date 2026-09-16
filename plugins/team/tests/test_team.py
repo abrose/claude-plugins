@@ -158,6 +158,22 @@ class TeamStart(Base):
         out = json.loads(p.stdout)
         self.assertEqual(out["name"], "app-5066-scout")
 
+    def test_does_not_double_prefix_already_namespaced_name(self):
+        # The orchestrator refers to agents by their full <team_id>-<label> name
+        # everywhere, so it may pass that name to team-start. Prepending again
+        # would produce app-5066-app-5066-scout. It must not.
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
+        p = self.run_script("team-start", "app-5066-scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start app-5066-scout ") for c in self.herdr_calls()),
+                        self.herdr_calls())
+        out = json.loads(p.stdout)
+        self.assertEqual(out["name"], "app-5066-scout")
+
     def test_no_team_id_keeps_bare_name(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
