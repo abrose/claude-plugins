@@ -612,6 +612,25 @@ class TeamWatch(Base):
         # --spawn only launches; it must not run a poll pass itself.
         self.assertFalse(any(c.startswith("agent list") for c in calls), calls)
 
+    def test_prints_state_change_to_own_stdout(self):
+        # The watcher pane must show activity, not sit blank. Each state change
+        # is logged to stdout as well as pushed to the orchestrator.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_change")   # baseline working
+        p = self.run_script("team-watch", "--once", scenario="watch_change")  # now blocked
+        self.assertIn("working -> blocked", p.stdout)
+
+    def test_spawn_makes_watcher_pane_small(self):
+        # A watcher only needs a few lines; the orchestrator keeps most of the
+        # tab. The split passes a ratio so the new pane is small.
+        self.cfg()
+        p = self.run_script("team-watch", "--spawn")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        split = [c for c in self.herdr_calls() if c.startswith("pane split")]
+        self.assertTrue(split, self.herdr_calls())
+        self.assertTrue(any("--ratio" in c for c in split), split)
+
     def test_idle_briefed_tab_flags_release(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest",

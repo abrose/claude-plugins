@@ -538,7 +538,9 @@ automatically; the watcher's own pane and panes outside team-managed tabs are
 never touched.
 
 Watcher launch: `team-watch --spawn` splits its own pane off the orchestrator
-pane and runs the watcher there by absolute path with `--own-pane <id>`, so the
+pane (`--ratio 0.8`, so the orchestrator keeps most of the tab and the watcher
+is a small strip) and runs the watcher there by absolute path with
+`--own-pane <id>`, so the
 watcher never resolves its own pane from `herdr pane current` (which returns the
 focused pane, wrong for a `--no-focus` watcher pane). The "consider release"
 flag fires only for a tab that holds a briefed agent, so a freshly spawned,

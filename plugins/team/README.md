@@ -83,9 +83,11 @@ directory.
 ## Watcher
 
 `/team:init` starts the watcher with `team-watch --spawn`, which splits a small
-pane off the orchestrator pane and runs the watcher there by absolute path,
-passing that pane's id as `--own-pane`. The watcher never has to guess its own
-pane from the focused one, so it never closes its own pane. It polls
+pane off the orchestrator pane (the orchestrator keeps most of the tab) and runs
+the watcher there by absolute path, passing that pane's id as `--own-pane`. The
+watcher never has to guess its own pane from the focused one, so it never closes
+its own pane. Its pane logs each event plus a once-a-minute heartbeat, so you
+can see it working. It polls
 `herdr agent list` and `herdr pane list`, and on every pass:
 
 - pushes one `WATCH <name>: <old> -> <new>` line to the orchestrator for

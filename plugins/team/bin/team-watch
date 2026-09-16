@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Watch this team's agents. Push one WATCH line to the orchestrator on each
-# state change. --once runs a single pass (for tests); default loops.
+# state change, and log the same events to this pane so it shows activity.
+# --spawn launches the watcher in its own small pane; --once runs a single pass
+# (for tests); default loops.
 set -euo pipefail
 
 scratch="${TEAM_SCRATCH:-scratchpad}"
@@ -20,15 +22,19 @@ orch() { python3 -c "import sys,json;print(json.load(sys.stdin).get('orchestrato
 
 pane_id_of() { python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])"; }
 
+log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
+
 # Split a pane off the orchestrator pane and run the watcher there by absolute
 # path, passing the new pane id as --own-pane. `herdr pane current` resolves the
 # orchestrator pane (the focused one), which is a safe anchor to split from; the
 # new pane's id then becomes the watcher's authoritative own-pane, so it never
-# has to guess its own pane from the focused one.
+# has to guess its own pane from the focused one. --ratio is the fraction the
+# anchor keeps, so 0.8 leaves the orchestrator most of the tab and the watcher a
+# small strip.
 spawn_watcher() {
   local anchor new self self_dir
   anchor="$(herdr pane current | pane_id_of)" || { echo "cannot resolve orchestrator pane" >&2; exit 4; }
-  new="$(herdr pane split --pane "$anchor" --direction down --cwd "$PWD" --no-focus | pane_id_of)" || exit 4
+  new="$(herdr pane split --pane "$anchor" --direction down --ratio 0.8 --cwd "$PWD" --no-focus | pane_id_of)" || exit 4
   self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   self="$self_dir/$(basename "${BASH_SOURCE[0]}")"
   herdr pane run "$new" "$self" --own-pane "$new" --interval "$interval" >/dev/null || exit 4
@@ -113,6 +119,7 @@ PY
       dlg="$(herdr agent read "$name" --source detection --lines 20 2>/dev/null | awk 'NF{print; exit}' || true)"
       line="$line: $dlg"
     fi
+    log "$line"
     herdr agent prompt "$orchestrator" "WATCH $line" >/dev/null 2>&1 || true
   done <<<"$lines"
 
@@ -189,12 +196,22 @@ PY
   while IFS=$'\t' read -r verb rest; do
     [ -n "$verb" ] || continue
     case "$verb" in
-      close) herdr pane close "$rest" >/dev/null 2>&1 || true ;;
-      flag)  herdr agent prompt "$orchestrator" "WATCH $rest" >/dev/null 2>&1 || true ;;
+      close) log "closed empty pane $rest"; herdr pane close "$rest" >/dev/null 2>&1 || true ;;
+      flag)  log "$rest"; herdr agent prompt "$orchestrator" "WATCH $rest" >/dev/null 2>&1 || true ;;
     esac
   done <<<"$hy"
 }
 
 if [ -n "$spawn" ]; then spawn_watcher; exit 0; fi
 if [ -n "$once" ]; then pass; exit 0; fi
-while true; do pass; sleep "$interval"; done
+
+# Loop: log events as they happen, plus a heartbeat once a minute so a quiet
+# pane still shows the watcher is alive.
+log "team-watch started (orchestrator=$(orch), interval=${interval}s)"
+last_hb=0
+while true; do
+  pass
+  now=$(date +%s)
+  if [ $((now - last_hb)) -ge 60 ]; then log "heartbeat"; last_hb=$now; fi
+  sleep "$interval"
+done
