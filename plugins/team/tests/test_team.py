@@ -588,6 +588,30 @@ class TeamWatch(Base):
         self.run_script("team-watch", "--once", scenario="own_pane_blind")
         self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
 
+    def test_survives_missing_team_dir(self):
+        # No /team:init here: scratchpad/.team does not exist. A pass must create
+        # what it needs and not crash, and must not leak a redirect error.
+        p = self.run_script("team-watch", "--once", scenario="watch_idle")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("No such file", p.stderr)
+        state = os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")
+        self.assertTrue(os.path.exists(state))
+
+    def test_loop_survives_failing_pass(self):
+        # A pass that raises (here: a malformed agent list) must not kill the
+        # loop. The loop logs the error and keeps polling.
+        self.cfg()
+        env = self.env(scenario="bad_list")
+        try:
+            r = subprocess.run([os.path.join(BIN, "team-watch"), "--interval", "1"],
+                               capture_output=True, text=True, env=env, cwd=self.proj, timeout=3)
+            survived, out = False, r.stdout
+        except subprocess.TimeoutExpired as e:
+            survived = True
+            out = e.stdout.decode() if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or "")
+        self.assertTrue(survived, "watcher loop exited instead of surviving a failing pass")
+        self.assertIn("pass error", out)
+
     def test_own_pane_flag_overrides_detection(self):
         # The launcher passes the true pane id; the flag wins over `pane current`
         # (which returns the FOCUSED pane, wrong for a --no-focus watcher pane).

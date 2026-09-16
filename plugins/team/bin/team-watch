@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-orch() { python3 -c "import sys,json;print(json.load(sys.stdin).get('orchestrator','orchestrator'))" <"$teamdir/config.json" 2>/dev/null || echo orchestrator; }
+orch() { python3 -c "import json;print(json.load(open('$teamdir/config.json')).get('orchestrator','orchestrator'))" 2>/dev/null || echo orchestrator; }
 
 pane_id_of() { python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])"; }
 
@@ -43,6 +43,7 @@ spawn_watcher() {
 
 pass() {
   local list orchestrator op
+  mkdir -p "$teamdir"   # the state and hygiene blocks write here every pass
   # Determine our own pane. An explicit --own-pane (passed by the launcher) is
   # authoritative and wins over everything. Otherwise reuse the persisted value,
   # then fall back to `herdr pane current`. Retry the capture each pass so a
@@ -112,7 +113,7 @@ json.dump(state_out, open(sp, "w"))
 for kind, name, line in out:
     print("%s\t%s\t%s" % (kind, name, line))
 PY
-)"
+)" || { log "pass error: agent scan failed (continuing)"; return 0; }
   while IFS=$'\t' read -r kind name line; do
     [ -n "$line" ] || continue
     if [ "$kind" = "blocked" ]; then
@@ -192,7 +193,7 @@ for f in flags:
     if f not in prev_flags:
         print("flag\t%s" % f)
 PY
-)"
+)" || { log "pass error: layout scan failed (continuing)"; return 0; }
   while IFS=$'\t' read -r verb rest; do
     [ -n "$verb" ] || continue
     case "$verb" in
@@ -210,7 +211,7 @@ if [ -n "$once" ]; then pass; exit 0; fi
 log "team-watch started (orchestrator=$(orch), interval=${interval}s)"
 last_hb=0
 while true; do
-  pass
+  pass || log "pass error (continuing)"
   now=$(date +%s)
   if [ $((now - last_hb)) -ge 60 ]; then log "heartbeat"; last_hb=$now; fi
   sleep "$interval"

@@ -79,6 +79,8 @@ case "$group $sub" in
         ]}}' ;;
       watch_idle)
         emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"aaaa1111"}}]}}' ;;
+      bad_list)
+        emit 'not json' ;;
       status_mixed)
         emit '{"result":{"agents":[
           {"name":"scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"11111111aaaa"}},
