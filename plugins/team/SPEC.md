@@ -143,8 +143,10 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
     count in every status. A fourth round is Alfred's explicit exception.
     Behaviour-neutral tidy-ups do not count as rounds.
-11. After a REPORT closes a task, `/clear` the agent before reusing it.
-    Briefs and the decisions file carry the context; a full context does not.
+11. Reset an agent's context before every reuse; never stack a new task on an
+    old context. `/clear` is the default - briefs and the decisions file carry
+    the context. When the old context holds knowledge the next task needs,
+    `/compact` instead. Confirm the reset landed before the next brief.
 12. When Alfred is away, the orchestrator writes every own call to
     `scratchpad/orchestration-decisions.md` with context, so it can be
     audited. Alfred's decisions stay in the numbered file.

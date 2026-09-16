@@ -32,8 +32,11 @@ never here.
 
 - Idle is not done. An agent that goes quiet without a REPORT gets an
   `agent read`. Silence is not success.
-- After a task closes, `/clear` before reuse. A stale context poisons the next
-  brief. The brief and the decisions file carry all the context that is needed.
+- Reset an agent before every reuse. Never brief a new task on an un-reset
+  context: each reuse stacks another layer and the context grows every round.
+  `/clear` by default (the brief and the decisions file carry the context), or
+  `/compact` when the old context holds knowledge the next task needs. A stale,
+  un-reset context poisons the next brief and wastes tokens.
 - Do not `/clear` an agent until its deliverable file is confirmed on disk.
 - A REPORT line goes to the orchestrator by `herdr agent prompt`, never to the
   deliverable file. An agent that writes its closing summary to the deliverable

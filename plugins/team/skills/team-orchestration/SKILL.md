@@ -44,8 +44,13 @@ Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
 10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
     count in every status. A fourth round is the human's explicit exception.
     Behaviour-neutral tidy-ups do not count as rounds.
-11. After a REPORT closes a task, `/clear` the agent before reusing it. Briefs
-    and the decisions file carry the context; a full context does not.
+11. Reset an agent's context before every reuse. Never brief a new task on top
+    of an old context: each reuse then stacks another layer, and the context
+    grows every round for no gain. `/clear` is the default - the brief and the
+    decisions file carry all the context a task needs. When the old context
+    holds knowledge the next task needs, `/compact` instead, so that knowledge
+    survives in condensed form. Confirm the reset landed (the agent reports a
+    cleared or compacted context) before you send the next brief.
 12. When the human is away, the orchestrator writes every own call to
     `scratchpad/orchestration-decisions.md` with context, so it can be audited.
     The human's decisions stay in the numbered file.
