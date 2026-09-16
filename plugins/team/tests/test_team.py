@@ -536,6 +536,14 @@ class TeamWatch(Base):
         self.run_script("team-watch", "--once", scenario="panes_overbudget")
         self.assertTrue(any("over budget" in c for c in self.herdr_calls()), self.herdr_calls())
 
+    def test_layout_flag_pushed_once_across_repeated_passes(self):
+        self.cfg()
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_overbudget")
+        self.run_script("team-watch", "--once", scenario="panes_overbudget")
+        flags = [c for c in self.herdr_calls() if "over budget" in c]
+        self.assertEqual(len(flags), 1)
+
     def test_captures_own_pane_when_missing(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest")

@@ -34,7 +34,7 @@ import os, json, glob, time
 teamdir = os.environ["TEAMDIR"]
 records = {}
 for f in glob.glob(os.path.join(teamdir, "*.json")):
-    if os.path.basename(f) in ("config.json", "watch-state.json", "tabs.json"):
+    if os.path.basename(f) in ("config.json", "watch-state.json", "tabs.json", "layout-flags.json"):
         continue
     records[os.path.splitext(os.path.basename(f))[0]] = True
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
@@ -114,26 +114,35 @@ for p in panes:
     by_tab.setdefault(p.get("tab_id"), []).append(p)
     if p.get("pane_id") == own_pane:
         orch_tab = p.get("tab_id")
-actions = []  # "close <pane>" or "flag <text>"
+# Closes fire every pass; flags are debounced so an unchanged condition is
+# reported once, not on every poll (layout-flags.json holds the prior flags).
+lf_path = os.path.join(teamdir, "layout-flags.json")
+prev_flags = set(json.load(open(lf_path))) if os.path.exists(lf_path) else set()
+closes = []
+flags = []
 for tab, plist in by_tab.items():
     if tab not in team_tabs:
         continue
     budget = 2 if tab == orch_tab else 6
     if len(plist) > budget:
-        actions.append("flag\tlayout: tab %s over budget (%d/%d)" % (tab, len(plist), budget))
+        flags.append("layout: tab %s over budget (%d/%d)" % (tab, len(plist), budget))
     occupied_statuses = []
     for p in plist:
         status = p.get("agent_status", "unknown")
         if p.get("pane_id") == own_pane:
             continue
         if status not in occupied and own_pane and not is_pending(p.get("pane_id")):
-            actions.append("close\t%s" % p.get("pane_id"))
+            closes.append(p.get("pane_id"))
         else:
             occupied_statuses.append(status)
     if tab != orch_tab and occupied_statuses and all(s in ("idle", "done") for s in occupied_statuses):
-        actions.append("flag\tlayout: tab %s idle, consider release" % tab)
-for a in actions:
-    print(a)
+        flags.append("layout: tab %s idle, consider release" % tab)
+json.dump(sorted(set(flags)), open(lf_path, "w"))
+for pane_id in closes:
+    print("close\t%s" % pane_id)
+for f in flags:
+    if f not in prev_flags:
+        print("flag\t%s" % f)
 PY
 )"
   while IFS=$'\t' read -r verb rest; do
