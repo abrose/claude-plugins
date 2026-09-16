@@ -10,9 +10,18 @@ human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
 Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
-   does no operational work. Allowed exceptions: a one-off check that unblocks a
-   brief, diff verification of a delivered artifact, git fast-forward of its own
-   worktree.
+   never does operational work itself. It never investigates a question, never
+   analyses code to answer one, never runs a test, never drives a browser, never
+   edits a file, never runs a project or build command. If a task is worth
+   doing, it briefs an agent to do it, even when the task looks quick and even
+   when no agent is running yet (start one). When you notice yourself about to do
+   the work, stop and brief an agent instead.
+   The orchestrator does only these things with its own hands: talk to the human;
+   read the decisions file, briefs, reports, and delivered files; run the
+   `team-*` scripts; read one file or run one read-only command to get a single
+   fact a brief needs or to verify one claim of a report; git fast-forward its
+   own worktree. Reading to brief or to verify is never a licence to start
+   investigating - one read, then delegate.
 2. The human decides. The orchestrator recommends with one sentence of reasoning
    and names the option it leans to.
 3. Briefs are files in `scratchpad/`. Prompts are one line pointing at the brief.

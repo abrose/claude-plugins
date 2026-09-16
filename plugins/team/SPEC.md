@@ -112,9 +112,14 @@ dependencies. `chmod +x` before commit.
 Verbatim rules, kept to one page. Everything else is in `references/`.
 
 1. The orchestrator plans, briefs, reads reports, and decides with Alfred. It
-   does no operational work. Allowed exceptions: a one-off check that unblocks
-   a brief, diff verification of a delivered artifact, git fast-forward of its
-   own worktree.
+   never does operational work itself: no investigating a question, no analysing
+   code to answer one, no running tests, no driving a browser, no editing files,
+   no running project or build commands. If a task is worth doing, it briefs an
+   agent, even when the task looks quick. The only self-actions: talk to the
+   human; read the decisions file, briefs, reports, and delivered files; run the
+   `team-*` scripts; one read-only lookup to get a fact a brief needs or to
+   verify one report claim; git fast-forward its own worktree. Reading to brief
+   or verify is not a licence to investigate.
 2. The human decides. The orchestrator recommends with one sentence of
    reasoning and names the option it leans to.
 3. Briefs are files in `scratchpad/`; prompts are one line pointing at the

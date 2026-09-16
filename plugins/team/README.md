@@ -9,7 +9,8 @@ Everything about a specific repository lives in that repository's overlay.
 ## How it works
 
 - You run one **orchestrator** session. It plans, briefs, reads reports, and
-  decides with you. It does no operational work.
+  decides with you. It never does operational work itself - no investigating,
+  testing, browsing, or editing. Every such task goes to an agent.
 - Each **role agent** runs in its own Herdr pane, started with `team-start`.
 - A **brief** is a file in `scratchpad/`, composed by `team-brief` from
   templates plus your project overlay. The kick-off prompt is one line pointing
