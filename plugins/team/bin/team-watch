@@ -5,10 +5,12 @@ set -euo pipefail
 
 scratch="${TEAM_SCRATCH:-scratchpad}"
 teamdir="$scratch/.team"
-interval=5; once=""
+interval=5; once=""; spawn=""; own_pane_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) once=1; shift ;;
+    --spawn) spawn=1; shift ;;
+    --own-pane) own_pane_arg="${2:?}"; shift 2 ;;
     --interval) interval="${2:?}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -16,12 +18,34 @@ done
 
 orch() { python3 -c "import sys,json;print(json.load(sys.stdin).get('orchestrator','orchestrator'))" <"$teamdir/config.json" 2>/dev/null || echo orchestrator; }
 
+pane_id_of() { python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])"; }
+
+# Split a pane off the orchestrator pane and run the watcher there by absolute
+# path, passing the new pane id as --own-pane. `herdr pane current` resolves the
+# orchestrator pane (the focused one), which is a safe anchor to split from; the
+# new pane's id then becomes the watcher's authoritative own-pane, so it never
+# has to guess its own pane from the focused one.
+spawn_watcher() {
+  local anchor new self self_dir
+  anchor="$(herdr pane current | pane_id_of)" || { echo "cannot resolve orchestrator pane" >&2; exit 4; }
+  new="$(herdr pane split --pane "$anchor" --direction down --cwd "$PWD" --no-focus | pane_id_of)" || exit 4
+  self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  self="$self_dir/$(basename "${BASH_SOURCE[0]}")"
+  herdr pane run "$new" "$self" --own-pane "$new" --interval "$interval" >/dev/null || exit 4
+  echo "$new"
+}
+
 pass() {
   local list orchestrator op
-  # Determine our own pane; retry capture each pass until known, so a transient
-  # failure of `herdr pane current` never leaves own_pane unset (which would let
-  # the hygiene block close our own pane). While it is unknown, close nothing.
-  op="$(python3 -c "import json,os;f='$teamdir/watch-state.json';print(json.load(open(f)).get('own_pane','') if os.path.exists(f) else '')" 2>/dev/null || true)"
+  # Determine our own pane. An explicit --own-pane (passed by the launcher) is
+  # authoritative and wins over everything. Otherwise reuse the persisted value,
+  # then fall back to `herdr pane current`. Retry the capture each pass so a
+  # transient failure never leaves own_pane unset (which would let the hygiene
+  # block close our own pane). While it is unknown, close nothing.
+  op="${own_pane_arg:-}"
+  if [ -z "${op:-}" ]; then
+    op="$(python3 -c "import json,os;f='$teamdir/watch-state.json';print(json.load(open(f)).get('own_pane','') if os.path.exists(f) else '')" 2>/dev/null || true)"
+  fi
   if [ -z "${op:-}" ]; then
     op="$(herdr pane current 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])" 2>/dev/null || true)"
   fi
@@ -97,13 +121,26 @@ PY
   panes="$(herdr pane list)" || return 0
   local hy
   hy="$(TEAMDIR="$teamdir" PANES="$panes" OWN_PANE="$op" python3 - <<'PY'
-import os, json
+import os, json, glob
 teamdir = os.environ["TEAMDIR"]
 tabs_path = os.path.join(teamdir, "tabs.json")
 team_tabs = set(json.load(open(tabs_path))) if os.path.exists(tabs_path) else set()
 pending_dir = os.path.join(teamdir, "pending")
 def is_pending(pane_id):
     return os.path.exists(os.path.join(pending_dir, pane_id.replace(":", "_").replace("/", "_")))
+# Panes whose agent has a brief on record. An agent that never got a brief is
+# NEW, not a release candidate, even when it looks idle in its freshly spawned
+# pane. "consider release" fires only for a tab holding a briefed pane.
+briefed_panes = set()
+for f in glob.glob(os.path.join(teamdir, "*.json")):
+    if os.path.basename(f) in ("config.json", "watch-state.json", "tabs.json", "layout-flags.json"):
+        continue
+    try:
+        rec = json.load(open(f))
+    except Exception:
+        continue
+    if rec.get("brief"):
+        briefed_panes.add(rec.get("pane"))
 sp = os.path.join(teamdir, "watch-state.json")
 own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None)
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
@@ -127,6 +164,7 @@ for tab, plist in by_tab.items():
     if len(plist) > budget:
         flags.append("layout: tab %s over budget (%d/%d)" % (tab, len(plist), budget))
     occupied_statuses = []
+    occupied_panes = []
     for p in plist:
         status = p.get("agent_status", "unknown")
         if p.get("pane_id") == own_pane:
@@ -135,7 +173,10 @@ for tab, plist in by_tab.items():
             closes.append(p.get("pane_id"))
         else:
             occupied_statuses.append(status)
-    if tab != orch_tab and occupied_statuses and all(s in ("idle", "done") for s in occupied_statuses):
+            occupied_panes.append(p.get("pane_id"))
+    if (tab != orch_tab and occupied_statuses
+            and all(s in ("idle", "done") for s in occupied_statuses)
+            and any(pp in briefed_panes for pp in occupied_panes)):
         flags.append("layout: tab %s idle, consider release" % tab)
 json.dump(sorted(set(flags)), open(lf_path, "w"))
 for pane_id in closes:
@@ -154,5 +195,6 @@ PY
   done <<<"$hy"
 }
 
+if [ -n "$spawn" ]; then spawn_watcher; exit 0; fi
 if [ -n "$once" ]; then pass; exit 0; fi
 while true; do pass; sleep "$interval"; done

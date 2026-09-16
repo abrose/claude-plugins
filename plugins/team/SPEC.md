@@ -536,3 +536,16 @@ tab (the orchestrator and its watcher) or 6 for a worker tab; a 7th agent in
 a worker tab spills to a new tab. Empty panes in team-managed tabs are closed
 automatically; the watcher's own pane and panes outside team-managed tabs are
 never touched.
+
+Watcher launch: `team-watch --spawn` splits its own pane off the orchestrator
+pane and runs the watcher there by absolute path with `--own-pane <id>`, so the
+watcher never resolves its own pane from `herdr pane current` (which returns the
+focused pane, wrong for a `--no-focus` watcher pane). The "consider release"
+flag fires only for a tab that holds a briefed agent, so a freshly spawned,
+un-briefed agent is never flagged. `team-start` registers a spilled tab only
+after its agent is live, so the watcher never closes a new tab's empty root
+pane.
+
+`--spawn` runs the watcher with `herdr pane run <pane_id> <cmd> <args>` (the
+CLI's positional form; its trailing `COMMAND...` accepts the hyphenated
+`--own-pane`/`--interval` flags without a `--` separator).

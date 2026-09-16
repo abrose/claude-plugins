@@ -16,8 +16,9 @@ beyond these steps:
    team id, the config, the safe permission baseline, and records this tab.
 4. Rename this pane's agent to the `orchestrator` name from
    `${TEAM_SCRATCH:-scratchpad}/.team/config.json` (`<team_id>-orch`).
-5. Split one small pane in this tab and start the watcher there:
-   `team-watch` (it reads config for the orchestrator name). This tab now holds
+5. Start the watcher: `team-watch --spawn`. It splits one small pane off this
+   pane, runs the watcher there by absolute path, and passes that pane's id as
+   `--own-pane`, so the watcher never misreads its own pane. This tab now holds
    exactly two panes: you and the watcher.
 6. Run `team-status` to write the first roster.
 

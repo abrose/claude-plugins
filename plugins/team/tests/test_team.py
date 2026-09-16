@@ -191,6 +191,19 @@ class TeamStart(Base):
         self.assertTrue(any(c.startswith("pane split") for c in calls), calls)
         self.assertTrue(any("agent start maker --kind claude --pane w1:p9" in c for c in calls))
 
+    def test_spill_defers_tab_registration_until_agent_live(self):
+        # A spilled tab must not be registered while its root pane is still
+        # empty; register only after the agent is live (a failed start = no tab).
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 3, p.stderr)   # wrong model bar -> pre-flight fail
+        tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
+        self.assertNotIn("w1:t9", tabs)
+
     def test_into_tab_with_pane_is_bad_args(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")
         self.assertEqual(p.returncode, 2)
@@ -574,6 +587,49 @@ class TeamWatch(Base):
         write_text(os.path.join(d, "watch-state.json"), json.dumps({"agents": {}, "_flagged": {}}))
         self.run_script("team-watch", "--once", scenario="own_pane_blind")
         self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
+
+    def test_own_pane_flag_overrides_detection(self):
+        # The launcher passes the true pane id; the flag wins over `pane current`
+        # (which returns the FOCUSED pane, wrong for a --no-focus watcher pane).
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", "--own-pane", "w1:zz")
+        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        self.assertEqual(state.get("own_pane"), "w1:zz")
+        self.assertFalse(any(c.startswith("pane current") for c in self.herdr_calls()))
+
+    def test_spawn_splits_pane_and_runs_watcher_with_own_pane(self):
+        # --spawn splits a pane off the orchestrator pane and runs the watcher
+        # there by absolute path, passing the new pane id as --own-pane.
+        self.cfg()
+        p = self.run_script("team-watch", "--spawn")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("pane split") for c in calls), calls)
+        runs = [c for c in calls if c.startswith("pane run")]
+        self.assertTrue(runs, calls)
+        self.assertTrue(any("team-watch" in c and "--own-pane w1:p9" in c for c in runs), runs)
+        # --spawn only launches; it must not run a poll pass itself.
+        self.assertFalse(any(c.startswith("agent list") for c in calls), calls)
+
+    def test_idle_briefed_tab_flags_release(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest",
+                          brief="scratchpad/brief-app-1-scout-digest.md")
+        self.prep_tabs(["w1:t2"])   # own_pane w1:p9, not in the idle tab
+        self.run_script("team-watch", "--once", scenario="panes_idle_only")
+        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
+        self.assertTrue(any("consider release" in c for c in pushes), pushes)
+
+    def test_idle_unbriefed_tab_not_flagged_release(self):
+        # A freshly spawned, never-briefed agent looks idle too; it must NOT be
+        # flagged as a release candidate (no brief recorded yet).
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest", brief="")
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_idle_only")
+        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
+        self.assertFalse(any("consider release" in c for c in pushes), pushes)
 
 
 if __name__ == "__main__":

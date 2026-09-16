@@ -82,9 +82,11 @@ directory.
 
 ## Watcher
 
-`/team:init` also starts a `team-watch` pane alongside the orchestrator, in
-the same tab. It polls `herdr agent list` and `herdr pane list`, and on every
-pass:
+`/team:init` starts the watcher with `team-watch --spawn`, which splits a small
+pane off the orchestrator pane and runs the watcher there by absolute path,
+passing that pane's id as `--own-pane`. The watcher never has to guess its own
+pane from the focused one, so it never closes its own pane. It polls
+`herdr agent list` and `herdr pane list`, and on every pass:
 
 - pushes one `WATCH <name>: <old> -> <new>` line to the orchestrator for
   every team agent whose state changed (a transition into `blocked` includes
@@ -93,8 +95,9 @@ pass:
   brief, once per state;
 - closes any pane in a team-managed tab that hosts no live agent (never its
   own pane);
-- flags a tab that is over its pane budget, and a worker tab whose every
-  agent is idle or done as a release candidate.
+- flags a tab that is over its pane budget, and a worker tab whose agents are
+  all idle or done, and at least one was briefed, as a release candidate. A
+  freshly spawned, un-briefed agent looks idle but is not flagged.
 
 `/team:status` surfaces the latest `WATCH` lines; `/team:release all` stops
 the watcher and removes its state files.
