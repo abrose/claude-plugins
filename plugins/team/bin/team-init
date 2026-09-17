@@ -25,6 +25,13 @@ mkdir -p "$teamdir"
 team_id="$("$here/team-id" for "$ticket")"
 orch="${team_id}-orch"
 
+# Rename the orchestrator's own agent to the namespaced name, so its pane shows
+# <team_id>-orch instead of the bare default. Best-effort: never abort init.
+if [ -n "$orch_pane" ]; then
+  herdr agent rename "$orch_pane" "$orch" >/dev/null 2>&1 \
+    || echo "warning: could not rename orchestrator agent to $orch" >&2
+fi
+
 TICKET="$ticket" TEAM_ID="$team_id" ORCH="$orch" python3 - "$teamdir/config.json" <<'PY'
 import os, json, sys
 json.dump({"team_id": os.environ["TEAM_ID"], "ticket": os.environ["TICKET"],

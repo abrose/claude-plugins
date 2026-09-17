@@ -10,7 +10,9 @@ human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
 Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
-   never does operational work itself. It never investigates a question, never
+   composes the team on demand: it starts an agent when a task needs one, and
+   never asks the human up front which roles the run will use. It never does
+   operational work itself. It never investigates a question, never
    analyses code to answer one, never runs a test, never drives a browser, never
    edits a file, never runs a project or build command. If a task is worth
    doing, it briefs an agent to do it, even when the task looks quick and even
@@ -69,7 +71,9 @@ Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
 The orchestrator drives agents through the plugin scripts on `PATH`:
 `team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`, `team-watch`,
 `team-status`. They wrap the Herdr CLI; never restate a Herdr command in
-prose. The Herdr skill is the reference for the CLI itself.
+prose. For the Herdr CLI reference, run `herdr --skill`: that is Herdr's own
+guide, not a plugin skill. There is no `team:herdr` skill; do not try to invoke
+one.
 
 Deeper operational lessons live in `references/lessons.md`. It is not
 auto-loaded; read it when you plan a run.

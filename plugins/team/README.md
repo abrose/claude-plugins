@@ -43,7 +43,7 @@ Or install from the marketplace once published:
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket>` | Confirm the tab and roles, create the tab, write the decisions file, start the watcher, write the first roster. |
+| `/team:init <ticket>` | Create the tab, write the decisions file, start the watcher, write the first roster. Agents are started on demand, not chosen up front. |
 | `/team:brief <name> <topic>` | Compose a brief, fill its task section, send the kick-off, report the status line. |
 | `/team:status` | Read the roster, read idle agents that owe a report, flag anything that needs you. |
 | `/team:release [name ...|all]` | Clear and close finished agents; refuse a working one. |

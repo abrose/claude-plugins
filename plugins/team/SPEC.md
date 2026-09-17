@@ -41,14 +41,14 @@ on a Rust repo with no Jira and no stacked branches.
 | Scope | Owner | Where | Examples |
 |---|---|---|---|
 | Kernel | this plugin | `plugins/team/` | protocol, brief skeleton, role rules, commands, scripts |
-| Toolchain | Alfred's environment, global | Herdr skill + CLI, git worktrees + machete, Claude Code | `herdr agent prompt --wait`, `git m update` guarded |
+| Toolchain | Alfred's environment, global | Herdr CLI (`herdr --skill` for its guide), git worktrees + machete, Claude Code | `herdr agent prompt --wait`, `git m update` guarded |
 | Overlay | the project repository | `.claude/team/`, `.claude/skills/project-<role>/` | ports, tunnels, gate command, tracker hygiene, probe rules |
 | Task | one ticket, ephemeral | `scratchpad/` (git-ignored) | decisions file, briefs, reports, open questions |
 
 The kernel depends on the toolchain only through the Herdr CLI verbs
 (`tab create`, `pane split`, `agent start`, `agent prompt --wait`,
 `agent wait --until`, `agent read`, `agent list`, `agent send-keys`) and on
-git. It never restates a Herdr command in prose; the Herdr skill is the
+git. It never restates a Herdr command in prose; `herdr --skill` is the
 reference.
 
 ---
@@ -112,7 +112,9 @@ dependencies. `chmod +x` before commit.
 Verbatim rules, kept to one page. Everything else is in `references/`.
 
 1. The orchestrator plans, briefs, reads reports, and decides with Alfred. It
-   never does operational work itself: no investigating a question, no analysing
+   composes the team on demand - it starts an agent when a task needs one, and
+   never asks up front which roles the run will use. It never does operational
+   work itself: no investigating a question, no analysing
    code to answer one, no running tests, no driving a browser, no editing files,
    no running project or build commands. If a task is worth doing, it briefs an
    agent, even when the task looks quick. The only self-actions: talk to the

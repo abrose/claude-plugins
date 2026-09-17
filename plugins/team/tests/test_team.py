@@ -507,6 +507,13 @@ class TeamInit(Base):
         tabs = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "tabs.json")))
         self.assertIn("w1:t1", tabs)
 
+    def test_renames_orchestrator_agent_to_namespaced_name(self):
+        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+                            scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent rename w1:p1 app-1-orch") for c in self.herdr_calls()),
+                        self.herdr_calls())
+
     def test_missing_orchestrator_pane_value_is_bad_args(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane")
         self.assertEqual(p.returncode, 2)
