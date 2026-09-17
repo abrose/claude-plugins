@@ -536,13 +536,16 @@ New scripts: `team-id` (slug or hash a team id), `team-init` (team id,
 config, allowlist baseline, orchestrator tab record), `team-watch` (poll
 loop: state-diff reporting, block-dialog text, idle-without-report flag,
 layout hygiene). `team-start` gained team-id namespacing (`<team_id>-<label>`
-agent names) and `--into-tab` tab-aware placement.
+agent names) and `--into-tab` tab-aware placement that tiles a worker tab as a
+2-column, 3-row grid.
 
 Budget rule: a team-managed tab holds at most 2 panes for the orchestrator
 tab (the orchestrator and its watcher) or 6 for a worker tab; a 7th agent in
-a worker tab spills to a new tab. Empty panes in team-managed tabs are closed
-automatically; the watcher's own pane and panes outside team-managed tabs are
-never touched.
+a worker tab spills to a new tab. Worker-tab panes tile as a 2-column,
+3-row grid: `team-start` reads the tab geometry (`herdr pane layout`) and
+splits the correct pane so the grid stays even, instead of stacking panes in
+one column. Empty panes in team-managed tabs are closed automatically; the
+watcher's own pane and panes outside team-managed tabs are never touched.
 
 Watcher launch: `team-watch --spawn` splits its own pane off the orchestrator
 pane (`--ratio 0.8`, so the orchestrator keeps most of the tab and the watcher

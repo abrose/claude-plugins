@@ -195,11 +195,8 @@ class TeamStart(Base):
         self.assertIn("w1:t9", tabs)
 
     def test_into_underbudget_tab_splits_in_place(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
-        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
-                            "--cwd", self.proj, scenario="panes_empty",
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:tG",
+                            "--cwd", self.proj, scenario="grid2",
                             env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
@@ -219,6 +216,33 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 3, p.stderr)   # wrong model bar -> pre-flight fail
         tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
         self.assertNotIn("w1:t9", tabs)
+
+    def grid_split(self, scenario):
+        p = self.run_script("team-start", "scout", "investigator", "--into-tab", "w1:tG",
+                            "--cwd", self.proj, scenario=scenario,
+                            env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return [c for c in self.herdr_calls() if c.startswith("pane split")]
+
+    def test_grid_pane2_starts_two_columns(self):
+        splits = self.grid_split("grid1")
+        self.assertTrue(any("pane split --pane w1:g1 --direction right --ratio 0.5" in c for c in splits), splits)
+
+    def test_grid_pane3_splits_left_column_into_rows(self):
+        splits = self.grid_split("grid2")
+        self.assertTrue(any("pane split --pane w1:g1 --direction down --ratio 0.333" in c for c in splits), splits)
+
+    def test_grid_pane4_splits_right_column_into_rows(self):
+        splits = self.grid_split("grid3")
+        self.assertTrue(any("pane split --pane w1:g2 --direction down --ratio 0.333" in c for c in splits), splits)
+
+    def test_grid_pane5_fills_left_bottom_row(self):
+        splits = self.grid_split("grid4")
+        self.assertTrue(any("pane split --pane w1:g3 --direction down --ratio 0.5" in c for c in splits), splits)
+
+    def test_grid_pane6_fills_right_bottom_row(self):
+        splits = self.grid_split("grid5")
+        self.assertTrue(any("pane split --pane w1:g4 --direction down --ratio 0.5" in c for c in splits), splits)
 
     def test_into_tab_with_pane_is_bad_args(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")

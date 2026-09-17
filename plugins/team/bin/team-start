@@ -74,9 +74,42 @@ if [ -n "$into_tab" ]; then
     # Register the new tab only after its agent is live (see below). A tab that
     # is empty while registered would let the watcher close its root pane.
   else
-    target_pane="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print('\n'.join(p['pane_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))" | head -n1)"
-    [ -n "$target_pane" ] || { echo "target tab has no panes: $into_tab" >&2; exit 2; }
-    out=$(herdr pane split --pane "$target_pane" --direction down --cwd "$cwd" --no-focus) || exit 4
+    # Place the new pane into a 2-column x 3-row grid so agents tile instead of
+    # stacking in one tall column. Read the tab geometry and pick which pane to
+    # split and how, from the count of panes already there.
+    probe="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(next((p['pane_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t), ''))")"
+    [ -n "$probe" ] || { echo "target tab has no panes: $into_tab" >&2; exit 2; }
+    layout_json="$(herdr pane layout --pane "$probe")" || exit 4
+    sel="$(GRID_COUNT="$count" LAYOUT="$layout_json" python3 - <<'PY'
+import os, json
+count = int(os.environ["GRID_COUNT"])
+layout = json.loads(os.environ["LAYOUT"])["result"]["layout"]
+panes = layout["panes"]
+H = layout["area"]["height"]
+def rect(p): return p["rect"]
+def near(a, b, tol=2): return abs(a - b) <= tol
+xs = sorted(set(rect(p)["x"] for p in panes))
+left_x, right_x = xs[0], xs[-1]
+if count <= 1:                       # 1 -> 2: start the two columns
+    t, d, ratio = panes[0], "right", "0.5"
+elif count == 2:                     # 2 -> 3: first row split, left column
+    t = next(p for p in panes if near(rect(p)["x"], left_x) and near(rect(p)["height"], H))
+    d, ratio = "down", "0.333"
+elif count == 3:                     # 3 -> 4: first row split, right column
+    t = next(p for p in panes if near(rect(p)["x"], right_x) and near(rect(p)["height"], H))
+    d, ratio = "down", "0.333"
+elif count == 4:                     # 4 -> 5: second row split, left column
+    t = max((p for p in panes if near(rect(p)["x"], left_x)), key=lambda p: rect(p)["height"])
+    d, ratio = "down", "0.5"
+else:                                # 5 -> 6: second row split, right column
+    t = max((p for p in panes if near(rect(p)["x"], right_x)), key=lambda p: rect(p)["height"])
+    d, ratio = "down", "0.5"
+print("%s\t%s\t%s" % (t["pane_id"], d, ratio))
+PY
+)" || exit 4
+    IFS=$'\t' read -r target_pane grid_dir grid_ratio <<<"$sel"
+    [ -n "$target_pane" ] || { echo "could not pick a grid target in $into_tab" >&2; exit 4; }
+    out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" --no-focus) || exit 4
     pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
   fi
 fi

@@ -60,8 +60,9 @@ Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
     change, flags idle-without-report, and keeps the layout within budget.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the orchestrator tab holds at most 2 panes (you and the
-    watcher); a worker tab holds at most 6. A 7th agent goes to a new tab.
-    Empty panes in team tabs are closed automatically.
+    watcher); a worker tab holds at most 6, tiled as a 2-column, 3-row grid. A
+    7th agent goes to a new tab. Empty panes in team tabs are closed
+    automatically.
 
 ## Tools
 
