@@ -75,23 +75,35 @@ try:
     body = "# Report: %s / %s\n- Brief: %s\n- Written: %s\n\n---\n\n%s\n" % (name, topic, brief, ts, message)
     open(os.path.join(reports, "%s-%s.md" % (name, topic)), "w").write(body)
 
-    if message.startswith("REPORT "):
-        orch = "orchestrator"
-        cf = os.path.join(teamdir, "config.json")
-        if os.path.exists(cf):
-            try:
-                orch = json.load(open(cf)).get("orchestrator", orch) or orch
-            except Exception:
-                pass
-        first = message.splitlines()[0]
-        if not re.match(r"^[a-z][a-z0-9_-]{0,31}$", orch):
-            log("bad orchestrator name, not forwarding: %r" % orch)
-        else:
-            try:
-                subprocess.run(["herdr", "agent", "prompt", orch, first],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            except Exception as e:
-                log("forward failed: %s" % e)
+    # Ping the orchestrator on every stop of a team worker, so it never waits on
+    # a worker that is already done. Forward the worker's REPORT line if it wrote
+    # one anywhere in its final message; otherwise send a nudge to the report file.
+    orch = "orchestrator"
+    cf = os.path.join(teamdir, "config.json")
+    if os.path.exists(cf):
+        try:
+            orch = json.load(open(cf)).get("orchestrator", orch) or orch
+        except Exception:
+            pass
+    if name == orch:
+        pass  # never prompt the orchestrator to itself
+    elif not re.match(r"^[a-z][a-z0-9_-]{0,31}$", orch):
+        log("bad orchestrator name, not forwarding: %r" % orch)
+    else:
+        line = None
+        for ln in message.splitlines():
+            if ln.strip().startswith("REPORT "):
+                line = ln.strip()
+                break
+        if line is None:
+            reldir = os.environ.get("TEAM_SCRATCH", "scratchpad")
+            line = ("REPORT %s %s: stopped without a REPORT line - read %s/reports/%s-%s.md"
+                    % (name, topic, reldir, name, topic))
+        try:
+            subprocess.run(["herdr", "agent", "prompt", orch, line],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception as e:
+            log("forward failed: %s" % e)
 except Exception as e:
     log("hook error: %s" % e)
 PY

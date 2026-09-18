@@ -7,7 +7,8 @@ description: The orchestrator-plus-team-agents protocol. One session you talk to
 
 You run or take part in a team workflow. One orchestrator session talks to the
 human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
-Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
+Reports arrive as files through a Stop hook, which also pings the orchestrator the
+moment a worker stops. These fifteen rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
    composes the team on demand: it starts an agent when a task needs one, and
@@ -31,9 +32,10 @@ Reports arrive as files through a Stop hook. These fifteen rules bind everyone.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
    suffix (3a).
-5. Agents report by name: `REPORT <name> <topic>: <summary>`. The deliverable is
-   always a file. The report is a summary of at most ten lines. The orchestrator
-   reads the file before discussing.
+5. Agents report by name: `REPORT <name> <topic>: <summary>`. A worker writes that
+   line as plain text and stops; the Stop hook delivers it to the orchestrator. The
+   deliverable is always a file. The report is a summary of at most ten lines. The
+   orchestrator reads the file before discussing.
 6. Reports are discussed one at a time in arrival order. If a later report
    reframes an open one, say so and ask to combine.
 7. Every mention of an agent to the human carries `name (pane, session)`. With

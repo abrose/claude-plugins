@@ -38,13 +38,18 @@ never here.
   `/compact` when the old context holds knowledge the next task needs. A stale,
   un-reset context poisons the next brief and wastes tokens.
 - Do not `/clear` an agent until its deliverable file is confirmed on disk.
-- A REPORT line goes to the orchestrator by `herdr agent prompt`, never to the
-  deliverable file. An agent that writes its closing summary to the deliverable
-  path overwrites the deliverable. The summary can look healthy while the file
-  holds 21 lines of a 587-line catalogue.
+- A worker writes its REPORT line as plain text and stops; the Stop hook delivers
+  that line to the orchestrator and saves the whole message to the report file. The
+  REPORT summary never goes into the deliverable file. An agent that writes its
+  closing summary to the deliverable path overwrites the deliverable. The summary
+  can look healthy while the file holds 21 lines of a 587-line catalogue.
 - Reference every agent as `name (pane, session)` so the human can find it.
 - `team-status` may list herdr agents from other sessions on this machine. Your
   team's agents are the `<team_id>-*` names; read those.
+- Names are unique by construction. `team-init` skips a `<team_id>-*` namespace
+  that live agents already hold, so a re-run for the same ticket gets a fresh id
+  (`app-1` then `app-1-2`), never the old team's names. `team-start` refuses a
+  label whose namespaced name is already a live agent. Trust the id init prints.
 
 ## Fan-out
 

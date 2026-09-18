@@ -76,10 +76,13 @@ and `brief-post-notes` templates. Mechanical jobs run on `team-implementer`.
 `/team:init <ticket>` assigns the run a short team id (a slug of the ticket,
 or a random hash when there is no ticket) and writes it to
 `.team/config.json`. Every agent name becomes `<team_id>-<label>`, including
-the orchestrator itself (`<team_id>-orch`), so two teams can run in the same
-profile at once without name collisions. A team's watcher and layout hygiene
-only ever act on the agents and tabs recorded under its own `.team/`
-directory.
+the orchestrator itself (`<team_id>-orch`). Init checks the live `herdr agent
+list` and, if that name namespace is already taken (for example by a prior run
+for the same ticket), disambiguates the team id (`app-1`, then `app-1-2`, then
+a random hash), so two teams never share names and cross-poison each other.
+`team-start` likewise refuses a `<team_id>-<label>` that a live agent already
+holds. A team's watcher and layout hygiene only ever act on the agents and
+tabs recorded under its own `.team/` directory.
 
 ## Watcher
 

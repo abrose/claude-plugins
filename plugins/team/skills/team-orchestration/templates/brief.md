@@ -18,9 +18,10 @@ You must NOT: <role fragment fills this>.
 <exact paths and the section structure of each deliverable>
 
 ## Report back
-Run exactly:
-herdr agent prompt {{orchestrator}} "REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers>"
-Then stop.
+End your final turn with this line as plain text, then stop:
+REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers>
+Do not run any command to send it. Stopping saves your whole message to the report
+file and delivers the REPORT line to {{orchestrator}}.
 
 ## Rules
 - Source-backed facts only; unknowns become numbered open questions.

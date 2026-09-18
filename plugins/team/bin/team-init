@@ -22,7 +22,46 @@ done
 mkdir -p "$teamdir"
 [ -e "$teamdir/config.json" ] && { echo "already initialised: $teamdir/config.json" >&2; exit 1; }
 
-team_id="$("$here/team-id" for "$ticket")"
+# Pick a team id whose <team_id>-* name namespace is free among live herdr
+# agents, so two teams (e.g. a prior run for the same ticket) never share names
+# and cross-poison each other. Start from the ticket slug, then numeric suffixes,
+# then random hashes.
+base="$("$here/team-id" for "$ticket")"
+team_id="$(HERE="$here" BASE="$base" python3 - <<'PY'
+import os, json, subprocess
+
+def live_names():
+    try:
+        out = subprocess.run(["herdr", "agent", "list"], capture_output=True, text=True)
+        d = json.loads(out.stdout)
+        return {a.get("name") for a in d.get("result", {}).get("agents", []) if a.get("name")}
+    except Exception:
+        return set()
+
+names = live_names()
+
+def free(tid):
+    if len(tid) + len("-orch") > 32:
+        return False
+    return not any(n == tid or n.startswith(tid + "-") for n in names)
+
+base = os.environ["BASE"]
+here = os.environ["HERE"]
+choice = None
+for cand in [base] + ["%s-%d" % (base, i) for i in range(2, 10)]:
+    if free(cand):
+        choice = cand
+        break
+if choice is None:
+    for _ in range(50):
+        h = subprocess.run([os.path.join(here, "team-id"), "hash"],
+                           capture_output=True, text=True).stdout.strip()
+        if h and free(h):
+            choice = h
+            break
+print(choice or base)
+PY
+)"
 orch="${team_id}-orch"
 
 # Rename the orchestrator's own agent to the namespaced name, so its pane shows

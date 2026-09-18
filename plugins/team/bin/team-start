@@ -65,6 +65,18 @@ if [ -n "$dry_run" ]; then
   exit 0
 fi
 
+# Refuse a name a live agent already holds: starting it would seize that agent's
+# pane and cross-poison it. A dead agent (absent from the list) is fine to reuse.
+if herdr agent list 2>/dev/null | NAME="$name" python3 -c "import sys, os, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if any(a.get('name') == os.environ['NAME'] for a in d.get('result', {}).get('agents', [])) else 1)"; then
+  echo "name already in use by a live agent: $name" >&2
+  exit 3
+fi
+
 if [ -n "$into_tab" ]; then
   count="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(sum(1 for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))")"
   if [ "$count" -ge 6 ]; then

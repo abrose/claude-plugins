@@ -180,6 +180,30 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent start scout ") for c in self.herdr_calls()))
 
+    def config(self, team_id="app-1", orch="app-1-orch"):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": team_id, "orchestrator": orch}))
+
+    def test_refuses_name_already_live(self):
+        # Starting a label whose namespaced name is already a live agent would
+        # reuse its pane and cross-poison it. Refuse before touching herdr.
+        self.config()
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="name_scout_taken",
+                            env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_starts_when_namespaced_name_free(self):
+        self.config()
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="name_scout_taken",
+                            env_extra=self.bar_env("Sonnet 5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start app-1-maker ") for c in self.herdr_calls()))
+
     def test_into_full_tab_spills_to_new_tab(self):
         d = os.path.join(self.proj, "scratchpad", ".team")
         os.makedirs(d, exist_ok=True)
@@ -422,15 +446,52 @@ class StopHook(Base):
         body = read_text(self.report_path("scout", "digest"))
         self.assertIn("# Report: scout / digest", body)
         self.assertIn("final answer", body)
-        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
 
-    def test_forwards_only_report_prefixed(self):
+    def test_forwards_report_line(self):
         self.write_record("scout", "investigator", topic="digest", session="abcdef12")
         tr = self.transcript("REPORT scout digest: done, 2 files")
         p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
                             for c in self.herdr_calls()))
+
+    def test_forwards_report_line_after_status_bar(self):
+        # The reported bug: a status-bar first line (workers inherit the rule)
+        # meant the message never started with "REPORT ", so the ping was skipped
+        # while the report file still landed. The hook must find the REPORT line
+        # anywhere in the message, not only at offset zero.
+        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
+        tr = self.transcript("| status bar |\n\nREPORT scout digest: done, 2 files")
+        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        self.assertTrue(any("REPORT scout digest: done, 2 files" in c for c in prompts), prompts)
+        self.assertFalse(any("status bar" in c for c in prompts), prompts)
+
+    def test_fallback_ping_when_no_report_line(self):
+        # A worker that stops without any REPORT line must still wake the
+        # orchestrator, with a nudge that points at the report file on disk.
+        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
+        tr = self.transcript("just some final prose, no report line")
+        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest:")
+                            for c in prompts), prompts)
+        self.assertTrue(any("scratchpad/reports/scout-digest.md" in c for c in prompts), prompts)
+
+    def test_no_self_ping_when_session_is_orchestrator(self):
+        # Belt-and-suspenders: the orchestrator has no record today, but if one
+        # ever matched, the hook must not prompt the orchestrator to itself.
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
+        self.write_record("app-1-orch", "investigator", topic="digest", session="abcdef12")
+        tr = self.transcript("REPORT app-1-orch digest: done")
+        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
 
     def test_unreadable_transcript_logs_and_exits_zero(self):
         self.write_record("scout", "investigator", topic="digest", session="abcdef12")
@@ -517,6 +578,22 @@ class TeamInit(Base):
     def test_missing_orchestrator_pane_value_is_bad_args(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane")
         self.assertEqual(p.returncode, 2)
+
+    def test_picks_free_team_id_when_slug_taken(self):
+        # A prior team for the same ticket left app-1-* agents live. Reusing the
+        # deterministic slug would cross-poison them, so init must disambiguate.
+        p = self.run_script("team-init", "APP-1", scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "config.json")))
+        self.assertEqual(cfg["team_id"], "app-1-2")
+        self.assertEqual(cfg["orchestrator"], "app-1-2-orch")
+
+    def test_renames_orchestrator_to_disambiguated_name(self):
+        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+                            scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent rename w1:p1 app-1-2-orch") for c in self.herdr_calls()),
+                        self.herdr_calls())
 
 
 class TeamWatch(Base):

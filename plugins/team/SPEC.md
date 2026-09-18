@@ -232,6 +232,9 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down) [--effort low
 ```
 
 1. Resolve `<role>` to the agent file and default effort from the role table.
+   Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
+   refuse with exit 3 if the live `herdr agent list` already holds that name: a
+   name a live agent owns is not restartable without seizing its pane.
 2. Create the pane if `--split` was given; read `pane_id` from the JSON.
 3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode>`.
 4. Pre-flight, in order: if start returns `agent_not_ready`, `agent read
@@ -342,11 +345,13 @@ enabled, so it must be silent and cheap when it does not apply:
 3. Extract the last assistant message from the transcript. Write it to
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,
    timestamp). Overwrite on every stop, so the file always holds the latest.
-4. If the message begins with `REPORT `, push it to the orchestrator pane:
-   `herdr agent prompt <orchestrator> "<first line>"`, where
-   `<orchestrator>` comes from `.team/config.json` (default `orchestrator`).
-   If the agent already ran the command itself, the duplicate is harmless:
-   the orchestrator handles reports by file, not by message count.
+4. Push a line to the orchestrator pane on every stop, so it never waits on a
+   worker that is already done: `herdr agent prompt <orchestrator> "<line>"`,
+   where `<orchestrator>` comes from `.team/config.json` (default `orchestrator`).
+   The `<line>` is the first line in the message that starts with `REPORT ` (found
+   anywhere, not only at the start), or, when the message has none, a synthesized
+   `REPORT <name> <topic>: stopped without a REPORT line - read <report path>`.
+   Never push when `<name>` equals `<orchestrator>` (no self-ping).
 5. Never block the stop; on any error exit 0 and append one line to
    `.team/hook.log`.
 
@@ -403,9 +408,10 @@ You must NOT: <role fragment fills this>.
 <exact paths and the section structure of each deliverable>
 
 ## Report back
-Run exactly:
-herdr agent prompt {{orchestrator}} "REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers>"
-Then stop.
+End your final turn with this line as plain text, then stop:
+REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers>
+Do not run any command to send it. Stopping saves your whole message to the report
+file and delivers the REPORT line to {{orchestrator}}.
 
 ## Rules
 - Source-backed facts only; unknowns become numbered open questions.
@@ -464,8 +470,8 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
 7. `team-status` joins the roster and flags idle agents without a fresh
    report.
 8. `stop-report.sh` exits 0 silently for a session with no `.team` match,
-   writes the report file for a match, and forwards only messages that begin
-   with `REPORT `.
+   writes the report file for a match, and on every stop forwards the message's
+   `REPORT ` line (found anywhere) or a fallback nudge, never to itself.
 9. A hook error (unreadable transcript) exits 0 and logs one line.
 
 ---
@@ -563,3 +569,21 @@ pane.
 `--spawn` runs the watcher with `herdr pane run <pane_id> <cmd> <args>` (the
 CLI's positional form; its trailing `COMMAND...` accepts the hyphenated
 `--own-pane`/`--interval` flags without a `--` separator).
+
+## Increment 2026-09-18
+
+Report delivery is now the Stop hook's job on every worker stop, not a fragile
+worker-run command. `stop-report.sh` writes the report file (unchanged) and then
+pings the orchestrator every time a team worker stops: it forwards the first
+`REPORT ` line found anywhere in the final message, or, when there is none, a
+synthesized `REPORT <name> <topic>: stopped without a REPORT line - read <report
+path>` nudge. It never pings when the worker name equals the orchestrator. The
+brief's "Report back" section now tells the worker to end its turn with a plain
+`REPORT` text line and stop; it no longer runs `herdr agent prompt` itself.
+
+Name-uniqueness guard. `team-init` chooses a team id whose `<team_id>-*` name
+namespace is free among live `herdr agent list` agents: the ticket slug, then
+`-2`..`-9`, then random hashes. So a second team (for example a re-run of the
+same ticket whose agents are still live) never shares names and cross-poisons
+the first. `team-start` refuses with exit 3 when the resolved `<team_id>-<label>`
+is already a live agent.

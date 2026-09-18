@@ -119,8 +119,15 @@ case "$group $sub" in
           {"name":"scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"11111111aaaa"}},
           {"name":"maker","pane_id":"w1:p3","state":"working","agent_session":{"value":"22222222bbbb"}}
         ]}}' ;;
+      names_app1_taken)
+        emit '{"result":{"agents":[
+          {"name":"app-1-orch","pane_id":"w1:p1","state":"idle","agent_session":{"value":"oooo0000"}},
+          {"name":"app-1-scout","pane_id":"w1:p2","state":"working","agent_session":{"value":"ssss1111"}}
+        ]}}' ;;
+      name_scout_taken)
+        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
       *)
-        emit '{"result":{"agents":[{"name":"scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"11111111aaaa"}}]}}' ;;
+        emit '{"result":{"agents":[]}}' ;;
     esac ;;
   "pane list")
     case "$scenario" in
