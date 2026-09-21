@@ -154,7 +154,7 @@ own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
 occupied = {"idle", "working", "blocked", "done"}
 by_tab = {}
-orch_tab = None  # the orchestrator tab is the one holding own_pane; budget 2 there, else 6
+orch_tab = None  # the orchestrator tab is the one holding own_pane
 for p in panes:
     by_tab.setdefault(p.get("tab_id"), []).append(p)
     if p.get("pane_id") == own_pane:
@@ -168,7 +168,10 @@ flags = []
 for tab, plist in by_tab.items():
     if tab not in team_tabs:
         continue
-    budget = 2 if tab == orch_tab else 6
+    if tab == orch_tab:
+        continue  # the orchestrator tab belongs to the human: never close or flag
+                  # its panes, so a pane opened there by hand survives.
+    budget = 6
     if len(plist) > budget:
         flags.append("layout: tab %s over budget (%d/%d)" % (tab, len(plist), budget))
     occupied_statuses = []

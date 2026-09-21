@@ -85,6 +85,9 @@ never here.
   candidate, so it no longer triggers the flag.
 - `team-start` registers a spilled tab only after its agent is live. The watcher
   never sees a registered tab with an empty root pane, so it never closes one.
+- The orchestrator tab is the human's own workspace. The watcher never closes or
+  budget-flags panes there, so you can open a temporary pane in it without the
+  watcher killing it. Pane hygiene applies to worker tabs only.
 - The watcher pane logs each event and a once-a-minute heartbeat. A watcher pane
   with no heartbeat for over a minute is not running; restart it with
   `team-watch --spawn`.

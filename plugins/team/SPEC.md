@@ -547,13 +547,15 @@ layout hygiene). `team-start` gained team-id namespacing (`<team_id>-<label>`
 agent names) and `--into-tab` tab-aware placement that tiles a worker tab as a
 2-column, 3-row grid.
 
-Budget rule: a team-managed tab holds at most 2 panes for the orchestrator
-tab (the orchestrator and its watcher) or 6 for a worker tab; a 7th agent in
-a worker tab spills to a new tab. Worker-tab panes tile as a 2-column,
-3-row grid: `team-start` reads the tab geometry (`herdr pane layout`) and
-splits the correct pane so the grid stays even, instead of stacking panes in
-one column. Empty panes in team-managed tabs are closed automatically; the
-watcher's own pane and panes outside team-managed tabs are never touched.
+Budget rule: a worker tab holds at most 6 panes; a 7th agent in a worker tab
+spills to a new tab. The orchestrator tab (the one holding the watcher's own
+pane) is the human's workspace and is left alone: the watcher never closes or
+budget-flags its panes, so a pane opened there by hand survives. Worker-tab
+panes tile as a 2-column, 3-row grid: `team-start` reads the tab geometry
+(`herdr pane layout`) and splits the correct pane so the grid stays even,
+instead of stacking panes in one column. Empty panes in worker tabs are closed
+automatically; the watcher's own pane, the orchestrator tab, and panes outside
+team-managed tabs are never touched.
 
 Watcher launch: `team-watch --spawn` splits its own pane off the orchestrator
 pane (`--ratio 0.8`, so the orchestrator keeps most of the tab and the watcher
@@ -587,3 +589,11 @@ namespace is free among live `herdr agent list` agents: the ticket slug, then
 same ticket whose agents are still live) never shares names and cross-poisons
 the first. `team-start` refuses with exit 3 when the resolved `<team_id>-<label>`
 is already a live agent.
+
+## Increment 2026-09-21
+
+The orchestrator tab is now the human's workspace, exempt from the watcher's
+pane hygiene. Layout hygiene (empty-pane closing and the over-budget flag) runs
+on worker tabs only; the watcher skips the tab that holds its own pane. A pane
+opened there by hand is no longer closed, and the tab is no longer nagged as
+over budget. The worker-tab budget stays 6.

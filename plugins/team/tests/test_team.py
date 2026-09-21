@@ -667,6 +667,25 @@ class TeamWatch(Base):
         self.run_script("team-watch", "--once", scenario="panes_empty")
         self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
 
+    def test_leaves_human_pane_in_orchestrator_tab(self):
+        # A pane the human opens in the orchestrator's own tab (the tab holding
+        # the watcher's own pane) is the human's workspace and must never close.
+        self.cfg()
+        self.prep_tabs(["w1:t2"], own_pane="w1:p2")   # own pane in w1:t2 -> orch tab
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()),
+                         self.herdr_calls())
+
+    def test_does_not_flag_orchestrator_tab_over_budget(self):
+        # The human may open extra panes in the orchestrator tab; the watcher
+        # must not nag it as over budget or close anything there.
+        self.cfg()
+        self.prep_tabs(["w1:t2"], own_pane="w1:p2")   # orchestrator tab
+        self.run_script("team-watch", "--once", scenario="panes_overbudget")
+        calls = self.herdr_calls()
+        self.assertFalse(any("over budget" in c for c in calls), calls)
+        self.assertFalse(any(c.startswith("pane close") for c in calls), calls)
+
     def test_flags_over_budget_worker_tab(self):
         self.cfg()
         self.prep_tabs(["w1:t2"])
