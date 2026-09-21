@@ -221,7 +221,7 @@ creates and reads these; the overlay never does.
 | `orchestration-decisions.md` | orchestrator | own calls while Alfred is away |
 | `brief-<name>-<topic>.md` | `team-brief compose` | the assignment; `-revN` for follow-ups |
 | `reports/<name>-<topic>.md` | agent (via hook) | deliverable summary, deterministic path |
-| `.team/<name>.json` | `team-start`, `team-brief` | `{role, topic, brief, pane, session, started}` |
+| `.team/<name>.json` | `team-start`, `team-brief` | `{role, topic, brief, pane, started}` |
 | `.team/roster.md` | `team-status` | last rendered roster, for pasting into status messages |
 
 ### `team-start`
@@ -235,16 +235,21 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down) [--effort low
    Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
    refuse with exit 3 if the live `herdr agent list` already holds that name: a
    name a live agent owns is not restartable without seizing its pane.
-2. Create the pane if `--split` was given; read `pane_id` from the JSON.
+2. Create the pane if `--split` or `--into-tab` was given; read `pane_id` from
+   the JSON. Stamp `TEAM_NAME=<name>` onto the pane so the agent's Stop hook can
+   identify itself: `--env` on a pane/tab this step creates, or a
+   `herdr pane run <pane> "export TEAM_NAME=<name>"` into a caller-provided
+   `--pane`.
 3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode>`.
 4. Pre-flight, in order: if start returns `agent_not_ready`, `agent read
    --source detection`; if the screen is a first-run dialog (MCP server,
    workspace trust), answer the conservative default with `agent send-keys
    <name> enter` and retry once. Then verify the status bar once: model, mode,
    cwd. Abort with exit 3 and the screen text if any of the three is wrong.
-5. Write `.team/<name>.json` with role, pane, session (first 8 chars of
-   `agent_session.value`), started.
-6. Print one JSON line: `{"name","role","pane","session","model","mode"}`.
+5. Write `.team/<name>.json` with role, pane, started.
+6. Print one JSON line: `{"name","role","pane","session","model","mode"}`, where
+   `session` is the first 8 chars of Herdr's `agent_session.value` (for the
+   human-facing roster only; the hook does not use it).
 
 Exit codes: 0 ok, 2 bad arguments, 3 pre-flight failed, 4 herdr error
 (pass through the herdr message on stderr).
@@ -338,10 +343,10 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 `stop-report.sh` runs in every session of every profile that has the plugin
 enabled, so it must be silent and cheap when it does not apply:
 
-1. Read the hook payload from stdin (`session_id`, `transcript_path`, `cwd`).
-2. Find `$cwd/$TEAM_SCRATCH/.team/*.json` whose `session` matches the first 8
-   chars of `session_id`. No match -> exit 0. (This is how a session knows it
-   is a team agent; no environment variable is needed.)
+1. Read the hook payload from stdin (`transcript_path`, `cwd`).
+2. Read `TEAM_NAME` from the environment (`team-start` stamps it onto the pane).
+   No `TEAM_NAME`, a malformed one, or no `.team/<TEAM_NAME>.json` -> exit 0.
+   This is how a session knows it is a team agent and which one.
 3. Extract the last assistant message from the transcript. Write it to
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,
    timestamp). Overwrite on every stop, so the file always holds the latest.
@@ -355,11 +360,11 @@ enabled, so it must be silent and cheap when it does not apply:
 5. Never block the stop; on any error exit 0 and append one line to
    `.team/hook.log`.
 
-Open point to verify on the first run: that `agent_session.value` from
-`herdr agent list` and Claude Code's `session_id` refer to the same
-identifier. If not, `team-start` passes `TEAM_NAME` through the pane's
-environment (`herdr pane run` with an `export` before `claude`) and the hook
-uses that instead. Record the answer in the README.
+Resolved: Herdr's `agent_session.value` and Claude Code's `session_id` are
+different identifiers, so a session-id match never fires. `team-start` stamps
+`TEAM_NAME` onto the pane environment (`--env` on a pane/tab it creates, or a
+`herdr pane run` export into a caller-provided `--pane`) and the hook identifies
+itself from that.
 
 ---
 
@@ -469,9 +474,10 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
    default otherwise, and runs `git m add` only when `stacked: true`.
 7. `team-status` joins the roster and flags idle agents without a fresh
    report.
-8. `stop-report.sh` exits 0 silently for a session with no `.team` match,
-   writes the report file for a match, and on every stop forwards the message's
-   `REPORT ` line (found anywhere) or a fallback nudge, never to itself.
+8. `stop-report.sh` exits 0 silently for a session with no `TEAM_NAME` or no
+   record, writes the report file when it identifies its agent, and on every
+   stop forwards the message's `REPORT ` line (found anywhere) or a fallback
+   nudge, never to itself.
 9. A hook error (unreadable transcript) exits 0 and logs one line.
 
 ---
@@ -514,8 +520,9 @@ then one slice) complete without a template edit.
 - The overlay test: run 2 with the ProcureAI overlay, then a dry `team-brief
   compose` in a repo with no `.claude/team/` at all; both must produce valid
   briefs.
-- Hook identity check: confirm the session-id match, or switch to the
-  environment fallback, and record which in the README.
+- Hook identity check: done. The session-id match never fires (Herdr and Claude
+  Code use different identifiers), so the hook identifies its agent from the
+  `TEAM_NAME` pane environment, recorded in the README.
 
 ## Decisions to confirm before building
 
@@ -523,7 +530,8 @@ then one slice) complete without a template edit.
    `orchestrate`, `crew`.
 2. Reviewer and Mechanic as briefs on existing roles in 1.0, own agent files
    later.
-3. Hook identity via session id match, environment variable as fallback.
+3. Hook identity via the `TEAM_NAME` pane environment (the session-id match was
+   the original plan but the two ids differ, so it never fires).
 4. Templates under `skills/` (readable from Cursor sessions, symlinkable)
    rather than a top-level `templates/`.
 5. MIT license, same as the siblings.
@@ -597,3 +605,13 @@ pane hygiene. Layout hygiene (empty-pane closing and the over-budget flag) runs
 on worker tabs only; the watcher skips the tab that holds its own pane. A pane
 opened there by hand is no longer closed, and the tab is no longer nagged as
 over budget. The worker-tab budget stays 6.
+
+The Stop hook now identifies its agent from the `TEAM_NAME` pane environment,
+not from a session-id match. On a real run the recorded `session` (Herdr's
+`agent_session.value`) never equalled Claude Code's `session_id`, so the match
+never fired: workers wrote their report line but the hook exited before writing
+the report file or pinging, and the orchestrator waited forever. `team-start`
+now stamps `TEAM_NAME=<name>` onto the agent's pane - with `--env` on a pane or
+tab it creates, or a `herdr pane run` export into a caller-provided `--pane` -
+and the hook reads it, loads `.team/<name>.json`, and pings as before. The
+record no longer stores `session`.

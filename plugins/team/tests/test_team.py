@@ -72,12 +72,12 @@ class Base(unittest.TestCase):
     def team_json(self, name):
         return json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", name + ".json")))
 
-    def write_record(self, name, role, topic="", brief="", session="abcdef12"):
+    def write_record(self, name, role, topic="", brief=""):
         d = os.path.join(self.proj, "scratchpad", ".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, name + ".json"),
                    json.dumps({"role": role, "topic": topic, "brief": brief, "pane": "w1:p2",
-                               "session": session, "started": "t"}))
+                               "started": "t"}))
 
 
 class TeamStart(Base):
@@ -110,7 +110,7 @@ class TeamStart(Base):
         rec = self.team_json("scout")
         self.assertEqual(rec["role"], "investigator")
         self.assertEqual(rec["pane"], "w1:p2")
-        self.assertEqual(rec["session"], "abcdef12")
+        self.assertNotIn("session", rec)
         out = json.loads(p.stdout)
         self.assertEqual(out["model"], "claude-opus-4-8")
 
@@ -268,6 +268,44 @@ class TeamStart(Base):
         splits = self.grid_split("grid5")
         self.assertTrue(any("pane split --pane w1:g4 --direction down --ratio 0.5" in c for c in splits), splits)
 
+    def test_direct_pane_exports_team_name(self):
+        # team-start did not create this pane, so it exports TEAM_NAME into the
+        # pane's shell before the agent starts, so the agent (and its Stop hook)
+        # inherits it and can identify itself.
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export TEAM_NAME=scout", self.herdr_calls())
+
+    def test_split_stamps_team_name_env(self):
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "down",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("pane split") and "--env TEAM_NAME=scout" in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_grid_split_stamps_team_name_env(self):
+        splits = self.grid_split("grid1")
+        self.assertTrue(any("--env TEAM_NAME=scout" in c for c in splits), splits)
+
+    def test_spilled_tab_stamps_team_name_env(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("tab create") and "--env TEAM_NAME=maker" in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_namespaced_name_exported_to_pane(self):
+        self.config(team_id="app-1", orch="app-1-orch")
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export TEAM_NAME=app-1-scout", self.herdr_calls())
+
     def test_into_tab_with_pane_is_bad_args(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")
         self.assertEqual(p.returncode, 2)
@@ -414,8 +452,8 @@ class TeamStatus(Base):
 class StopHook(Base):
     HOOK = os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")
 
-    def run_hook(self, payload):
-        env = self.env()
+    def run_hook(self, payload, **env_extra):
+        env = self.env(**env_extra)
         return subprocess.run(["bash", self.HOOK], input=json.dumps(payload),
                               capture_output=True, text=True, env=env, cwd=self.proj)
 
@@ -431,26 +469,65 @@ class StopHook(Base):
     def report_path(self, name, topic):
         return os.path.join(self.proj, "scratchpad", "reports", "%s-%s.md" % (name, topic))
 
-    def test_no_match_is_silent(self):
-        p = self.run_hook({"session_id": "zzzzzzzz9999", "transcript_path": "/nope",
-                           "cwd": self.proj})
+    def test_identifies_by_team_name_env_and_pings(self):
+        # The hook learns which agent it is from TEAM_NAME in its environment,
+        # not from the session id (herdr's agent_session and Claude Code's
+        # session_id are different identifiers, so a session match never fires).
+        # A second record is present to prove it picks the record by name.
+        self.write_record("scout", "investigator", topic="digest")
+        self.write_record("maker", "implementer", topic="build")
+        tr = self.transcript("REPORT scout digest: done, 2 files")
+
+        p = self.run_hook({"session_id": "no-such-session", "transcript_path": tr,
+                           "cwd": self.proj}, TEAM_NAME="scout")
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_no_team_name_is_silent(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+
+        p = self.run_hook({"session_id": "whatever", "transcript_path": tr, "cwd": self.proj})
+
         self.assertEqual(p.returncode, 0)
-        self.assertEqual(p.stdout, "")
-        self.assertEqual(p.stderr, "")
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+        self.assertFalse(os.path.exists(self.report_path("scout", "digest")))
+
+    def test_team_name_without_record_is_silent(self):
+        tr = self.transcript("REPORT ghost x: done")
+
+        p = self.run_hook({"session_id": "whatever", "transcript_path": tr, "cwd": self.proj},
+                          TEAM_NAME="ghost")
+
+        self.assertEqual(p.returncode, 0)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+
+    def test_invalid_team_name_is_silent(self):
+        # Guard against a hostile TEAM_NAME reaching the report path.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+
+        p = self.run_hook({"session_id": "whatever", "transcript_path": tr, "cwd": self.proj},
+                          TEAM_NAME="../evil")
+
+        self.assertEqual(p.returncode, 0)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
 
     def test_writes_report_for_match(self):
-        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
+        self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("earlier", "final answer")
-        p = self.run_hook({"session_id": "abcdef1299999", "transcript_path": tr, "cwd": self.proj})
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         body = read_text(self.report_path("scout", "digest"))
         self.assertIn("# Report: scout / digest", body)
         self.assertIn("final answer", body)
 
     def test_forwards_report_line(self):
-        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
+        self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("REPORT scout digest: done, 2 files")
-        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
                             for c in self.herdr_calls()))
@@ -460,9 +537,9 @@ class StopHook(Base):
         # meant the message never started with "REPORT ", so the ping was skipped
         # while the report file still landed. The hook must find the REPORT line
         # anywhere in the message, not only at offset zero.
-        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
+        self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("| status bar |\n\nREPORT scout digest: done, 2 files")
-        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
         self.assertTrue(any("REPORT scout digest: done, 2 files" in c for c in prompts), prompts)
@@ -471,32 +548,32 @@ class StopHook(Base):
     def test_fallback_ping_when_no_report_line(self):
         # A worker that stops without any REPORT line must still wake the
         # orchestrator, with a nudge that points at the report file on disk.
-        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
+        self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("just some final prose, no report line")
-        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest:")
                             for c in prompts), prompts)
         self.assertTrue(any("scratchpad/reports/scout-digest.md" in c for c in prompts), prompts)
 
-    def test_no_self_ping_when_session_is_orchestrator(self):
-        # Belt-and-suspenders: the orchestrator has no record today, but if one
-        # ever matched, the hook must not prompt the orchestrator to itself.
+    def test_no_self_ping_when_name_is_orchestrator(self):
+        # The orchestrator has no TEAM_NAME today, but if it ever ran the hook as
+        # a named agent, it must not prompt itself.
         d = os.path.join(self.proj, "scratchpad", ".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
-        self.write_record("app-1-orch", "investigator", topic="digest", session="abcdef12")
+        self.write_record("app-1-orch", "investigator", topic="digest")
         tr = self.transcript("REPORT app-1-orch digest: done")
-        p = self.run_hook({"session_id": "abcdef1200000", "transcript_path": tr, "cwd": self.proj})
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="app-1-orch")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
 
     def test_unreadable_transcript_logs_and_exits_zero(self):
-        self.write_record("scout", "investigator", topic="digest", session="abcdef12")
-        p = self.run_hook({"session_id": "abcdef1211111", "transcript_path": "/does/not/exist",
-                           "cwd": self.proj})
+        self.write_record("scout", "investigator", topic="digest")
+        p = self.run_hook({"transcript_path": "/does/not/exist", "cwd": self.proj},
+                          TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         log = os.path.join(self.proj, "scratchpad", ".team", "hook.log")
         self.assertTrue(os.path.exists(log))

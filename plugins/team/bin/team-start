@@ -22,7 +22,7 @@ case "$role" in
   *) echo "unknown role: $role" >&2; exit 2 ;;
 esac
 
-pane=""; split_pane=""; split_dir=""; into_tab=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""; spilled_tab=""
+pane=""; split_pane=""; split_dir=""; into_tab=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""; spilled_tab=""; pane_created=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane)     pane="${2:?}"; shift 2 ;;
@@ -80,9 +80,10 @@ fi
 if [ -n "$into_tab" ]; then
   count="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(sum(1 for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))")"
   if [ "$count" -ge 6 ]; then
-    out=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?}" --cwd "$cwd" --no-focus) || exit 4
+    out=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?}" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus) || exit 4
     spilled_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
     pane=$(echo "$out" | json_get "d['result']['root_pane']['pane_id']")
+    pane_created=1
     # Register the new tab only after its agent is live (see below). A tab that
     # is empty while registered would let the watcher close its root pane.
   else
@@ -121,14 +122,23 @@ PY
 )" || exit 4
     IFS=$'\t' read -r target_pane grid_dir grid_ratio <<<"$sel"
     [ -n "$target_pane" ] || { echo "could not pick a grid target in $into_tab" >&2; exit 4; }
-    out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" --no-focus) || exit 4
+    out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus) || exit 4
     pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
+    pane_created=1
   fi
 fi
 
 if [ -z "$pane" ]; then
-  out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" --no-focus) || exit 4
+  out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus) || exit 4
   pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
+  pane_created=1
+fi
+
+# A caller-provided pane was not created by us, so it carries no TEAM_NAME.
+# Export it into the pane's shell before the agent starts, so the agent and its
+# Stop hook inherit it. The pane feeds one PTY in order, so this runs first.
+if [ -z "$pane_created" ]; then
+  herdr pane run "$pane" "export TEAM_NAME=$name" >/dev/null || exit 4
 fi
 
 start() {
@@ -183,8 +193,8 @@ json.dump(tabs, open(path, "w"))
 PY
 fi
 
-printf '{"role":"%s","topic":"","brief":"","pane":"%s","session":"%s","started":"%s"}\n' \
-  "$role" "$pane" "$session" "$started" >"$teamdir/$name.json"
+printf '{"role":"%s","topic":"","brief":"","pane":"%s","started":"%s"}\n' \
+  "$role" "$pane" "$started" >"$teamdir/$name.json"
 
 printf '{"name":"%s","role":"%s","pane":"%s","session":"%s","model":"%s","mode":"%s"}\n' \
   "$name" "$role" "$pane" "$session" "$model" "$mode"

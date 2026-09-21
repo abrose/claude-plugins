@@ -8,7 +8,7 @@ set -uo pipefail
 payload="$(cat)"
 
 PAYLOAD="$payload" python3 - <<'PY' || true
-import os, json, glob, subprocess, datetime, sys, re
+import os, json, subprocess, datetime, sys, re
 
 def log(msg):
     try:
@@ -22,27 +22,22 @@ def log(msg):
 try:
     p = json.loads(os.environ["PAYLOAD"])
     cwd = p.get("cwd", ".")
-    session_id = p.get("session_id", "")
     transcript = p.get("transcript_path", "")
     scratch = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad"))
     teamdir = os.path.join(scratch, ".team")
-    if not (session_id and os.path.isdir(teamdir)):
-        sys.exit(0)
 
-    match = None
-    for f in glob.glob(os.path.join(teamdir, "*.json")):
-        if os.path.basename(f) in ("config.json", "roster.md"):
-            continue
-        try:
-            rec = json.load(open(f))
-        except Exception:
-            continue
-        if rec.get("session") and rec["session"] == session_id[:8]:
-            match = (os.path.splitext(os.path.basename(f))[0], rec)
-            break
-    if not match:
+    # A team agent knows its own name from TEAM_NAME, stamped into its pane
+    # environment by team-start. No name -> this is not a team agent.
+    name = os.environ.get("TEAM_NAME", "")
+    if not re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
         sys.exit(0)
-    name, rec = match
+    recf = os.path.join(teamdir, name + ".json")
+    if not os.path.isfile(recf):
+        sys.exit(0)
+    try:
+        rec = json.load(open(recf))
+    except Exception:
+        sys.exit(0)
 
     # Last assistant message from the JSONL transcript.
     message = ""

@@ -133,12 +133,16 @@ All under `$TEAM_SCRATCH` (default `scratchpad/`, git-ignored):
 
 ## Hook identity
 
-The Stop hook matches a session to a team agent by comparing the payload's
-`session_id` (first 8 characters) against the `session` field that `team-start`
-records. This assumes Herdr's `agent_session.value` and Claude Code's
-`session_id` are the same identifier. Verify this on the first real run. If they
-differ, pass the agent name through the pane environment at start and match on
-that instead.
+The Stop hook learns which agent it is from `TEAM_NAME` in its own environment.
+`team-start` stamps `TEAM_NAME=<name>` onto the agent's pane at start: with
+`--env` when it creates the pane (a split or a spilled tab), or with a
+`herdr pane run` export into a caller-provided `--pane`. The hook reads
+`TEAM_NAME`, loads `.team/<name>.json`, and exits silently when the variable is
+absent (any non-team session) or names no record.
+
+Herdr's `agent_session.value` and Claude Code's `session_id` are **not** the
+same identifier, so a session-id match never fires; the pane environment is the
+reliable channel.
 
 ## Tests
 
