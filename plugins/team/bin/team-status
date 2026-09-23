@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Merge `herdr agent list` with $TEAM_SCRATCH/.team/*.json into a roster.
+# Merge this team's agents from `herdr agent list` with $TEAM_SCRATCH/.team/*.json
+# into a roster. The team is the role agents plus the orchestrator.
 # Exit codes: 0 ok, 2 bad arguments, 4 herdr error.
 set -euo pipefail
 
@@ -16,65 +17,57 @@ while [ $# -gt 0 ]; do
 done
 
 list=$(herdr agent list) || exit 4
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 
-# Pass 1: emit one TSV row per agent with a needread flag.
-rows=$(SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" python3 - <<'PY'
-import os, json, time
+mkdir -p "$teamdir"
+PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" AS_JSON="$as_json" READ_IDLE="$read_idle" python3 - <<'PY'
+import os, json, time, subprocess
+from teamlib import agent_state, records, team_agents
 scratch, teamdir = os.environ["SCRATCH"], os.environ["TEAMDIR"]
 now = int(os.environ.get("TEAM_NOW", int(time.time())))
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
-for a in agents:
-    name = a.get("name", "")
-    pane = a.get("pane_id", "")
-    session = a.get("agent_session", {}).get("value", "")[:8]
-    state = a.get("state", "unknown")
-    role = topic = ""
-    tf = os.path.join(teamdir, name + ".json")
-    if os.path.exists(tf):
-        rec = json.load(open(tf))
-        role, topic = rec.get("role", ""), rec.get("topic", "")
+recs = records(teamdir)
+
+def report_age(name, topic):
     report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
     brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
-    age, r_mtime = "-", None
-    if os.path.exists(report):
-        r_mtime = os.path.getmtime(report)
-        s = int(now - r_mtime)
-        age = "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600) if s < 86400 else "%dd" % (s // 86400)
-    stale = (r_mtime is None) or (os.path.exists(brief) and r_mtime < os.path.getmtime(brief))
-    needread = 1 if (state in ("idle", "done") and stale) else 0
-    print("\t".join([name, pane, session, state, role, topic, age, str(needread)]))
-PY
-)
+    if not os.path.exists(report):
+        return "-", True
+    r_mtime = os.path.getmtime(report)
+    s = int(now - r_mtime)
+    age = "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600) if s < 86400 else "%dd" % (s // 86400)
+    stale = os.path.exists(brief) and r_mtime < os.path.getmtime(brief)
+    return age, stale
 
-final=""
-while IFS=$'\t' read -r name pane session state role topic age needread; do
-  [ -n "$name" ] || continue
-  note=""
-  if [ -n "$read_idle" ] && [ "$needread" = "1" ]; then
-    note=$(herdr agent read "$name" --source recent-unwrapped --lines 8 | awk 'NF{l=$0} END{print l}')
-  fi
-  final+="$name	$pane	$session	$state	$role	$topic	$age	$note"$'\n'
-done <<<"$rows"
+def last_screen_line(name):
+    out = subprocess.run(["herdr", "agent", "read", name, "--source", "recent-unwrapped", "--lines", "8"],
+                         capture_output=True, text=True).stdout
+    lines = [l for l in out.splitlines() if l.strip()]
+    return lines[-1] if lines else ""
 
-# Pass 2: render text (always to roster.md) and stdout (text or json).
-mkdir -p "$teamdir"
-AS_JSON="$as_json" ROSTER="$teamdir/roster.md" FINAL="$final" python3 - <<'PY'
-import os, json
-lines = [l for l in os.environ["FINAL"].splitlines() if l.strip()]
-recs = []
-text = []
-for l in lines:
-    p = (l.split("\t") + [""] * 8)[:8]
-    name, pane, session, state, role, topic, age, note = p
-    recs.append({"name": name, "pane": pane, "session": session, "state": state,
-                 "role": role, "topic": topic, "report_age": age})
-    row = "%s (%s, %s) %s %s %s %s" % (name, pane, session, state, role, topic or "-", age)
-    if note:
-        row += "  | " + note
+out, text = [], []
+for a in team_agents(agents, teamdir):
+    name = a["name"]
+    state = agent_state(a)
+    rec = recs.get(name, {})
+    role, topic = rec.get("role", ""), rec.get("topic", "")
+    age, stale = report_age(name, topic)
+    rec_out = {"name": name, "pane": a.get("pane_id", ""),
+               "session": a.get("agent_session", {}).get("value", "")[:8],
+               "state": state, "role": role, "topic": topic, "report_age": age}
+    out.append(rec_out)
+    row = "%s (%s, %s) %s %s %s %s" % (name, rec_out["pane"], rec_out["session"], state,
+                                       role or "-", topic or "-", age)
+    if os.environ.get("READ_IDLE") and state in ("idle", "done") and stale:
+        note = last_screen_line(name)
+        if note:
+            row += "  | " + note
     text.append(row)
-open(os.environ["ROSTER"], "w").write("\n".join(text) + ("\n" if text else ""))
+
+with open(os.path.join(teamdir, "roster.md"), "w") as fh:
+    fh.write("\n".join(text) + ("\n" if text else ""))
 if os.environ.get("AS_JSON"):
-    print(json.dumps(recs))
+    print(json.dumps(out))
 else:
     print("\n".join(text))
 PY

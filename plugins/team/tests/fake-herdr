@@ -75,7 +75,7 @@ case "$group $sub" in
     if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
       emit '{"result":{"status":"agent_not_ready"}}'
     else
-      emit '{"result":{"agent":{"name":"a","pane_id":"w1:p9","state":"idle","agent_session":{"value":"abcdef1234567890"}}}}'
+      emit '{"result":{"agent":{"name":"a","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef1234567890"}}}}'
     fi ;;
   "agent read")
     if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
@@ -84,48 +84,55 @@ case "$group $sub" in
       emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
     fi ;;
   "agent get")
-    emit '{"result":{"agent":{"state":"idle"}}}' ;;
+    emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "pane get")
     emit '{"result":{"pane":{"pane_id":"w1:p1","tab_id":"w1:t1"}}}' ;;
   "agent send-keys")
     emit '{"result":{"ok":true}}' ;;
   "agent wait")
-    emit '{"result":{"state":"idle"}}' ;;
+    emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "agent prompt")
     case "$scenario" in
       prompt_stalled) fail '{"error":{"code":"agent_prompt_stalled"}}' ;;
       prompt_blocked) fail '{"error":{"code":"agent_blocked","dialog":"Allow write? [y/n]"}}' ;;
-      *) emit '{"result":{"state":"working"}}' ;;
+      *) emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
     esac ;;
   "agent list")
     case "$scenario" in
       watch_change)
         if [ "$same_before" -eq 0 ]; then
-          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"working","agent_session":{"value":"aaaa1111"}}]}}'
+          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"aaaa1111"}}]}}'
         else
-          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"blocked","agent_session":{"value":"aaaa1111"}}]}}'
+          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"blocked","agent_session":{"value":"aaaa1111"}}]}}'
         fi ;;
       watch_two_teams)
         emit '{"result":{"agents":[
-          {"name":"app-1-scout","pane_id":"w1:p2","state":"blocked","agent_session":{"value":"aaaa1111"}},
-          {"name":"app-2-maker","pane_id":"w2:p2","state":"working","agent_session":{"value":"bbbb2222"}}
+          {"name":"app-1-scout","pane_id":"w1:p2","agent_status":"blocked","agent_session":{"value":"aaaa1111"}},
+          {"name":"app-2-maker","pane_id":"w2:p2","agent_status":"working","agent_session":{"value":"bbbb2222"}}
         ]}}' ;;
       watch_idle)
-        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"aaaa1111"}}]}}' ;;
+        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"aaaa1111"}}]}}' ;;
       bad_list)
         emit 'not json' ;;
       status_mixed)
         emit '{"result":{"agents":[
-          {"name":"scout","pane_id":"w1:p2","state":"idle","agent_session":{"value":"11111111aaaa"}},
-          {"name":"maker","pane_id":"w1:p3","state":"working","agent_session":{"value":"22222222bbbb"}}
+          {"name":"scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}},
+          {"name":"maker","pane_id":"w1:p3","agent_status":"working","agent_session":{"value":"22222222bbbb"}}
+        ]}}' ;;
+      status_two_teams)
+        emit '{"result":{"agents":[
+          {"name":"bug-3-orch","pane_id":"w1:p7","agent_status":"done","agent_session":{"value":"99999999cccc"}},
+          {"name":"app-1-orch","pane_id":"w2:p1","agent_status":"working","agent_session":{"value":"oooo0000dddd"}},
+          {"name":"app-1-scout","pane_id":"w2:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}},
+          {"pane_id":"w2:pB","agent_status":"idle","agent_session":{"value":"c23a1be5eeee"}}
         ]}}' ;;
       names_app1_taken)
         emit '{"result":{"agents":[
-          {"name":"app-1-orch","pane_id":"w1:p1","state":"idle","agent_session":{"value":"oooo0000"}},
-          {"name":"app-1-scout","pane_id":"w1:p2","state":"working","agent_session":{"value":"ssss1111"}}
+          {"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}},
+          {"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}
         ]}}' ;;
       name_scout_taken)
-        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","state":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
+        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
       *)
         emit '{"result":{"agents":[]}}' ;;
     esac ;;

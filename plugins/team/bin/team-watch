@@ -8,6 +8,7 @@ set -euo pipefail
 scratch="${TEAM_SCRATCH:-scratchpad}"
 teamdir="$scratch/.team"
 interval=5; once=""; spawn=""; own_pane_arg=""
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) once=1; shift ;;
@@ -60,16 +61,12 @@ pass() {
   orchestrator="$(orch)"
   # Compute the WATCH lines to send; the python prints one shell-safe line per push.
   local lines
-  lines="$(SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" OWN_PANE="$op" python3 - <<'PY'
-import os, json, glob, time
+  lines="$(PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" OWN_PANE="$op" python3 - <<'PY'
+import os, json
+from teamlib import agent_state, role_agents
 teamdir = os.environ["TEAMDIR"]
-records = {}
-for f in glob.glob(os.path.join(teamdir, "*.json")):
-    if os.path.basename(f) in ("config.json", "watch-state.json", "tabs.json", "layout-flags.json"):
-        continue
-    records[os.path.splitext(os.path.basename(f))[0]] = True
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
-cur = {a["name"]: a.get("state", "unknown") for a in agents if a.get("name") in records}
+cur = {a["name"]: agent_state(a) for a in role_agents(agents, teamdir)}
 sp = os.path.join(teamdir, "watch-state.json")
 state_prev = json.load(open(sp)) if os.path.exists(sp) else {}
 prev = state_prev.get("agents", {})
@@ -128,8 +125,9 @@ PY
   local panes
   panes="$(herdr pane list)" || return 0
   local hy
-  hy="$(TEAMDIR="$teamdir" PANES="$panes" OWN_PANE="$op" python3 - <<'PY'
-import os, json, glob
+  hy="$(PYTHONPATH="$lib" TEAMDIR="$teamdir" PANES="$panes" OWN_PANE="$op" python3 - <<'PY'
+import os, json
+from teamlib import records
 teamdir = os.environ["TEAMDIR"]
 tabs_path = os.path.join(teamdir, "tabs.json")
 team_tabs = set(json.load(open(tabs_path))) if os.path.exists(tabs_path) else set()
@@ -139,16 +137,7 @@ def is_pending(pane_id):
 # Panes whose agent has a brief on record. An agent that never got a brief is
 # NEW, not a release candidate, even when it looks idle in its freshly spawned
 # pane. "consider release" fires only for a tab holding a briefed pane.
-briefed_panes = set()
-for f in glob.glob(os.path.join(teamdir, "*.json")):
-    if os.path.basename(f) in ("config.json", "watch-state.json", "tabs.json", "layout-flags.json"):
-        continue
-    try:
-        rec = json.load(open(f))
-    except Exception:
-        continue
-    if rec.get("brief"):
-        briefed_panes.add(rec.get("pane"))
+briefed_panes = {rec.get("pane") for rec in records(teamdir).values() if rec.get("brief")}
 sp = os.path.join(teamdir, "watch-state.json")
 own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None)
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])

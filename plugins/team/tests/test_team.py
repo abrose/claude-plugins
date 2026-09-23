@@ -433,11 +433,11 @@ class TeamBriefSend(Base):
         os.makedirs(os.path.join(self.proj, "scratchpad"), exist_ok=True)
         write_text(os.path.join(self.proj, "scratchpad", "brief-%s-%s.md" % (name, topic)), "x")
 
-    def test_working_exits_zero_and_records(self):
+    def test_settled_state_exits_zero_and_records(self):
         self.prep()
         p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.strip(), "working")
+        self.assertEqual(p.stdout.strip(), "idle")
         rec = self.team_json("scout")
         self.assertEqual(rec["topic"], "digest")
         self.assertTrue(rec["brief"].endswith("brief-scout-digest.md"))
@@ -515,6 +515,39 @@ class TeamStatus(Base):
         self.assertFalse(any(c.startswith("agent read maker") for c in calls))
         roster = os.path.join(self.proj, "scratchpad", ".team", "roster.md")
         self.assertTrue(os.path.exists(roster))
+
+    def cfg(self, orch="app-1-orch"):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": orch}))
+
+    def test_roster_lists_only_team_agents_and_orchestrator(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), [
+            "app-1-orch (w2:p1, oooo0000) working - - -",
+            "app-1-scout (w2:p2, 11111111) idle investigator digest -",
+        ])
+
+    def test_json_reports_herdr_agent_status(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        p = self.run_script("team-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        states = {r["name"]: r["state"] for r in json.loads(p.stdout)}
+        self.assertEqual(states, {"app-1-orch": "working", "app-1-scout": "idle"})
+
+    def test_empty_record_fields_keep_columns(self):
+        self.cfg()
+        self.write_record("app-1-scout", "")
+        p = self.run_script("team-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        scout = [r for r in json.loads(p.stdout) if r["name"] == "app-1-scout"][0]
+        self.assertEqual(scout, {"name": "app-1-scout", "pane": "w2:p2", "session": "11111111",
+                                 "state": "idle", "role": "", "topic": "", "report_age": "-"})
 
 
 class StopHook(Base):

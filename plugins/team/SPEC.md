@@ -472,8 +472,9 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
    gate in order; substitutes variables; refuses to overwrite.
 4. `team-brief compose` with an empty overlay still produces a valid brief
    (the project-agnostic guarantee).
-5. `team-brief send` maps `working`, `agent_prompt_stalled`, `agent_blocked`
-   to exit 0, 5, 6 and never re-sends on a stall.
+5. `team-brief send` maps a settled state (printed from
+   `result.agent.agent_status`), `agent_prompt_stalled`, `agent_blocked` to
+   exit 0, 5, 6 and never re-sends on a stall.
 6. `team-slice` uses `worktree_cmd` from `project.yaml` when present, the git
    default otherwise, and runs `git m add` only when `stacked: true`.
 7. `team-status` joins the roster and flags idle agents without a fresh
