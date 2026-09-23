@@ -114,14 +114,26 @@ class TeamStart(Base):
         out = json.loads(p.stdout)
         self.assertEqual(out["model"], "claude-opus-4-8")
 
-    def test_answers_first_run_dialog_once(self):
+    def test_startup_dialog_is_handed_to_the_human(self):
+        # A trust dialog is a security decision: team-start never answers it.
+        # It names the pane and shows the dialog, and writes no record.
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, scenario="first_run_dialog",
                             env_extra=self.bar_env("Opus 4.8"))
-        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("scout is at a startup dialog in pane w1:p2", p.stderr)
+        self.assertIn("Yes, I trust this folder", p.stderr)
         calls = self.herdr_calls()
-        self.assertTrue(any(c.startswith("agent send-keys scout enter") for c in calls))
-        self.assertEqual(sum(c.startswith("agent start ") for c in calls), 2)
+        self.assertFalse(any(c.startswith("agent send-keys") for c in calls), calls)
+        self.assertEqual(sum(c.startswith("agent start ") for c in calls), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "scratchpad", ".team", "scout.json")))
+
+    def test_start_error_is_reported_as_herdr_error(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="start_fails",
+                            env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("agent_pane_not_found", p.stderr)
 
     def test_writes_record_when_bar_shows_basename_only(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",

@@ -73,13 +73,17 @@ case "$group $sub" in
     emit '{"result":{"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}' ;;
   "agent start")
     if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
-      emit '{"result":{"status":"agent_not_ready"}}'
+      fail '{"error":{"code":"agent_not_ready","message":"agent is blocked during startup and is not ready for prompts"}}'
+    elif [ "$scenario" = "start_fails" ]; then
+      fail '{"error":{"code":"agent_pane_not_found","message":"agent target pane w1:p2 not found"}}'
     else
       emit '{"result":{"agent":{"name":"a","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef1234567890"}}}}'
     fi ;;
   "agent read")
     if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
-      emit 'Do you trust the files in this workspace? An MCP server wants to start. [y/n]'
+      emit 'Quick safety check: Is this a project you created or one you trust?
+ ❯ No, exit
+   Yes, I trust this folder'
     else
       emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
     fi ;;

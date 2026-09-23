@@ -247,10 +247,12 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    `herdr pane run <pane> "export TEAM_NAME=<name> TEAM_SCRATCH=<abs>"` into a
    caller-provided `--pane`.
 3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode>`.
-4. Pre-flight, in order: if start returns `agent_not_ready`, `agent read
-   --source detection`; if the screen is a first-run dialog (MCP server,
-   workspace trust), answer the conservative default with `agent send-keys
-   <name> enter` and retry once. Then verify the status bar once: model, mode,
+4. Pre-flight, in order: if start fails with `agent_not_ready` (an error on
+   stderr, exit 1), the agent is at a startup dialog (folder trust, MCP
+   servers). Never answer it: it is a security decision for the human. Abort
+   with exit 3, the pane id and the `agent read --source detection` screen
+   text; the human answers it, closes that pane and re-runs `team-start`. Any
+   other start error -> exit 4. Then verify the status bar once: model, mode,
    cwd. Abort with exit 3 and the screen text if any of the three is wrong.
 5. Write `.team/<name>.json` with role, pane, started.
 6. Print one JSON line: `{"name","role","pane","session","model","mode"}`, where
@@ -470,8 +472,8 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
 
 1. `team-start` builds the exact `herdr agent start` argument list for each
    role (model file, default effort, mode) and writes `.team/<name>.json`.
-2. `team-start` answers a first-run dialog once and aborts with exit 3 on a
-   wrong model in the status bar.
+2. `team-start` hands a startup dialog to the human (exit 3, no keys sent)
+   and aborts with exit 3 on a wrong model in the status bar.
 3. `team-brief compose` concatenates skeleton, overlay role fragment, env and
    gate in order; substitutes variables; refuses to overwrite.
 4. `team-brief compose` with an empty overlay still produces a valid brief

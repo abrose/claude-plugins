@@ -180,19 +180,21 @@ pending_dir="${TEAM_SCRATCH:-scratchpad}/.team/pending"
 mkdir -p "$pending_dir"
 pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
 : > "$pending_file"
-trap 'rm -f "$pending_file"' EXIT
 
-out=$(start) || exit 4
-if [ "$(echo "$out" | json_get "d.get('result',{}).get('status','')")" = "agent_not_ready" ]; then
-  snap=$(herdr agent read "$name" --source detection --lines 20) || exit 4
-  if echo "$snap" | grep -qiE 'trust|mcp server|\[y/n\]'; then
-    herdr agent send-keys "$name" enter >/dev/null || exit 4
-  fi
-  out=$(start) || exit 4
-  if [ "$(echo "$out" | json_get "d.get('result',{}).get('status','')")" = "agent_not_ready" ]; then
-    echo "agent not ready after answering the startup dialog" >&2
+# A startup dialog (folder trust, MCP servers) is a security decision for the
+# human, so hand it over instead of answering it. Answering it trusts the
+# folder; a re-run then needs a fresh pane, since this one holds the agent.
+start_err="$(mktemp)"
+trap 'rm -f "$pending_file" "$start_err"' EXIT
+if ! out=$(start 2>"$start_err"); then
+  code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$start_err" 2>/dev/null || true)"
+  if [ "$code" = "agent_not_ready" ]; then
+    echo "$name is at a startup dialog in pane $pane. Answer it there, close that pane, then re-run team-start:" >&2
+    herdr agent read "$name" --source detection --lines 20 >&2 || true
     exit 3
   fi
+  cat "$start_err" >&2
+  exit 4
 fi
 
 bar=$(herdr agent read "$name" --source detection --lines 20) || exit 4
