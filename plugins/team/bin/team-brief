@@ -143,7 +143,7 @@ PY
   err="$(mktemp)"
   trap 'rm -f "$err"' EXIT
   if out=$(herdr agent prompt "$name" "$prompt" --wait 2>"$err"); then
-    echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['agent']['agent_status'])"
+    echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result',{}).get('agent',{}).get('agent_status','unknown'))"
     exit 0
   fi
   code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$err" 2>/dev/null || true)"

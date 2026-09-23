@@ -103,7 +103,9 @@ can see it working. It polls
   own pane);
 - flags a tab that is over its pane budget, and a worker tab whose agents are
   all idle or done, and at least one was briefed, as a release candidate. A
-  freshly spawned, un-briefed agent looks idle but is not flagged.
+  freshly spawned, un-briefed agent looks idle but is not flagged. A tab where
+  a briefed agent has no fresh report is not flagged either: the
+  `idle, no report` line covers it, and a release would lose the unread report.
 
 `/team:status` surfaces the latest `WATCH` lines; `/team:release all` stops
 the watcher and removes its state files.
@@ -134,11 +136,13 @@ All under `$TEAM_SCRATCH` (default `scratchpad/`, git-ignored):
 ## Hook identity
 
 The Stop hook learns which agent it is from `TEAM_NAME` in its own environment.
-`team-start` stamps `TEAM_NAME=<name>` onto the agent's pane at start: with
-`--env` when it creates the pane (a split, a spilled tab, or `--new-tab`), or with a
-`herdr pane run` export into a caller-provided `--pane`. The hook reads
-`TEAM_NAME`, loads `.team/<name>.json`, and exits silently when the variable is
-absent (any non-team session) or names no record.
+`team-start` stamps `TEAM_NAME=<name>` and an absolute `TEAM_SCRATCH` onto the
+agent's pane at start: with `--env` when it creates the pane (a split, a spilled
+tab, or `--new-tab`), or with a `herdr pane run` export into a caller-provided
+`--pane`. The hook reads `TEAM_NAME`, loads `$TEAM_SCRATCH/.team/<name>.json`,
+and exits silently when the variable is absent (any non-team session) or names
+no record. `TEAM_SCRATCH` is absolute so the hook finds the team dir after the
+agent changes its cwd (into `scratchpad/`, or a worktree).
 
 Herdr's `agent_session.value` and Claude Code's `session_id` are **not** the
 same identifier, so a session-id match never fires; the pane environment is the

@@ -240,10 +240,12 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    `pane_id` from the JSON. `--new-tab` creates a tab and takes its root pane.
    `--into-tab` fills a tab's lone bare shell pane instead of splitting it. A
    created tab goes into the caller's live workspace (`herdr pane current
-   --current`), never the spawn-time `$HERDR_WORKSPACE_ID`. Stamp `TEAM_NAME=<name>` onto the pane so the agent's Stop hook can
-   identify itself: `--env` on a pane/tab this step creates, or a
-   `herdr pane run <pane> "export TEAM_NAME=<name>"` into a caller-provided
-   `--pane`.
+   --current`), never the spawn-time `$HERDR_WORKSPACE_ID`. Stamp `TEAM_NAME=<name>`
+   and the absolute `TEAM_SCRATCH` onto the pane so the agent's Stop hook can
+   identify itself and find the team dir from any cwd: `--env` on a pane/tab
+   this step creates, or a
+   `herdr pane run <pane> "export TEAM_NAME=<name> TEAM_SCRATCH=<abs>"` into a
+   caller-provided `--pane`.
 3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode>`.
 4. Pre-flight, in order: if start returns `agent_not_ready`, `agent read
    --source detection`; if the screen is a first-run dialog (MCP server,
@@ -348,8 +350,10 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 enabled, so it must be silent and cheap when it does not apply:
 
 1. Read the hook payload from stdin (`transcript_path`, `cwd`).
-2. Read `TEAM_NAME` from the environment (`team-start` stamps it onto the pane).
-   No `TEAM_NAME`, a malformed one, or no `.team/<TEAM_NAME>.json` -> exit 0.
+2. Read `TEAM_NAME` and `TEAM_SCRATCH` from the environment (`team-start`
+   stamps both onto the pane; `TEAM_SCRATCH` is absolute, so the agent's cwd
+   does not matter). No `TEAM_NAME`, a malformed one, or no
+   `$TEAM_SCRATCH/.team/<TEAM_NAME>.json` -> exit 0.
    This is how a session knows it is a team agent and which one.
 3. Extract the last assistant message from the transcript. Write it to
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,

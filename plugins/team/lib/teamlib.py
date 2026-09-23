@@ -27,6 +27,16 @@ def records(teamdir):
     return out
 
 
+def fresh_report(scratch, name, rec):
+    """True when the agent's report exists and is newer than its brief."""
+    topic = rec.get("topic", "")
+    report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
+    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
+    if not os.path.exists(report):
+        return False
+    return not (os.path.exists(brief) and os.path.getmtime(report) < os.path.getmtime(brief))
+
+
 def orchestrator(teamdir):
     try:
         with open(os.path.join(teamdir, "config.json")) as fh:

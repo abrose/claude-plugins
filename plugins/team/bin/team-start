@@ -82,6 +82,11 @@ sys.exit(0 if any(a.get('name') == os.environ['NAME'] for a in d.get('result', {
   exit 3
 fi
 
+# The agent and its Stop hook identify themselves from this env. TEAM_SCRATCH is
+# absolute so the hook finds the team dir wherever the agent moves its cwd.
+scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad}")"
+team_env=(--env "TEAM_NAME=$name" --env "TEAM_SCRATCH=$scratch_abs")
+
 # Create a tab in the caller's live workspace and take its root pane. The pane
 # env's HERDR_WORKSPACE_ID is a spawn-time snapshot and goes stale after a pane
 # move; herdr resolves the calling pane live. The tab is registered only after
@@ -90,7 +95,7 @@ fi
 create_tab() {
   local ws out
   ws=$(herdr pane current --current | json_get "d['result']['pane']['workspace_id']") || exit 4
-  local -a args=(--workspace "$ws" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus)
+  local -a args=(--workspace "$ws" --cwd "$cwd" "${team_env[@]}" --no-focus)
   [ -z "$tab_label" ] || args+=(--label "$tab_label")
   out=$(herdr tab create "${args[@]}") || exit 4
   created_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
@@ -147,23 +152,23 @@ PY
 )" || exit 4
     IFS=$'\t' read -r target_pane grid_dir grid_ratio <<<"$sel"
     [ -n "$target_pane" ] || { echo "could not pick a grid target in $into_tab" >&2; exit 4; }
-    out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus) || exit 4
+    out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" "${team_env[@]}" --no-focus) || exit 4
     pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
     pane_created=1
   fi
 fi
 
 if [ -z "$pane" ]; then
-  out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus) || exit 4
+  out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" "${team_env[@]}" --no-focus) || exit 4
   pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
   pane_created=1
 fi
 
-# A caller-provided pane was not created by us, so it carries no TEAM_NAME.
+# A caller-provided pane was not created by us, so it carries no team env.
 # Export it into the pane's shell before the agent starts, so the agent and its
 # Stop hook inherit it. The pane feeds one PTY in order, so this runs first.
 if [ -z "$pane_created" ]; then
-  herdr pane run "$pane" "export TEAM_NAME=$name" >/dev/null || exit 4
+  herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
 fi
 
 start() {

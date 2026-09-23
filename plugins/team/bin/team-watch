@@ -63,7 +63,7 @@ pass() {
   local lines
   lines="$(PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" OWN_PANE="$op" python3 - <<'PY'
 import os, json
-from teamlib import agent_state, role_agents
+from teamlib import agent_state, fresh_report, records, role_agents
 teamdir = os.environ["TEAMDIR"]
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
 cur = {a["name"]: agent_state(a) for a in role_agents(agents, teamdir)}
@@ -74,20 +74,7 @@ flag_prev = state_prev.get("_flagged", {})
 own_pane = os.environ.get("OWN_PANE") or state_prev.get("own_pane")
 
 scratch = os.environ["SCRATCH"]
-def fresh_report(name):
-    rec_path = os.path.join(teamdir, name + ".json")
-    try:
-        rec = json.load(open(rec_path))
-    except Exception:
-        return False
-    topic = rec.get("topic", "")
-    report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
-    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
-    if not os.path.exists(report):
-        return False
-    if os.path.exists(brief) and os.path.getmtime(report) < os.path.getmtime(brief):
-        return False
-    return True
+recs = records(teamdir)
 
 out = []
 flagged = {}
@@ -98,7 +85,7 @@ for name, state in cur.items():
             out.append(("blocked", name, "%s: %s -> %s" % (name, old, state)))
         else:
             out.append(("change", name, "%s: %s -> %s" % (name, old, state)))
-    if state in ("idle", "done") and not fresh_report(name):
+    if state in ("idle", "done") and not fresh_report(scratch, name, recs.get(name, {})):
         if not flag_prev.get(name):
             out.append(("noreport", name, "%s: idle, no report" % name))
         flagged[name] = True
@@ -125,9 +112,9 @@ PY
   local panes
   panes="$(herdr pane list)" || return 0
   local hy
-  hy="$(PYTHONPATH="$lib" TEAMDIR="$teamdir" PANES="$panes" OWN_PANE="$op" python3 - <<'PY'
+  hy="$(PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" PANES="$panes" OWN_PANE="$op" python3 - <<'PY'
 import os, json
-from teamlib import records
+from teamlib import fresh_report, records
 teamdir = os.environ["TEAMDIR"]
 tabs_path = os.path.join(teamdir, "tabs.json")
 team_tabs = set(json.load(open(tabs_path))) if os.path.exists(tabs_path) else set()
@@ -136,8 +123,11 @@ def is_pending(pane_id):
     return os.path.exists(os.path.join(pending_dir, pane_id.replace(":", "_").replace("/", "_")))
 # Panes whose agent has a brief on record. An agent that never got a brief is
 # NEW, not a release candidate, even when it looks idle in its freshly spawned
-# pane. "consider release" fires only for a tab holding a briefed pane.
-briefed_panes = {rec.get("pane") for rec in records(teamdir).values() if rec.get("brief")}
+# pane. "consider release" fires only for a tab holding a briefed pane, and
+# never while a briefed agent there has no fresh report: releasing it would
+# lose a report nobody read.
+scratch = os.environ["SCRATCH"]
+briefed = {rec.get("pane"): (name, rec) for name, rec in records(teamdir).items() if rec.get("brief")}
 sp = os.path.join(teamdir, "watch-state.json")
 own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None)
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
@@ -176,7 +166,8 @@ for tab, plist in by_tab.items():
             occupied_panes.append(p.get("pane_id"))
     if (tab != orch_tab and occupied_statuses
             and all(s in ("idle", "done") for s in occupied_statuses)
-            and any(pp in briefed_panes for pp in occupied_panes)):
+            and any(pp in briefed for pp in occupied_panes)
+            and all(fresh_report(scratch, *briefed[pp]) for pp in occupied_panes if pp in briefed)):
         flags.append("layout: tab %s idle, consider release" % tab)
 json.dump(sorted(set(flags)), open(lf_path, "w"))
 for pane_id in closes:

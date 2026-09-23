@@ -95,6 +95,7 @@ case "$group $sub" in
     case "$scenario" in
       prompt_stalled) fail '{"error":{"code":"agent_prompt_stalled"}}' ;;
       prompt_blocked) fail '{"error":{"code":"agent_blocked","dialog":"Allow write? [y/n]"}}' ;;
+      prompt_no_status) emit '{"result":{"type":"agent_info"}}' ;;
       *) emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
     esac ;;
   "agent list")

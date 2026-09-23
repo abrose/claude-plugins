@@ -268,27 +268,35 @@ class TeamStart(Base):
         splits = self.grid_split("grid5")
         self.assertTrue(any("pane split --pane w1:g4 --direction down --ratio 0.5" in c for c in splits), splits)
 
-    def test_direct_pane_exports_team_name(self):
-        # team-start did not create this pane, so it exports TEAM_NAME into the
-        # pane's shell before the agent starts, so the agent (and its Stop hook)
-        # inherits it and can identify itself.
+    def abs_scratch(self):
+        return os.path.realpath(os.path.join(self.proj, "scratchpad"))
+
+    def test_direct_pane_exports_team_env(self):
+        # team-start did not create this pane, so it exports TEAM_NAME and the
+        # absolute TEAM_SCRATCH into the pane's shell before the agent starts,
+        # so the agent (and its Stop hook) inherits them. The absolute path
+        # keeps the hook working after the agent changes its cwd.
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("pane run w1:p2 export TEAM_NAME=scout", self.herdr_calls())
+        self.assertIn("pane run w1:p2 export TEAM_NAME=scout TEAM_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
 
-    def test_split_stamps_team_name_env(self):
+    def test_split_stamps_team_env(self):
         p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "down",
                             "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("pane split") and "--env TEAM_NAME=scout" in c
+                            and "--env TEAM_SCRATCH=%s " % self.abs_scratch() in c
                             for c in self.herdr_calls()), self.herdr_calls())
 
-    def test_grid_split_stamps_team_name_env(self):
+    def test_grid_split_stamps_team_env(self):
         splits = self.grid_split("grid1")
-        self.assertTrue(any("--env TEAM_NAME=scout" in c for c in splits), splits)
+        self.assertTrue(any("--env TEAM_NAME=scout" in c
+                            and "--env TEAM_SCRATCH=%s " % self.abs_scratch() in c
+                            for c in splits), splits)
 
-    def test_spilled_tab_stamps_team_name_env(self):
+    def test_spilled_tab_stamps_team_env(self):
         d = os.path.join(self.proj, "scratchpad", ".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
@@ -297,6 +305,7 @@ class TeamStart(Base):
                             env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("tab create") and "--env TEAM_NAME=maker" in c
+                            and "--env TEAM_SCRATCH=%s " % self.abs_scratch() in c
                             for c in self.herdr_calls()), self.herdr_calls())
 
     def test_namespaced_name_exported_to_pane(self):
@@ -304,7 +313,8 @@ class TeamStart(Base):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("pane run w1:p2 export TEAM_NAME=app-1-scout", self.herdr_calls())
+        self.assertIn("pane run w1:p2 export TEAM_NAME=app-1-scout TEAM_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
 
     def test_into_tab_with_pane_is_bad_args(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")
@@ -377,7 +387,7 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertFalse(any(c.startswith("pane split") for c in calls), calls)
-        self.assertIn("pane run w1:g1 export TEAM_NAME=scout", calls)
+        self.assertIn("pane run w1:g1 export TEAM_NAME=scout TEAM_SCRATCH=%s" % self.abs_scratch(), calls)
         self.assertTrue(any("agent start scout --kind claude --pane w1:g1" in c for c in calls), calls)
 
 
@@ -441,6 +451,14 @@ class TeamBriefSend(Base):
         rec = self.team_json("scout")
         self.assertEqual(rec["topic"], "digest")
         self.assertTrue(rec["brief"].endswith("brief-scout-digest.md"))
+
+    def test_delivered_without_status_prints_unknown_and_exits_zero(self):
+        # The prompt landed; a missing status key must not report a failure.
+        self.prep()
+        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
+                            scenario="prompt_no_status")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "unknown")
 
     def test_stalled_exits_five_without_resend(self):
         self.prep()
@@ -583,6 +601,21 @@ class StopHook(Base):
                            "cwd": self.proj}, TEAM_NAME="scout")
 
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_reports_after_agent_moves_its_cwd(self):
+        # An agent may cd into scratchpad/ or a worktree. team-start stamps an
+        # absolute TEAM_SCRATCH, so the hook still finds the team dir.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        moved = os.path.join(self.proj, "scratchpad")
+
+        p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": moved},
+                          TEAM_NAME="scout", TEAM_SCRATCH=moved)
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
                             for c in self.herdr_calls()), self.herdr_calls())
 
@@ -976,14 +1009,30 @@ class TeamWatch(Base):
         self.assertTrue(split, self.herdr_calls())
         self.assertTrue(any("--ratio" in c for c in split), split)
 
+    def write_report(self, name, topic):
+        d = os.path.join(self.proj, "scratchpad", "reports")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "%s-%s.md" % (name, topic)), "# Report")
+
     def test_idle_briefed_tab_flags_release(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest",
                           brief="scratchpad/brief-app-1-scout-digest.md")
+        self.write_report("app-1-scout", "digest")
         self.prep_tabs(["w1:t2"])   # own_pane w1:p9, not in the idle tab
         self.run_script("team-watch", "--once", scenario="panes_idle_only")
         pushes = [c for c in self.herdr_calls() if "WATCH" in c]
         self.assertTrue(any("consider release" in c for c in pushes), pushes)
+
+    def test_idle_tab_without_fresh_report_not_flagged_release(self):
+        # An idle agent whose report never arrived must not be released unread.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest",
+                          brief="scratchpad/brief-app-1-scout-digest.md")
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_idle_only")
+        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
+        self.assertFalse(any("consider release" in c for c in pushes), pushes)
 
     def test_idle_unbriefed_tab_not_flagged_release(self):
         # A freshly spawned, never-briefed agent looks idle too; it must NOT be
