@@ -54,7 +54,7 @@ Or install from the marketplace once published:
 |---|---|
 | `team-id slug\|hash\|for` | Compute a team id: slug a ticket, or a random hash. |
 | `team-init <ticket>` | Write the team id and config, seed the safe permission allowlist, record the orchestrator's tab. |
-| `team-start <name> <role>` | Start a role agent in a pane, verify its status bar, record it under `.team/`. |
+| `team-start <name> <role>` | Start a role agent in a pane, verify its status bar, record it under `.team/`. `--new-tab` opens a worker tab with the agent in its root pane. |
 | `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
 | `team-slice <branch> <parent>` | Create a worktree and a Herdr tab for one slice. |
 | `team-watch` | Poll each team's agents, push `WATCH` lines on state change, and keep the layout within budget. |
@@ -135,7 +135,7 @@ All under `$TEAM_SCRATCH` (default `scratchpad/`, git-ignored):
 
 The Stop hook learns which agent it is from `TEAM_NAME` in its own environment.
 `team-start` stamps `TEAM_NAME=<name>` onto the agent's pane at start: with
-`--env` when it creates the pane (a split or a spilled tab), or with a
+`--env` when it creates the pane (a split, a spilled tab, or `--new-tab`), or with a
 `herdr pane run` export into a caller-provided `--pane`. The hook reads
 `TEAM_NAME`, loads `.team/<name>.json`, and exits silently when the variable is
 absent (any non-team session) or names no record.

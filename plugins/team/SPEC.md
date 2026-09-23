@@ -227,7 +227,8 @@ creates and reads these; the overlay never does.
 ### `team-start`
 
 ```
-team-start <name> <role> (--pane <id> | --split <pane> right|down) [--effort low|medium|high]
+team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])
+           [--effort low|medium|high]
            [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]
 ```
 
@@ -235,8 +236,11 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down) [--effort low
    Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
    refuse with exit 3 if the live `herdr agent list` already holds that name: a
    name a live agent owns is not restartable without seizing its pane.
-2. Create the pane if `--split` or `--into-tab` was given; read `pane_id` from
-   the JSON. Stamp `TEAM_NAME=<name>` onto the pane so the agent's Stop hook can
+2. Create the pane if `--split`, `--into-tab` or `--new-tab` was given; read
+   `pane_id` from the JSON. `--new-tab` creates a tab and takes its root pane.
+   `--into-tab` fills a tab's lone bare shell pane instead of splitting it. A
+   created tab goes into the caller's live workspace (`herdr pane current
+   --current`), never the spawn-time `$HERDR_WORKSPACE_ID`. Stamp `TEAM_NAME=<name>` onto the pane so the agent's Stop hook can
    identify itself: `--env` on a pane/tab this step creates, or a
    `herdr pane run <pane> "export TEAM_NAME=<name>"` into a caller-provided
    `--pane`.
@@ -615,3 +619,20 @@ now stamps `TEAM_NAME=<name>` onto the agent's pane - with `--env` on a pane or
 tab it creates, or a `herdr pane run` export into a caller-provided `--pane` -
 and the hook reads it, loads `.team/<name>.json`, and pings as before. The
 record no longer stores `session`.
+
+## Increment 2026-09-23
+
+Worker tabs are born with their first agent. `team-start --new-tab [--label
+<text>]` creates a tab and starts the agent in its root pane, then registers the
+tab once the agent is live. Before this, no script created a worker tab: the
+orchestrator improvised a raw `herdr tab create`, and `--into-tab` then split
+the tab's lone bare shell, leaving that shell empty beside the agent. The tab
+was never registered, so the watcher never closed that pane. `--into-tab` now
+also fills a lone bare shell pane instead of splitting it.
+
+Every tab a script creates (`--new-tab`, a spill, `team-slice`) goes into the
+caller's live workspace from `herdr pane current --current`. The pane
+environment's `HERDR_WORKSPACE_ID` is a spawn-time snapshot that goes stale
+after a pane move, and a raw `tab create` without `--workspace` follows the
+UI-focused workspace; either put worker tabs in a workspace other than the
+orchestrator's.

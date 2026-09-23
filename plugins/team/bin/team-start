@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id>)" >&2
+  echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])" >&2
   echo "       [--effort low|medium|high] [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
   exit 2
 }
@@ -22,12 +22,14 @@ case "$role" in
   *) echo "unknown role: $role" >&2; exit 2 ;;
 esac
 
-pane=""; split_pane=""; split_dir=""; into_tab=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""; spilled_tab=""; pane_created=""
+pane=""; split_pane=""; split_dir=""; into_tab=""; new_tab=""; tab_label=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""; created_tab=""; pane_created=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane)     pane="${2:?}"; shift 2 ;;
     --split)    split_pane="${2:?}"; split_dir="${3:?}"; shift 3 ;;
     --into-tab) into_tab="${2:?}"; shift 2 ;;
+    --new-tab)  new_tab=1; shift ;;
+    --label)    tab_label="${2:?}"; shift 2 ;;
     --effort)   effort="${2:?}"; shift 2 ;;
     --mode)     mode="${2:?}"; shift 2 ;;
     --cwd)      cwd="${2:?}"; shift 2 ;;
@@ -37,11 +39,14 @@ while [ $# -gt 0 ]; do
 done
 
 effort="${effort:-$def_effort}"
-[ -n "$pane" ] || [ -n "$split_pane" ] || [ -n "$into_tab" ] || usage
-if [ -n "$into_tab" ] && { [ -n "$pane" ] || [ -n "$split_pane" ]; }; then
-  echo "--into-tab is mutually exclusive with --pane/--split" >&2
+placements=0
+for p in "$pane" "$split_pane" "$into_tab" "$new_tab"; do [ -n "$p" ] && placements=$((placements + 1)); done
+[ "$placements" -ge 1 ] || usage
+if [ "$placements" -gt 1 ]; then
+  echo "--pane, --split, --into-tab and --new-tab are mutually exclusive" >&2
   exit 2
 fi
+[ -z "$tab_label" ] || [ -n "$new_tab" ] || { echo "--label needs --new-tab" >&2; exit 2; }
 case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
 
 label="$name"
@@ -77,15 +82,35 @@ sys.exit(0 if any(a.get('name') == os.environ['NAME'] for a in d.get('result', {
   exit 3
 fi
 
+# Create a tab in the caller's live workspace and take its root pane. The pane
+# env's HERDR_WORKSPACE_ID is a spawn-time snapshot and goes stale after a pane
+# move; herdr resolves the calling pane live. The tab is registered only after
+# its agent is live (see below): a registered tab with an empty root pane would
+# let the watcher close it.
+create_tab() {
+  local ws out
+  ws=$(herdr pane current --current | json_get "d['result']['pane']['workspace_id']") || exit 4
+  local -a args=(--workspace "$ws" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus)
+  [ -z "$tab_label" ] || args+=(--label "$tab_label")
+  out=$(herdr tab create "${args[@]}") || exit 4
+  created_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
+  pane=$(echo "$out" | json_get "d['result']['root_pane']['pane_id']")
+  pane_created=1
+}
+
+if [ -n "$new_tab" ]; then
+  create_tab
+fi
+
 if [ -n "$into_tab" ]; then
   count="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(sum(1 for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))")"
-  if [ "$count" -ge 6 ]; then
-    out=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?}" --cwd "$cwd" --env "TEAM_NAME=$name" --no-focus) || exit 4
-    spilled_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
-    pane=$(echo "$out" | json_get "d['result']['root_pane']['pane_id']")
-    pane_created=1
-    # Register the new tab only after its agent is live (see below). A tab that
-    # is empty while registered would let the watcher close its root pane.
+  # A tab holding one bare shell (e.g. made by hand) gets its agent in that
+  # shell; splitting it would leave the shell empty beside the agent.
+  lone_shell="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';ps=[p for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t];print(ps[0]['pane_id'] if len(ps)==1 and ps[0].get('agent_status','unknown') not in ('idle','working','blocked','done') else '')")"
+  if [ -n "$lone_shell" ]; then
+    pane="$lone_shell"
+  elif [ "$count" -ge 6 ]; then
+    create_tab
   else
     # Place the new pane into a 2-column x 3-row grid so agents tile instead of
     # stacking in one tall column. Read the tab geometry and pick which pane to
@@ -181,9 +206,9 @@ started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 teamdir="${TEAM_SCRATCH:-scratchpad}/.team"
 mkdir -p "$teamdir"
 
-# Register a spilled tab now that its agent is live and its root pane occupied.
-if [ -n "$spilled_tab" ]; then
-  TAB="$spilled_tab" python3 - "$teamdir/tabs.json" <<'PY'
+# Register a created tab now that its agent is live and its root pane occupied.
+if [ -n "$created_tab" ]; then
+  TAB="$created_tab" python3 - "$teamdir/tabs.json" <<'PY'
 import os, json, sys
 path = sys.argv[1]
 tabs = json.load(open(path)) if os.path.exists(path) else []

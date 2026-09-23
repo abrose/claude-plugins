@@ -66,7 +66,9 @@ moment a worker stops. These fifteen rules bind everyone.
 15. Pane budgets: the orchestrator tab holds at most 2 panes (you and the
     watcher); a worker tab holds at most 6, tiled as a 2-column, 3-row grid. A
     7th agent goes to a new tab. Empty panes in team tabs are closed
-    automatically.
+    automatically. Open a worker tab only with `team-start --new-tab`, which
+    puts the first agent in the tab's root pane in your own workspace; add more
+    agents with `--into-tab`. Never create a tab with raw `herdr`.
 
 ## Tools
 

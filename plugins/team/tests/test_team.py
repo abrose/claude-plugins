@@ -319,6 +319,67 @@ class TeamStart(Base):
                             "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 2)
 
+    # The pane env's HERDR_WORKSPACE_ID is a spawn-time snapshot; "w7" stands
+    # for a stale one. The live workspace of the calling pane is w1.
+    STALE_WS = {"HERDR_WORKSPACE_ID": "w7"}
+
+    def new_tab(self, model="Opus 4.8", *extra):
+        return self.run_script("team-start", "scout", "investigator", "--new-tab", *extra,
+                               "--cwd", self.proj,
+                               env_extra={**self.bar_env(model), **self.STALE_WS})
+
+    def test_new_tab_starts_agent_in_its_root_pane(self):
+        p = self.new_tab("Opus 4.8", "--label", "T1 scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("pane split") for c in calls), calls)
+        self.assertTrue(any(c.startswith("tab create") and "--label T1 scout" in c
+                            and "--env TEAM_NAME=scout" in c for c in calls), calls)
+        self.assertTrue(any("agent start scout --kind claude --pane w1:p9" in c for c in calls), calls)
+
+    def test_new_tab_goes_to_the_callers_live_workspace(self):
+        p = self.new_tab()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
+
+    def test_new_tab_is_registered_once_its_agent_is_live(self):
+        p = self.new_tab()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        tabs = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "tabs.json")))
+        self.assertIn("w1:t9", tabs)
+
+    def test_new_tab_is_not_registered_when_start_fails(self):
+        p = self.new_tab("Sonnet 5")   # wrong model bar -> pre-flight fail
+        self.assertEqual(p.returncode, 3, p.stderr)
+        tabs_path = os.path.join(self.proj, "scratchpad", ".team", "tabs.json")
+        self.assertFalse(os.path.exists(tabs_path) and "w1:t9" in json.loads(read_text(tabs_path)))
+
+    def test_new_tab_with_other_placement_is_bad_args(self):
+        p = self.run_script("team-start", "maker", "implementer", "--new-tab", "--pane", "w1:p2")
+        self.assertEqual(p.returncode, 2)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_spill_goes_to_the_callers_live_workspace(self):
+        p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Sonnet 5"), **self.STALE_WS})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
+
+    def test_into_tab_fills_a_lone_empty_pane_instead_of_splitting(self):
+        # A tab created by hand holds one bare shell pane. Splitting it would
+        # leave that shell empty next to the agent.
+        p = self.run_script("team-start", "scout", "investigator", "--into-tab", "w1:tG",
+                            "--cwd", self.proj, scenario="fresh_tab",
+                            env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("pane split") for c in calls), calls)
+        self.assertIn("pane run w1:g1 export TEAM_NAME=scout", calls)
+        self.assertTrue(any("agent start scout --kind claude --pane w1:g1" in c for c in calls), calls)
+
 
 class TeamBriefCompose(Base):
     def overlay(self):
@@ -416,6 +477,13 @@ class TeamSlice(Base):
         self.assertFalse(any(c.startswith("m add") for c in git))
         out = json.loads(p.stdout.splitlines()[0])
         self.assertEqual(out, {"worktree": "../feat", "tab": "w1:t9", "pane": "w1:p9"})
+
+    def test_tab_goes_to_the_callers_live_workspace(self):
+        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            env_extra={"HERDR_WORKSPACE_ID": "w7"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
 
     def test_rejects_unsafe_git_ref(self):
         p = self.run_script("team-slice", "evil;rm -rf x", "main", "--label", "T1 X y",

@@ -28,7 +28,7 @@ case "$group $sub" in
     if [ "$scenario" = "own_pane_blind" ]; then
       emit '{"result":{"pane":{}}}'
     else
-      emit '{"result":{"pane":{"pane_id":"w1:p1"}}}'
+      emit '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}'
     fi ;;
   "pane run")
     emit '{"result":{"ok":true}}' ;;
@@ -153,6 +153,8 @@ case "$group $sub" in
         ]}}' ;;
       grid1)
         emit '{"result":{"panes":[{"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"}]}}' ;;
+      fresh_tab)
+        emit '{"result":{"panes":[{"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"unknown"}]}}' ;;
       grid2)
         emit '{"result":{"panes":[
           {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"},
