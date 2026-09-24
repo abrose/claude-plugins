@@ -1,6 +1,6 @@
 {
   "name": "team",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Orchestrator-plus-team-agents workflow for Claude Code with Herdr: one session you talk to, role agents in panes, briefs as files, a numbered decisions file, reports by hook. Kernel only; each project adds a small overlay.",
   "author": {
     "name": "Alfred Brose"
