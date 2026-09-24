@@ -72,12 +72,13 @@ class Base(unittest.TestCase):
     def team_json(self, name):
         return json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", name + ".json")))
 
-    def write_record(self, name, role, topic="", brief=""):
+    def write_record(self, name, role, topic="", brief="", cwd=None):
         d = os.path.join(self.proj, "scratchpad", ".team")
         os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, name + ".json"),
-                   json.dumps({"role": role, "topic": topic, "brief": brief, "pane": "w1:p2",
-                               "started": "t"}))
+        rec = {"role": role, "topic": topic, "brief": brief, "pane": "w1:p2", "started": "t"}
+        if cwd is not None:
+            rec["cwd"] = cwd
+        write_text(os.path.join(d, name + ".json"), json.dumps(rec))
 
 
 class TeamStart(Base):
@@ -141,6 +142,7 @@ class TeamStart(Base):
         self.assertEqual(rec["role"], "investigator")
         self.assertEqual(rec["pane"], "w1:p2")
         self.assertNotIn("session", rec)
+        self.assertEqual(rec["cwd"], os.path.realpath(self.proj))
         out = json.loads(p.stdout)
         self.assertEqual(out["model"], "claude-opus-4-8")
 
@@ -358,6 +360,18 @@ class TeamStart(Base):
         self.assertIn("pane run w1:p2 export TEAM_NAME=app-1-scout TEAM_SCRATCH=%s" % self.abs_scratch(),
                       self.herdr_calls())
 
+    def test_pane_placement_without_cwd_uses_panes_cwd_from_herdr(self):
+        # A caller-provided --pane with no --cwd must resolve the pane's real
+        # cwd from Herdr (pane get), not fall back to team-start's own $PWD,
+        # so the status-bar cwd check compares against the right value.
+        pane_cwd = os.path.join(self.proj, "elsewhere")
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            env_extra={**self.bar_env("Opus 4.8", cwd=os.path.basename(pane_cwd)),
+                                       "FAKE_PANE_CWD": pane_cwd})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(any(c.startswith("pane get w1:p2") for c in self.herdr_calls()),
+                        self.herdr_calls())
+
     def test_into_tab_with_pane_is_bad_args(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")
         self.assertEqual(p.returncode, 2)
@@ -516,6 +530,76 @@ class TeamBriefSend(Base):
                             scenario="prompt_blocked")
         self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
 
+    def test_blocked_prints_the_dialog_text_not_the_raw_error(self):
+        # SPEC.md: agent_blocked -> print the dialog text, exit 6. The pre-check
+        # error carries the dialog in its own "dialog" field.
+        self.prep()
+        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
+                            scenario="prompt_blocked")
+        self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
+        self.assertIn("Allow write? [y/n]", p.stderr)
+        self.assertNotIn("{", p.stderr)
+
+    def test_working_returns_at_once_matching_spec(self):
+        # herdr's real contract: plain --wait waits for a settled state
+        # (idle/done/blocked), never "working" - --until working is required
+        # to return as soon as the agent starts its turn, per SPEC.md.
+        self.prep()
+        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
+                            scenario="prompt_working")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.stdout.strip(), "working")
+        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("--until working", prompts[0])
+        self.assertIn("--until blocked", prompts[0])
+
+    def test_mid_run_blocked_state_prints_dialog_and_exits_six(self):
+        # A dialog raised mid-turn is matched via --until blocked and comes
+        # back as a settled result, not an error; send must still read the
+        # dialog text and exit 6, the same outward contract as the pre-check.
+        self.prep()
+        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
+                            scenario="prompt_blocked_midrun")
+        self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
+        self.assertIn("Allow Bash(rm -rf build)? [y/n]", p.stderr)
+
+    def test_mirrors_brief_and_decisions_into_worktree_scratch(self):
+        # A worktree agent's record carries an absolute cwd outside self.proj.
+        # send must copy the brief and the decisions file into that worktree's
+        # own scratchpad, and reference the brief by a path relative to it, so
+        # the agent never reads outside its own working directory.
+        wt = tempfile.mkdtemp()
+        try:
+            self.write_record("scout", "investigator", topic="digest", cwd=wt)
+            d = os.path.join(self.proj, "scratchpad", ".team")
+            os.makedirs(d, exist_ok=True)
+            write_text(os.path.join(d, "config.json"), json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+            write_text(os.path.join(self.proj, "scratchpad", "decisions-APP-1.md"), "1. decision\n")
+            write_text(os.path.join(self.proj, "scratchpad", "brief-scout-digest.md"), "brief body\n")
+
+            p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
+
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "brief-scout-digest.md")), "brief body\n")
+            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "decisions-APP-1.md")), "1. decision\n")
+            prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+            self.assertEqual(len(prompts), 1)
+            self.assertIn("Read scratchpad/brief-scout-digest.md ", prompts[0])
+            self.assertNotIn(wt, prompts[0])
+        finally:
+            shutil.rmtree(wt, ignore_errors=True)
+
+    def test_no_mirroring_when_cwd_is_the_main_repo(self):
+        # A record with no cwd, or one matching this repo's own $PWD, is not a
+        # worktree agent: send must behave as before, referencing the brief by
+        # its path under the orchestrator's own scratchpad.
+        self.prep()
+        p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        self.assertIn("Read scratchpad/brief-scout-digest.md ", prompts[0])
+
     def test_send_positions_prompt_before_wait_flag(self):
         self.prep()
         p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
@@ -524,7 +608,7 @@ class TeamBriefSend(Base):
         self.assertEqual(len(prompts), 1)
         call = prompts[0]
         self.assertTrue(call.startswith("agent prompt scout Read "), call)
-        self.assertTrue(call.endswith(" --wait"), call)
+        self.assertIn(" --wait ", call)
 
 
 class TeamSlice(Base):
@@ -533,10 +617,22 @@ class TeamSlice(Base):
                             env_extra={"HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         git = self.git_calls()
-        self.assertIn("worktree add -b feat ../feat main", git)
+        self.assertIn("worktree add -b feat scratchpad/wt-feat main", git)
         self.assertFalse(any(c.startswith("m add") for c in git))
         out = json.loads(p.stdout.splitlines()[0])
-        self.assertEqual(out, {"worktree": "../feat", "tab": "w1:t9", "pane": "w1:p9"})
+        self.assertEqual(out, {"worktree": "scratchpad/wt-feat", "tab": "w1:t9", "pane": "w1:p9"})
+
+    def test_default_worktree_lands_inside_repo_and_herdr_gets_absolute_cwd(self):
+        # No overlay project.yaml: the worktree must land inside the repo
+        # (scratchpad/wt-{branch}), and herdr must receive an absolute --cwd,
+        # never the relative path, so it cannot resolve against the wrong base.
+        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            env_extra={"HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates, self.herdr_calls())
+        expect_abs = os.path.join(os.path.realpath(self.proj), "scratchpad", "wt-feat")
+        self.assertTrue(any(("--cwd %s " % expect_abs) in c for c in creates), creates)
 
     def test_tab_goes_to_the_callers_live_workspace(self):
         p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
@@ -797,10 +893,40 @@ class TeamInit(Base):
         self.assertEqual(cfg["ticket"], "APP-5066")
         self.assertEqual(cfg["orchestrator"], "app-5066-orch")
 
-    def test_refuses_second_init(self):
-        self.run_script("team-init", "APP-1")
-        p = self.run_script("team-init", "APP-1")
-        self.assertEqual(p.returncode, 1)
+    def test_refuses_second_init_when_agent_still_live(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+        p = self.run_script("team-init", "APP-2", scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("app-1-scout", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(d, "config.json")))
+
+    def test_archives_finished_team_and_continues(self):
+        # No agent of the previous team (app-1-*) is live: team-init archives
+        # scratchpad/.team to scratchpad/.team-APP-1 and starts the new team.
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+        write_text(os.path.join(d, "roster.md"), "old roster\n")
+        p = self.run_script("team-init", "APP-2")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        archived = os.path.join(self.proj, "scratchpad", ".team-APP-1")
+        self.assertTrue(os.path.exists(os.path.join(archived, "roster.md")))
+        cfg = json.loads(read_text(os.path.join(d, "config.json")))
+        self.assertEqual(cfg["ticket"], "APP-2")
+
+    def test_archives_with_a_suffix_when_archive_name_taken(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+        os.makedirs(os.path.join(self.proj, "scratchpad", ".team-APP-1"))
+        p = self.run_script("team-init", "APP-2")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "scratchpad", ".team-APP-1-2")))
 
     def test_seeds_allowlist_without_clobbering(self):
         d = os.path.join(self.proj, ".claude")

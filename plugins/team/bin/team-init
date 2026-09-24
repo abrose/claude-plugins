@@ -9,6 +9,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scratch="${TEAM_SCRATCH:-scratchpad}"
 teamdir="$scratch/.team"
 
+json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
+
 [ $# -ge 1 ] || usage
 ticket="$1"; shift
 orch_pane=""
@@ -20,7 +22,36 @@ while [ $# -gt 0 ]; do
 done
 
 mkdir -p "$teamdir"
-[ -e "$teamdir/config.json" ] && { echo "already initialised: $teamdir/config.json" >&2; exit 1; }
+
+# A previous team's dir is still here. If none of its agents is live, archive
+# it and continue; a team with a live agent still needs it, so refuse as
+# before and name the live agents.
+if [ -e "$teamdir/config.json" ]; then
+  old_team_id="$(json_get team_id <"$teamdir/config.json")"
+  old_ticket="$(json_get ticket <"$teamdir/config.json")"
+  live="$(OLD_TEAM_ID="$old_team_id" python3 -c "
+import json, os, subprocess
+tid = os.environ['OLD_TEAM_ID']
+try:
+    out = subprocess.run(['herdr', 'agent', 'list'], capture_output=True, text=True)
+    d = json.loads(out.stdout)
+    names = [a.get('name') for a in d.get('result', {}).get('agents', []) if a.get('name')]
+except Exception:
+    names = []
+live = [n for n in names if tid and (n == tid or n.startswith(tid + '-'))]
+print(' '.join(live))
+")"
+  if [ -n "$live" ]; then
+    echo "already initialised: $teamdir/config.json (live agents: $live)" >&2
+    exit 1
+  fi
+  archive_base="$scratch/.team-${old_ticket:-$old_team_id}"
+  archive="$archive_base"
+  n=2
+  while [ -e "$archive" ]; do archive="$archive_base-$n"; n=$((n + 1)); done
+  mv "$teamdir" "$archive"
+  mkdir -p "$teamdir"
+fi
 
 # Pick a team id whose <team_id>-* name namespace is free among live herdr
 # agents, so two teams (e.g. a prior run for the same ticket) never share names

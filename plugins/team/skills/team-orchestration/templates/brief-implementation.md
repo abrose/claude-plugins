@@ -17,13 +17,13 @@ destructive command without stopping to report first.
 ## Task
 1. Work in the assigned worktree only. Confirm the branch before the first edit.
 2. Re-verify every file:line pointer in this brief before you rely on it.
-3. Make small commits. For a stacked branch, keep the own-commit invariant:
-   your branch adds only its own commits onto the parent.
+3. Do NOT stage or commit. Leave every change unstaged; the human reviews and
+   commits. Commit only if this brief gives you an explicit go.
 4. <numbered implementation steps; exact file paths, field names, tool paths>
 5. Before you report, run the gate greps from the Gate section and fix every hit.
 6. If the overlay flags spdd, run the spdd sync last, after the gate passes.
 
 ## Output
-- The code change in the worktree, committed in small steps.
+- The code change in the worktree, unstaged.
 - `scratchpad/impl-notes-{{topic}}.md`: what changed, the gate result, any
   numbered open question you could not resolve.

@@ -22,7 +22,7 @@ case "$role" in
   *) echo "unknown role: $role" >&2; exit 2 ;;
 esac
 
-pane=""; split_pane=""; split_dir=""; into_tab=""; new_tab=""; tab_label=""; effort=""; mode=auto; cwd="$PWD"; dry_run=""; created_tab=""; pane_created=""
+pane=""; split_pane=""; split_dir=""; into_tab=""; new_tab=""; tab_label=""; effort=""; mode=auto; cwd=""; dry_run=""; created_tab=""; pane_created=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane)     pane="${2:?}"; shift 2 ;;
@@ -48,6 +48,14 @@ if [ "$placements" -gt 1 ]; then
 fi
 [ -z "$tab_label" ] || [ -n "$new_tab" ] || { echo "--label needs --new-tab" >&2; exit 2; }
 case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
+
+# A caller-provided --pane with no --cwd: read the pane's real cwd from Herdr
+# instead of defaulting to this script's own $PWD, which is wrong whenever the
+# caller runs team-start from a different directory than the pane it targets.
+if [ -z "$cwd" ] && [ -n "$pane" ]; then
+  cwd="$(herdr pane get "$pane" | json_get "d['result']['pane']['cwd']")" || exit 4
+fi
+[ -n "$cwd" ] || cwd="$PWD"
 
 label="$name"
 teamcfg="${TEAM_SCRATCH:-scratchpad}/.team/config.json"
@@ -229,8 +237,9 @@ json.dump(tabs, open(path, "w"))
 PY
 fi
 
-printf '{"role":"%s","topic":"","brief":"","pane":"%s","started":"%s"}\n' \
-  "$role" "$pane" "$started" >"$teamdir/$name.json"
+cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$cwd")"
+printf '{"role":"%s","topic":"","brief":"","pane":"%s","started":"%s","cwd":"%s"}\n' \
+  "$role" "$pane" "$started" "$cwd_abs" >"$teamdir/$name.json"
 
 printf '{"name":"%s","role":"%s","pane":"%s","session":"%s","model":"%s","mode":"%s"}\n' \
   "$name" "$role" "$pane" "$session" "$model" "$mode"

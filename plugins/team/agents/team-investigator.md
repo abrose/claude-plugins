@@ -2,7 +2,7 @@
 name: team-investigator
 description: Read-only analysis, review and design-document agent for the team workflow. Started as a main session with --agent.
 model: claude-opus-4-8
-disallowedTools: Write, Edit, MultiEdit, NotebookEdit
+disallowedTools: Edit, MultiEdit, NotebookEdit
 skills:
   - team-orchestration
   - team-role-investigator

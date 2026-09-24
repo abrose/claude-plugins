@@ -139,11 +139,44 @@ d["brief"] = os.environ["BRIEF"]
 json.dump(d, open(f, "w"))
 PY
 
-  prompt="Read $brief and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
+  # A worktree agent's record carries an absolute cwd outside this repo. Read
+  # the brief and the decisions file from the orchestrator's own tree, then
+  # never hand the agent a path outside its own working directory:
+  # `blockReadsOutsideWorkingDirectories` would block on a dialog. Mirror both
+  # into the worktree's own scratchpad, and name the brief by the path the
+  # agent sees from its own cwd.
+  agent_cwd="$(json_get cwd <"$jf" 2>/dev/null || true)"
+  here_abs="$(python3 -c "import os;print(os.path.realpath('.'))")"
+  brief_ref="$brief"
+  if [ -n "$agent_cwd" ]; then
+    agent_cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$agent_cwd")"
+    if [ "$agent_cwd_abs" != "$here_abs" ]; then
+      target_scratch="$agent_cwd_abs/scratchpad"
+      mkdir -p "$target_scratch"
+      cp "$brief" "$target_scratch/"
+      ticket=""
+      [ -f "$teamdir/config.json" ] && ticket="$(json_get ticket <"$teamdir/config.json")"
+      decisions_file="$scratch/decisions-$ticket.md"
+      [ -n "$ticket" ] && [ -f "$decisions_file" ] && cp "$decisions_file" "$target_scratch/"
+      brief_ref="scratchpad/$(basename "$brief")"
+    fi
+  fi
+
+  prompt="Read $brief_ref and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
   err="$(mktemp)"
   trap 'rm -f "$err"' EXIT
-  if out=$(herdr agent prompt "$name" "$prompt" --wait 2>"$err"); then
-    echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result',{}).get('agent',{}).get('agent_status','unknown'))"
+  # herdr's real contract: plain --wait waits for a fully settled state
+  # (idle/done/blocked), so a long-running turn is never seen until it ends or
+  # blocks. --until working (repeatable with --until blocked) makes --wait
+  # return as soon as either is observed, matching this command's contract.
+  if out=$(herdr agent prompt "$name" "$prompt" --wait --until working --until blocked 2>"$err"); then
+    status="$(echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result',{}).get('agent',{}).get('agent_status','unknown'))")"
+    if [ "$status" = "blocked" ]; then
+      echo "BLOCKED: $name is at a dialog:" >&2
+      herdr agent read "$name" --source detection --lines 20 >&2 || true
+      exit 6
+    fi
+    echo "$status"
     exit 0
   fi
   code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$err" 2>/dev/null || true)"
@@ -154,7 +187,7 @@ PY
       exit 5 ;;
     agent_blocked)
       echo "BLOCKED: $name is at a dialog:" >&2
-      cat "$err" >&2
+      python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('dialog',''))" <"$err" >&2
       exit 6 ;;
     *)
       cat "$err" >&2

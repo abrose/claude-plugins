@@ -84,13 +84,15 @@ case "$group $sub" in
       emit 'Quick safety check: Is this a project you created or one you trust?
  ❯ No, exit
    Yes, I trust this folder'
+    elif [ "$scenario" = "prompt_blocked_midrun" ]; then
+      emit 'Allow Bash(rm -rf build)? [y/n]'
     else
       emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
     fi ;;
   "agent get")
     emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "pane get")
-    emit '{"result":{"pane":{"pane_id":"w1:p1","tab_id":"w1:t1"}}}' ;;
+    emit "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",\"cwd\":\"${FAKE_PANE_CWD:-/tmp}\"}}}" ;;
   "agent send-keys")
     emit '{"result":{"ok":true}}' ;;
   "agent wait")
@@ -100,6 +102,8 @@ case "$group $sub" in
       prompt_stalled) fail '{"error":{"code":"agent_prompt_stalled"}}' ;;
       prompt_blocked) fail '{"error":{"code":"agent_blocked","dialog":"Allow write? [y/n]"}}' ;;
       prompt_no_status) emit '{"result":{"type":"agent_info"}}' ;;
+      prompt_working) emit '{"result":{"agent":{"agent_status":"working"}}}' ;;
+      prompt_blocked_midrun) emit '{"result":{"agent":{"agent_status":"blocked"}}}' ;;
       *) emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
     esac ;;
   "agent list")

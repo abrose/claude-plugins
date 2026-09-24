@@ -165,7 +165,7 @@ omitted.
 
 | Role | Agent file | Model | Effort | Mode | Read-only | Used for |
 |---|---|---|---|---|---|---|
-| investigator | `team-investigator` | Opus 4.8 | medium | auto | yes | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
+| investigator | `team-investigator` | Opus 4.8 | medium | auto | yes for code (Write scoped to scratchpad) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
 | implementer | `team-implementer` | Sonnet 5 | medium | auto | no | code in a worktree, fix rounds, MR creation on go, Jira writes on go |
 | tester | `team-tester` | Sonnet 5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
 
@@ -182,7 +182,7 @@ mode; `team-start` must then use accept-edits and budget an approval round).
 name: team-investigator
 description: Read-only analysis, review and design-document agent for the team workflow. Started as a main session with --agent.
 model: claude-opus-4-8
-disallowedTools: Write, Edit, MultiEdit, NotebookEdit
+disallowedTools: Edit, MultiEdit, NotebookEdit
 skills:
   - team-orchestration
   - team-role-investigator
@@ -201,10 +201,15 @@ run the gate greps before reporting, `/spdd-sync` last when the overlay flags
 spdd). `team-tester` disallows `Edit`/`Write` outside `tests/` and scenario
 files by rule (tool filters cannot express paths; the role skill states it).
 
-The Investigator's read-only guarantee holds through `disallowedTools`; a
-brief must not try to lift it. The Bash tool stays available to every role;
-destructive commands are governed by the role skill and the plugin hook (see
-below), not by removing Bash.
+The Investigator's read-only guarantee for code holds through two halves:
+`disallowedTools` blocks `Edit`/`MultiEdit`/`NotebookEdit` so it can never
+change an existing file, and `Write` stays available but scoped by
+`team-role-investigator`'s rule to creating new files under the scratchpad
+only (so a long deliverable does not need a Bash heredoc, which can exceed
+the shell parser limit and trip a permission dialog). A brief must not try to
+lift either half. The Bash tool stays available to every role; destructive
+commands are governed by the role skill and the plugin hook (see below), not
+by removing Bash.
 
 ---
 
@@ -221,7 +226,7 @@ creates and reads these; the overlay never does.
 | `orchestration-decisions.md` | orchestrator | own calls while Alfred is away |
 | `brief-<name>-<topic>.md` | `team-brief compose` | the assignment; `-revN` for follow-ups |
 | `reports/<name>-<topic>.md` | agent (via hook) | deliverable summary, deterministic path |
-| `.team/<name>.json` | `team-start`, `team-brief` | `{role, topic, brief, pane, started}` |
+| `.team/<name>.json` | `team-start`, `team-brief` | `{role, topic, brief, pane, started, cwd}` |
 | `.team/roster.md` | `team-status` | last rendered roster, for pasting into status messages |
 
 ### `team-start`
@@ -236,7 +241,11 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
    refuse with exit 3 if the live `herdr agent list` already holds that name: a
    name a live agent owns is not restartable without seizing its pane.
-2. Create the pane if `--split`, `--into-tab` or `--new-tab` was given; read
+2. Resolve `--cwd`. If it was not given: for `--pane`, read the pane's real
+   cwd from `herdr pane get <id>` (`result.pane.cwd`), never this script's own
+   `$PWD`; for every other placement, default to `$PWD` as before.
+
+3. Create the pane if `--split`, `--into-tab` or `--new-tab` was given; read
    `pane_id` from the JSON. `--new-tab` creates a tab and takes its root pane.
    `--into-tab` fills a tab's lone bare shell pane instead of splitting it. A
    created tab goes into the caller's live workspace (`herdr pane current
@@ -246,21 +255,23 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    this step creates, or a
    `herdr pane run <pane> "export TEAM_NAME=<name> TEAM_SCRATCH=<abs>"` into a
    caller-provided `--pane`.
-3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
+4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
    `--name` gives `claude` the same resolved name Herdr knows it by, so
    `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
    cross-session messages so a peer question is never held pending approval.
    Requires Claude Code v2.1.236 or later for `notify_when_idle` to work
    against this agent (see Increment 2026-09-24).
-4. Pre-flight, in order: if start fails with `agent_not_ready` (an error on
+5. Pre-flight, in order: if start fails with `agent_not_ready` (an error on
    stderr, exit 1), the agent is at a startup dialog (folder trust, MCP
    servers). Never answer it: it is a security decision for the human. Abort
    with exit 3, the pane id and the `agent read --source detection` screen
    text; the human answers it, closes that pane and re-runs `team-start`. Any
    other start error -> exit 4. Then verify the status bar once: model, mode,
    cwd. Abort with exit 3 and the screen text if any of the three is wrong.
-5. Write `.team/<name>.json` with role, pane, started.
-6. Print one JSON line: `{"name","role","pane","session","model","mode"}`, where
+6. Write `.team/<name>.json` with role, pane, started, and the resolved
+   `cwd` (absolute), so `team-brief send` can tell a worktree agent from a
+   main-repo one.
+7. Print one JSON line: `{"name","role","pane","session","model","mode"}`, where
    `session` is the first 8 chars of Herdr's `agent_session.value` (for the
    human-facing roster only; the hook does not use it).
 
@@ -288,13 +299,27 @@ It prints the path and exits 0. The orchestrator then edits the task section
 with its own tools. `compose` refuses to overwrite an existing brief (use
 `-rev2` via `--topic`).
 
-`send` records `topic` and `brief` in `.team/<name>.json`, then runs
-`herdr agent prompt <name> --wait "Read <brief> and execute it fully. Report
-back as it describes. You are in execution mode; if your session shows plan
-mode, say so immediately."` and maps the result: `working` -> exit 0 and print
-the status; `agent_prompt_stalled` -> read the pane, print the last 20 lines,
-exit 5 without re-sending (the orchestrator decides); `agent_blocked` ->
-print the dialog text, exit 6.
+`send` records `topic` and `brief` in `.team/<name>.json`. If the agent's
+record `cwd` is set and differs from `send`'s own cwd (a worktree agent), it
+first copies the brief and, when the team's `ticket` names one, the decisions
+file into `<cwd>/scratchpad/`, so the agent never reads a path outside its
+own working directory; the kick-off then names the brief relative to that
+cwd instead of the orchestrator's path.
+
+It then runs `herdr agent prompt <name> "Read <brief-ref> and execute it
+fully. Report back as it describes. You are in execution mode; if your
+session shows plan mode, say so immediately." --wait --until working --until
+blocked` and maps the result: herdr's real contract is that plain `--wait`
+waits for a fully settled state (idle/done/blocked), never `working`, so
+`--until working` (repeated with `--until blocked`) is required to return as
+soon as either is observed. `agent_status: working` (or any other non-blocked
+settled state) -> exit 0 and print the status; `agent_status: blocked`
+(matched mid-turn, returned as success, not an error) -> read the dialog text
+with `agent read --source detection` and print it, exit 6; the error
+`agent_prompt_stalled` -> read the pane, print the last 20 lines, exit 5
+without re-sending (the orchestrator decides); the error `agent_blocked` (the
+agent was already at a dialog before submission) -> print its `dialog` field,
+exit 6.
 
 ### `team-slice`
 
@@ -304,7 +329,10 @@ team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--cop
 
 1. Create the worktree. The command comes from the overlay's `project.yaml`
    (`worktree_cmd`, with `{branch}` and `{parent}` placeholders); default
-   `git worktree add -b {branch} ../{branch} {parent}`.
+   `git worktree add -b {branch} scratchpad/wt-{branch} {parent}`, so the
+   worktree lands inside the repo, not next to it. Resolve the worktree's real
+   path to absolute before handing it to herdr as `--cwd`; a relative path
+   resolves against herdr's own process, not this script's caller.
 2. If `project.yaml` says `stacked: true`: `git m add {branch} --onto {parent}`
    in the new worktree.
 3. Copy every `--copy` directory (design folder, decisions, mockups) into the
@@ -443,8 +471,9 @@ file and delivers the REPORT line to {{orchestrator}}.
 Role templates add sections: `brief-analysis.md` (digest, concept inventory
 with code pointers, candidate split, open-questions file with options,
 evidence `file:line`, trade-offs, one recommendation each);
-`brief-implementation.md` (worktree, gate, small commits, own-commit
-invariant for stacks, re-verify pointers, gate greps, spdd sync last);
+`brief-implementation.md` (worktree, gate, unstaged deliverable, own-commit
+invariant for stacks under an explicit go, re-verify pointers, gate greps,
+spdd sync last);
 `brief-tester.md` (environment table, scenarios, expected-vs-observed,
 finding classes task bug / design question / out of scope / environment,
 three-round cap, one probe per round, stop the driver last, report BLOCKED
@@ -681,3 +710,82 @@ both the orchestrator's session and the agent's session
 session goes idle"). Without it, `SendMessage`'s `notify_when_idle` input is
 refused; fall back to rule 8 (poll idle agents by hand) until every session
 in the team is on a new enough version.
+
+## Increment 2026-09-24 (defects)
+
+Fixes for defects 4-7 and 9-12 found during the agent-teams-compare run
+(`team-plugin-defects.md`). Defects 1-3 were already fixed or are
+environment; defect 8 is environment.
+
+**Defect 9** (`team-slice`, `team-start`): the default worktree now lands
+inside the repo at `scratchpad/wt-{branch}`, not next to it at `../{branch}`;
+`team-slice` resolves that path to absolute before handing it to herdr's
+`--cwd`, since herdr resolves a relative one against its own process, not the
+caller's. `team-start --pane <id>` with no `--cwd` now reads the pane's real
+cwd from `herdr pane get <id>` (`result.pane.cwd`) instead of defaulting to
+`team-start`'s own `$PWD`, so the pre-flight status-bar cwd check compares
+against the right value. An earlier version of this fix used `herdr pane
+process-info` and the last entry of its `foreground_processes` list; that
+field's order is not guaranteed and a bare shell pane can have no foreground
+process at all, so it was replaced with the pane's own `cwd` field.
+
+**Defect 10** (`team-start`, `team-brief`): `team-start` now records the
+agent's resolved, absolute `cwd` in `.team/<name>.json`. `team-brief send`
+compares that cwd to its own; when they differ (a worktree agent), it copies
+the brief and the decisions file (named from the team's `ticket`) into
+`<cwd>/scratchpad/` before the kick-off, and names the brief in the kick-off
+prompt by a path relative to that cwd. A worktree agent no longer reads a
+path outside its own working directory, which used to trip
+`blockReadsOutsideWorkingDirectories` into a dialog.
+
+**Defect 4** (`team-brief send`): reproduced against `herdr agent prompt
+--help`. Plain `--wait` waits for a fully settled state (idle, done, or
+blocked); it never returns while the agent is `working`, which is why `send`
+used to run for the length of the whole task. `--until <STATUS>` is
+repeatable and changes which state ends the wait, so `send` now calls
+`herdr agent prompt <name> "<text>" --wait --until working --until blocked`:
+it returns at once when the agent starts working, matching SPEC.md, and also
+when a dialog appears mid-turn. A `blocked` result reached this way is a
+success, not the `agent_blocked` error (that error is only the pre-check for
+an agent already blocked before submission); `send` reads the dialog text
+with `agent read --source detection` in both cases before exiting 6, instead
+of printing the raw error JSON. `tests/fake-herdr` models both paths
+(`prompt_working`, `prompt_blocked_midrun`, and the existing pre-check
+`prompt_blocked`). No numbered open question was needed: the SPEC's
+`working -> exit 0` contract is reachable with `--until`.
+
+**Defect 7** (`team-init`): a leftover `.team/config.json` from a finished
+team no longer refuses `team-init` outright. If none of that team's agents
+(`<team_id>-*`) is live in `herdr agent list`, `team-init` moves `.team` to
+`.team-<old ticket>` (or `.team-<old ticket>-2`, etc. if that name is taken)
+and continues with the new team. If any agent is still live, it refuses as
+before and now names the live agents in the error.
+
+**Defect 6** (`/team:release`): `commands/release.md` now tells the
+orchestrator that `/clear` always returns `agent_prompt_stalled` (it never
+starts a turn), and to confirm the reset from the agent's context gauge
+reading 0 percent instead of the prompt's exit code.
+
+**Defect 5**: `Write` is no longer in `team-investigator`'s
+`disallowedTools`; `Edit`, `MultiEdit`, and `NotebookEdit` stay blocked.
+`team-role-investigator/SKILL.md` binds `Write` to creating new files under
+the scratchpad only, never to creating or overwriting a file elsewhere in
+the repository, so the read-only guarantee for code now rests on that rule
+plus `Edit` being blocked, not on `Write` being blocked. SPEC.md's "Agent
+frontmatter" section and the roles table are updated to match. This removes
+the failure mode where a long investigator deliverable, written through a
+Bash heredoc, exceeded the shell parser limit and tripped a permission
+dialog.
+
+**Defect 11**: `team-role-implementer/SKILL.md` and
+`templates/brief-implementation.md` said the deliverable was the committed
+change; both now say the deliverable is the unstaged change plus a notes
+file, and that the agent commits only under an explicit go in the brief. This
+matches the standing rule that the human reviews and commits.
+
+**Defect 12**: all three role skills
+(`skills/team-role-*/SKILL.md`) now state the same rule: read files with the
+Read tool, never a Bash `cat`/`find`/heredoc; create and change files with
+Write/Edit only (Write scoped to scratchpad for the investigator, to test and
+scenario files for the tester); never read, search, or write outside your
+own worktree.

@@ -47,9 +47,9 @@ done
 [ -n "$label" ] || usage
 
 worktree_cmd="$(yget worktree_cmd)"
-[ -n "$worktree_cmd" ] || worktree_cmd='git worktree add -b {branch} ../{branch} {parent}'
+[ -n "$worktree_cmd" ] || worktree_cmd='git worktree add -b {branch} scratchpad/wt-{branch} {parent}'
 worktree_dir="$(yget worktree_dir)"
-[ -n "$worktree_dir" ] || worktree_dir="../$branch"
+[ -n "$worktree_dir" ] || worktree_dir="scratchpad/wt-$branch"
 
 cmd="${worktree_cmd//\{branch\}/$branch}"
 cmd="${cmd//\{parent\}/$parent}"
@@ -67,9 +67,13 @@ if [ "${#copies[@]}" -gt 0 ]; then
   [ "$(yget spdd)" = "true" ] && echo "warning: untracked spdd files under a copied dir do not travel" >&2
 fi
 
+# herdr resolves a relative --cwd against its own process, not this script's
+# caller cwd, so hand it the absolute path.
+wt_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$wt")"
+
 # The caller's live workspace: the pane env's HERDR_WORKSPACE_ID goes stale after a pane move.
 ws=$(herdr pane current --current | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['workspace_id'])") || exit 4
-out=$(herdr tab create --workspace "$ws" --cwd "$wt" --label "$label" --no-focus) || exit 4
+out=$(herdr tab create --workspace "$ws" --cwd "$wt_abs" --label "$label" --no-focus) || exit 4
 python3 -c "import sys,json;d=json.load(sys.stdin);print(json.dumps({'worktree':'$wt','tab':d['result']['tab']['tab_id'],'pane':d['result']['root_pane']['pane_id']}))" <<<"$out"
 
 if [ -f "$overlay/env.md" ]; then
