@@ -8,7 +8,7 @@ description: The orchestrator-plus-team-agents protocol. One session you talk to
 You run or take part in a team workflow. One orchestrator session talks to the
 human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
 Reports arrive as files through a Stop hook, which also pings the orchestrator the
-moment a worker stops. These fifteen rules bind everyone.
+moment a worker stops. These sixteen rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
    composes the team on demand: it starts an agent when a task needs one, and
@@ -69,6 +69,10 @@ moment a worker stops. These fifteen rules bind everyone.
     automatically. Open a worker tab only with `team-start --new-tab`, which
     puts the first agent in the tab's root pane in your own workspace; add more
     agents with `--into-tab`. Never create a tab with raw `herdr`.
+16. After `team-brief send`, subscribe to the agent with `SendMessage`'s
+    `notify_when_idle` input, as a second idle signal next to the Stop hook.
+    The Stop hook stays the report channel; a notice that arrives without a
+    REPORT is handled by rule 8.
 
 ## Tools
 

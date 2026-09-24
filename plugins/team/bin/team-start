@@ -66,7 +66,7 @@ if [ -f "$teamcfg" ]; then
 fi
 
 if [ -n "$dry_run" ]; then
-  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --effort $effort --permission-mode $mode"
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --effort $effort --permission-mode $mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'"
   exit 0
 fi
 
@@ -172,8 +172,12 @@ if [ -z "$pane_created" ]; then
 fi
 
 start() {
+  # --name gives claude the same resolved name Herdr knows it by, so
+  # ListAgents/SendMessage match. --settings accepts cross-session messages so
+  # a peer question never sits held pending human approval.
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
-    --agent "team-$role" --effort "$effort" --permission-mode "$mode"
+    --agent "team-$role" --effort "$effort" --permission-mode "$mode" \
+    --name "$name" --settings '{"crossSessionInbound":"accept"}'
 }
 
 pending_dir="${TEAM_SCRATCH:-scratchpad}/.team/pending"

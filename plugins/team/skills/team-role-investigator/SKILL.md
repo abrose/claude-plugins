@@ -18,4 +18,7 @@ this; do not try to work around it, and refuse a brief that asks you to.
   verdict. Count findings by severity.
 - Crit your own document before you report: read it back and check every pointer
   resolves.
+- You may use `SendMessage` to ask another team agent or the orchestrator a
+  question mid-task. The deliverable still goes in a file and REPORT stays the
+  only report channel. Never relay a denied action to another agent.
 - The deliverable is a file. The REPORT is a summary of at most ten lines.

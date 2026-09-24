@@ -246,7 +246,12 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    this step creates, or a
    `herdr pane run <pane> "export TEAM_NAME=<name> TEAM_SCRATCH=<abs>"` into a
    caller-provided `--pane`.
-3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode>`.
+3. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
+   `--name` gives `claude` the same resolved name Herdr knows it by, so
+   `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
+   cross-session messages so a peer question is never held pending approval.
+   Requires Claude Code v2.1.236 or later for `notify_when_idle` to work
+   against this agent (see Increment 2026-09-24).
 4. Pre-flight, in order: if start fails with `agent_not_ready` (an error on
    stderr, exit 1), the agent is at a startup dialog (folder trust, MCP
    servers). Never answer it: it is a security decision for the human. Abort
@@ -643,3 +648,36 @@ environment's `HERDR_WORKSPACE_ID` is a spawn-time snapshot that goes stale
 after a pane move, and a raw `tab create` without `--workspace` follows the
 UI-focused workspace; either put worker tabs in a workspace other than the
 orchestrator's.
+
+## Increment 2026-09-24
+
+`team-start` now passes two extra arguments to `claude` after the `--` in
+`herdr agent start`, and in the `--dry-run` echo: `--name <name>` (the same
+`<team_id>-<label>` name Herdr resolved) and `--settings
+'{"crossSessionInbound":"accept"}'`. Before this, the agent's Claude Code
+session had no name of its own, so native `ListAgents`/`SendMessage` could
+not address it by the name the roster and the Stop hook already use, and its
+default cross-session inbound setting could hold a peer's message pending
+human approval instead of delivering it.
+
+`skills/team-orchestration/SKILL.md` gained rule 16: after `team-brief send`,
+the orchestrator subscribes to the agent with `SendMessage`'s
+`notify_when_idle` input, a second idle signal next to the Stop hook. The
+Stop hook stays the report channel.
+
+The three role skills (`skills/team-role-*/SKILL.md`) now allow an agent to
+use `SendMessage` to ask another team agent or the orchestrator a question
+mid-task, while the deliverable stays a file and REPORT stays the only
+report channel.
+
+This increment does not have the Stop hook post to the orchestrator's own
+messaging socket: `CLAUDE_CODE_MESSAGING_SOCKET` names the posting session's
+own socket, not a way to reach another session. The REPORT ping and brief
+kick-off stay on Herdr.
+
+Version gate: `notify_when_idle` requires Claude Code v2.1.236 or later in
+both the orchestrator's session and the agent's session
+(code.claude.com/docs/en/cross-session-messaging, "Get a notice when another
+session goes idle"). Without it, `SendMessage`'s `notify_when_idle` input is
+refused; fall back to rule 8 (poll idle agents by hand) until every session
+in the team is on a new enough version.

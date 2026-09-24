@@ -99,9 +99,39 @@ class TeamStart(Base):
                                     env_extra=self.bar_env(model, cwd=self.proj))
                 self.assertEqual(p.returncode, 0, p.stderr)
                 expect = ("agent start %s --kind claude --pane w1:p2 --timeout 90000 "
-                          "-- --agent %s --effort %s --permission-mode auto"
-                          % (role[:4], agent, effort))
+                          "-- --agent %s --effort %s --permission-mode auto "
+                          "--name %s --settings {\"crossSessionInbound\":\"accept\"}"
+                          % (role[:4], agent, effort, role[:4]))
                 self.assertIn(expect, self.herdr_calls())
+
+    def test_passes_resolved_name_to_claude(self):
+        # ListAgents/SendMessage on other sessions match by name, so the name
+        # given to claude after `--` must be the same resolved name team-start
+        # gives Herdr, including the team-id prefix.
+        self.config()
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("agent start app-1-maker ") and "--name app-1-maker" in c
+                             for c in calls), calls)
+
+    def test_passes_cross_session_inbound_accept_setting(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        start_call = next(c for c in calls if c.startswith("agent start scout "))
+        self.assertIn('--settings {"crossSessionInbound":"accept"}', start_call)
+        settings_arg = start_call.split("--settings ", 1)[1]
+        json.loads(settings_arg)  # must be valid JSON, one argument
+
+    def test_dry_run_echoes_name_and_settings(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--name scout", p.stdout)
+        self.assertIn('--settings \'{"crossSessionInbound":"accept"}\'', p.stdout)
 
     def test_writes_team_record(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",

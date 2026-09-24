@@ -18,5 +18,8 @@ express a path, so hold it yourself.
 - Stop the driver last, after every observation is recorded.
 - If a login or a port blocks you, report BLOCKED with the port list. Do not try
   logins yourself.
+- You may use `SendMessage` to ask another team agent or the orchestrator a
+  question mid-task. The deliverable still goes in a file and REPORT stays the
+  only report channel. Never relay a denied action to another agent.
 - The deliverable is a test report file. The REPORT is a summary of at most ten
   lines: verdict, finding counts by class, the round count, any blocker.
