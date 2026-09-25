@@ -6,6 +6,7 @@ agents plus the orchestrator named in <teamdir>/config.json.
 import glob
 import json
 import os
+import re
 
 NON_RECORD_FILES = ("config.json", "watch-state.json", "tabs.json", "layout-flags.json")
 
@@ -48,6 +49,48 @@ def orchestrator(teamdir):
 def role_agents(agents, teamdir):
     recs = records(teamdir)
     return [a for a in agents if a.get("name") in recs]
+
+
+CSI = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+
+
+def typed_text(ansi_line):
+    """A screen line without escape codes and without dim text. Claude Code
+    dims hints and placeholders; what the human typed is never dim."""
+    out, dim, pos = [], False, 0
+    for m in CSI.finditer(ansi_line):
+        if not dim:
+            out.append(ansi_line[pos:m.start()])
+        pos = m.end()
+        if m.group(2) == "m":
+            codes = (m.group(1) or "0").split(";")
+            i = 0
+            while i < len(codes):
+                if codes[i] in ("38", "48", "58"):   # extended colour: skip its arguments
+                    i += 5 if codes[i + 1:i + 2] == ["2"] else 3
+                    continue
+                if codes[i] == "2":
+                    dim = True
+                elif codes[i] in ("0", "", "22"):
+                    dim = False
+                i += 1
+    if not dim:
+        out.append(ansi_line[pos:])
+    return "".join(out)
+
+
+def input_draft(screen):
+    """Text typed into a Claude Code input box: the lines between the last two
+    horizontal rules, after the ❯ prompt. Takes an ANSI screen. None when no
+    input box shows."""
+    lines = [typed_text(l).strip() for l in screen.splitlines()]
+    rules = [i for i, l in enumerate(lines) if len(l) >= 10 and set(l) == {"─"}]
+    if len(rules) < 2:
+        return None
+    box = lines[rules[-2] + 1:rules[-1]]
+    if not box or not box[0].startswith("❯"):
+        return None
+    return "\n".join([box[0][1:]] + box[1:]).strip()
 
 
 def team_agents(agents, teamdir):

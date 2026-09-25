@@ -7,6 +7,7 @@ set -uo pipefail
 
 payload="$(cat)"
 
+PLUGIN_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../bin" && pwd)" \
 PAYLOAD="$payload" python3 - <<'PY' || true
 import os, json, subprocess, datetime, sys, re
 
@@ -94,9 +95,15 @@ try:
             reldir = os.environ.get("TEAM_SCRATCH", "scratchpad")
             line = ("REPORT %s %s: stopped without a REPORT line - read %s/reports/%s-%s.md"
                     % (name, topic, reldir, name, topic))
+        # team-deliver may wait minutes for a human draft to clear, so it runs
+        # in its own session: the worker's stop never waits on it.
         try:
-            subprocess.run(["herdr", "agent", "prompt", orch, line],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            os.makedirs(teamdir, exist_ok=True)
+            deliver = os.path.join(os.environ["PLUGIN_BIN"], "team-deliver")
+            subprocess.Popen([deliver, orch, line], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=open(os.path.join(teamdir, "hook.log"), "a"),
+                             start_new_session=True)
         except Exception as e:
             log("forward failed: %s" % e)
 except Exception as e:

@@ -58,6 +58,7 @@ Or install from the marketplace once published:
 | `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
 | `team-slice <branch> <parent>` | Create a worktree and a Herdr tab for one slice. |
 | `team-watch` | Poll each team's agents, push `WATCH` lines on state change, and keep the layout within budget. |
+| `team-deliver <agent> <text>` | Submit a prompt, but wait while the agent's input box holds a human draft (sends anyway after 5 min). Used for `REPORT` and `WATCH` lines. |
 | `team-status` | Merge `herdr agent list` with `.team/` records into a roster. |
 
 ## Roles

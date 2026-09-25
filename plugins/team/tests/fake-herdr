@@ -21,6 +21,14 @@ printf '%s\n' "$*" >>"$log"
 emit() { printf '%s\n' "$1"; }
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 
+# A Claude Code screen (ANSI) whose input box holds $1 (empty for an empty
+# box). Claude Code draws the ❯ prompt grey, then a no-break space.
+claude_screen() {
+  local rule=$'\e[38;2;136;136;136m────────────────────────────────\e[0m'
+  printf 'earlier output\n%s\n\e[0m\e[38;2;153;153;153m❯\302\240\e[0m%s\n%s\n  status line\n' \
+    "$rule" "$1" "$rule"
+}
+
 case "$group $sub" in
   "pane split")
     emit '{"result":{"pane":{"pane_id":"w1:p9"}}}' ;;
@@ -86,6 +94,14 @@ case "$group $sub" in
    Yes, I trust this folder'
     elif [ "$scenario" = "prompt_blocked_midrun" ]; then
       emit 'Allow Bash(rm -rf build)? [y/n]'
+    elif [ "$scenario" = "box_empty" ]; then
+      claude_screen ""
+    elif [ "$scenario" = "box_queued_hint" ]; then
+      claude_screen $'\e[2mPress up to edit queued messages\e[0m'
+    elif [ "$scenario" = "draft_stuck" ]; then
+      claude_screen "half typed"
+    elif [ "$scenario" = "draft_then_clear" ]; then
+      if [ "$same_before" -lt 2 ]; then claude_screen "half typed"; else claude_screen ""; fi
     else
       emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
     fi ;;

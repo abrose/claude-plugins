@@ -394,8 +394,14 @@ enabled, so it must be silent and cheap when it does not apply:
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,
    timestamp). Overwrite on every stop, so the file always holds the latest.
 4. Push a line to the orchestrator pane on every stop, so it never waits on a
-   worker that is already done: `herdr agent prompt <orchestrator> "<line>"`,
+   worker that is already done: `team-deliver <orchestrator> "<line>"`, started
+   detached so the stop does not wait on it,
    where `<orchestrator>` comes from `.team/config.json` (default `orchestrator`).
+   `team-deliver` reads the orchestrator screen first. While the Claude Code
+   input box holds a human draft, it checks again every 2s, so the line never
+   merges into the draft; after 5 min it sends anyway and appends a line to
+   `.team/hook.log`. A screen without an input box sends at once.
+   `team-watch` pushes its `WATCH` lines the same way.
    The `<line>` is the first line in the message that starts with `REPORT ` (found
    anywhere, not only at the start), or, when the message has none, a synthesized
    `REPORT <name> <topic>: stopped without a REPORT line - read <report path>`.

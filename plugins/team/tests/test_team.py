@@ -10,7 +10,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +66,17 @@ class Base(unittest.TestCase):
     def herdr_calls(self):
         with open(self.herdr_log) as f:
             return [l.rstrip("\n") for l in f if l.strip()]
+
+    def wait_for_calls(self, matches, timeout=5.0):
+        """Poll the herdr log until a call satisfies `matches`, for work that a
+        script hands to a background process. Returns all calls either way."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            calls = self.herdr_calls()
+            if any(matches(c) for c in calls):
+                return calls
+            time.sleep(0.05)
+        return self.herdr_calls()
 
     def git_calls(self):
         with open(self.git_log) as f:
@@ -706,6 +719,87 @@ class TeamStatus(Base):
                                  "state": "idle", "role": "", "topic": "", "report_age": "-"})
 
 
+class InputDraft(unittest.TestCase):
+    # Screen lines recorded from a real Claude Code pane via `herdr agent read --format ansi`.
+    RULE = "\x1b[0m\x1b[38;2;136;136;136m" + "─" * 40 + "\x1b[0m"
+    PROMPT = "\x1b[0m\x1b[38;2;153;153;153m❯\xa0\x1b[0m"
+
+    def draft(self, screen):
+        sys.path.insert(0, os.path.join(ROOT, "lib"))
+        try:
+            from teamlib import input_draft
+        finally:
+            sys.path.pop(0)
+        return input_draft(screen)
+
+    def box(self, line):
+        return "\n".join(["output", self.RULE, line, self.RULE, "status"])
+
+    def test_typed_text_is_a_draft(self):
+        self.assertEqual(self.draft(self.box(self.PROMPT + "hello draft")), "hello draft")
+
+    def test_dim_hint_is_not_a_draft(self):
+        hint = "\x1b[2mPress up to edit queued messages\x1b[0m"
+        self.assertEqual(self.draft(self.box(self.PROMPT + hint)), "")
+
+    def test_truecolor_text_is_not_mistaken_for_dim(self):
+        # The 2 in 38;2;r;g;b selects truecolor; it is not the dim attribute.
+        self.assertEqual(self.draft(self.box("\x1b[38;2;153;153;153m❯\xa0hello")), "hello")
+
+    def test_no_input_box(self):
+        self.assertIsNone(self.draft("Allow Bash(rm -rf build)? [y/n]"))
+
+
+class TeamDeliver(Base):
+    # Short timings so a waiting delivery finishes in well under a second.
+    FAST = {"TEAM_DELIVER_INTERVAL": "0.05", "TEAM_DELIVER_CAP": "0.3"}
+
+    def deliver(self, scenario):
+        return self.run_script("team-deliver", "orch", "REPORT scout digest: done",
+                               scenario=scenario, env_extra=self.FAST)
+
+    def screen_reads_before_prompt(self):
+        calls = self.herdr_calls()
+        prompt_at = next(i for i, c in enumerate(calls) if c.startswith("agent prompt "))
+        return [c for c in calls[:prompt_at] if c.startswith("agent read orch")]
+
+    def test_empty_input_box_sends_at_once(self):
+        p = self.deliver("box_empty")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
+        self.assertEqual(len(self.screen_reads_before_prompt()), 1, self.herdr_calls())
+
+    def test_waits_while_the_human_has_a_draft(self):
+        # The reported bug: a prompt submitted while the human is half-way
+        # through typing in the orchestrator gets their draft prepended to it.
+        p = self.deliver("draft_then_clear")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
+        self.assertEqual(len(self.screen_reads_before_prompt()), 3, self.herdr_calls())
+        self.assertEqual(p.stderr, "")
+
+    def test_sends_anyway_after_the_cap_and_says_so(self):
+        p = self.deliver("draft_stuck")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
+        self.assertIn("orch still had a draft after 0.3s, sent anyway", p.stderr)
+
+    def test_dim_hint_in_input_box_is_not_a_draft(self):
+        # Claude Code shows this hint, dimmed, while a message is queued.
+        p = self.deliver("box_queued_hint")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
+        self.assertEqual(len(self.screen_reads_before_prompt()), 1, self.herdr_calls())
+        self.assertEqual(p.stderr, "")
+
+    def test_screen_without_input_box_sends_at_once(self):
+        # A dialog or a non-Claude agent: nothing to protect, so no wait.
+        p = self.deliver("ok")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
+        self.assertEqual(len(self.screen_reads_before_prompt()), 1, self.herdr_calls())
+
+
 class StopHook(Base):
     HOOK = os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")
 
@@ -739,8 +833,9 @@ class StopHook(Base):
                            "cwd": self.proj}, TEAM_NAME="scout")
 
         self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
-                            for c in self.herdr_calls()), self.herdr_calls())
+                            for c in calls), calls)
 
     def test_reports_after_agent_moves_its_cwd(self):
         # An agent may cd into scratchpad/ or a worktree. team-start stamps an
@@ -754,8 +849,9 @@ class StopHook(Base):
 
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
-                            for c in self.herdr_calls()), self.herdr_calls())
+                            for c in calls), calls)
 
     def test_no_team_name_is_silent(self):
         self.write_record("scout", "investigator", topic="digest")
@@ -801,8 +897,36 @@ class StopHook(Base):
         tr = self.transcript("REPORT scout digest: done, 2 files")
         p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
-                            for c in self.herdr_calls()))
+                            for c in calls), calls)
+
+    def test_holds_report_until_orchestrator_draft_clears(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout",
+                          FAKE_HERDR_SCENARIO="draft_then_clear", TEAM_DELIVER_INTERVAL="0.05")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
+        reads = [c for c in calls if c.startswith("agent read orchestrator")]
+        self.assertEqual(len(reads), 3, calls)
+        self.assertEqual(calls[-1], "agent prompt orchestrator REPORT scout digest: done")
+
+    def test_stop_does_not_wait_for_the_draft(self):
+        # The worker's stop returns while delivery is still waiting.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        started = time.monotonic()
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout",
+                          FAKE_HERDR_SCENARIO="draft_stuck", TEAM_DELIVER_INTERVAL="0.05",
+                          TEAM_DELIVER_CAP="1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertLess(time.monotonic() - started, 0.8)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
+        self.assertIn("agent prompt orchestrator REPORT scout digest: done", calls)
+        log = read_text(os.path.join(self.proj, "scratchpad", ".team", "hook.log"))
+        self.assertIn("orchestrator still had a draft after 1s, sent anyway", log)
 
     def test_forwards_report_line_after_status_bar(self):
         # The reported bug: a status-bar first line (workers inherit the rule)
@@ -813,7 +937,8 @@ class StopHook(Base):
         tr = self.transcript("| status bar |\n\nREPORT scout digest: done, 2 files")
         p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
-        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
+        prompts = [c for c in calls if c.startswith("agent prompt ")]
         self.assertTrue(any("REPORT scout digest: done, 2 files" in c for c in prompts), prompts)
         self.assertFalse(any("status bar" in c for c in prompts), prompts)
 
@@ -824,7 +949,8 @@ class StopHook(Base):
         tr = self.transcript("just some final prose, no report line")
         p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
-        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
+        prompts = [c for c in calls if c.startswith("agent prompt ")]
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest:")
                             for c in prompts), prompts)
         self.assertTrue(any("scratchpad/reports/scout-digest.md" in c for c in prompts), prompts)
@@ -997,8 +1123,18 @@ class TeamWatch(Base):
         self.write_record("app-1-scout", "investigator", topic="digest")
         self.run_script("team-watch", "--once", scenario="watch_change")   # baseline: working
         self.run_script("team-watch", "--once", scenario="watch_change")   # now: blocked
-        pushes = [c for c in self.herdr_calls() if c.startswith("agent prompt app-1-orch WATCH")]
-        self.assertTrue(any("app-1-scout: working -> blocked" in c for c in pushes), self.herdr_calls())
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt app-1-orch WATCH"))
+        pushes = [c for c in calls if c.startswith("agent prompt app-1-orch WATCH")]
+        self.assertTrue(any("app-1-scout: working -> blocked" in c for c in pushes), calls)
+
+    def test_watch_line_waits_for_the_orchestrator_input_box(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_change")   # baseline: working
+        self.run_script("team-watch", "--once", scenario="watch_change")   # now: blocked
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt app-1-orch WATCH"))
+        push_at = next(i for i, c in enumerate(calls) if c.startswith("agent prompt app-1-orch"))
+        self.assertTrue(any(c.startswith("agent read app-1-orch") for c in calls[:push_at]), calls)
 
     def test_ignores_agents_not_in_records(self):
         self.cfg()
@@ -1013,7 +1149,8 @@ class TeamWatch(Base):
         self.write_record("app-1-scout", "investigator", topic="digest")
         self.run_script("team-watch", "--once", scenario="watch_change")   # working
         self.run_script("team-watch", "--once", scenario="watch_change")   # blocked
-        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
+        calls = self.wait_for_calls(lambda c: "WATCH" in c)
+        pushes = [c for c in calls if "WATCH" in c]
         self.assertTrue(any("blocked:" in c for c in pushes), pushes)
         self.assertTrue(any("agent read app-1-scout" in c for c in self.herdr_calls()))
 
@@ -1022,6 +1159,8 @@ class TeamWatch(Base):
         self.write_record("app-1-scout", "investigator", topic="digest")
         self.run_script("team-watch", "--once", scenario="watch_idle")   # baseline, flags once
         self.run_script("team-watch", "--once", scenario="watch_idle")   # same state, must NOT flag again
+        self.wait_for_calls(lambda c: "no report" in c)
+        time.sleep(0.3)   # room for a wrong second push to land
         flags = [c for c in self.herdr_calls() if "no report" in c]
         self.assertEqual(len(flags), 1)
 
@@ -1069,13 +1208,16 @@ class TeamWatch(Base):
         self.cfg()
         self.prep_tabs(["w1:t2"])
         self.run_script("team-watch", "--once", scenario="panes_overbudget")
-        self.assertTrue(any("over budget" in c for c in self.herdr_calls()), self.herdr_calls())
+        calls = self.wait_for_calls(lambda c: "over budget" in c)
+        self.assertTrue(any("over budget" in c for c in calls), calls)
 
     def test_layout_flag_pushed_once_across_repeated_passes(self):
         self.cfg()
         self.prep_tabs(["w1:t2"])
         self.run_script("team-watch", "--once", scenario="panes_overbudget")
         self.run_script("team-watch", "--once", scenario="panes_overbudget")
+        self.wait_for_calls(lambda c: "over budget" in c)
+        time.sleep(0.3)   # room for a wrong second push to land
         flags = [c for c in self.herdr_calls() if "over budget" in c]
         self.assertEqual(len(flags), 1)
 

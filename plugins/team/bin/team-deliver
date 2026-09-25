@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Submit a prompt to an agent without merging it into a draft the human is
+# typing there. While the agent's input box holds text, check again every
+# TEAM_DELIVER_INTERVAL seconds (default 2); after TEAM_DELIVER_CAP seconds
+# (default 300) send anyway and say so on stderr. A screen without a Claude
+# Code input box sends at once.
+set -euo pipefail
+
+[ $# -eq 2 ] || { echo "usage: team-deliver <target> <text>" >&2; exit 2; }
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+
+PYTHONPATH="$lib" python3 - "$1" "$2" <<'PY'
+import os, subprocess, sys, time
+from teamlib import input_draft
+
+target, text = sys.argv[1], sys.argv[2]
+interval = float(os.environ.get("TEAM_DELIVER_INTERVAL", "2"))
+cap = float(os.environ.get("TEAM_DELIVER_CAP", "300"))
+
+def draft():
+    read = subprocess.run(["herdr", "agent", "read", target, "--source", "visible", "--format", "ansi"],
+                          capture_output=True, text=True)
+    return input_draft(read.stdout) if read.returncode == 0 else None
+
+deadline = time.monotonic() + cap
+while draft():
+    if time.monotonic() >= deadline:
+        print("%s still had a draft after %gs, sent anyway" % (target, cap),
+              file=sys.stderr, flush=True)
+        break
+    time.sleep(interval)
+
+sys.exit(subprocess.run(["herdr", "agent", "prompt", target, text],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode)
+PY

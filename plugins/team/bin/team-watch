@@ -9,6 +9,7 @@ scratch="${TEAM_SCRATCH:-scratchpad}"
 teamdir="$scratch/.team"
 interval=5; once=""; spawn=""; own_pane_arg=""
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while [ $# -gt 0 ]; do
   case "$1" in
     --once) once=1; shift ;;
@@ -24,6 +25,12 @@ orch() { python3 -c "import json;print(json.load(open('$teamdir/config.json')).g
 pane_id_of() { python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['pane_id'])"; }
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+# Send one WATCH line in the background: team-deliver may wait for a human
+# draft in the orchestrator input box, and the watch loop must keep running.
+push() {
+  { "$bin/team-deliver" "$1" "WATCH $2" 2>&1 >/dev/null | while IFS= read -r l; do log "$l"; done; } &
+}
 
 # Split a pane off the orchestrator pane and run the watcher there by absolute
 # path, passing the new pane id as --own-pane. `herdr pane current` resolves the
@@ -105,7 +112,7 @@ PY
       line="$line: $dlg"
     fi
     log "$line"
-    herdr agent prompt "$orchestrator" "WATCH $line" >/dev/null 2>&1 || true
+    push "$orchestrator" "$line"
   done <<<"$lines"
 
   # Layout hygiene: close empty panes and flag budget/idle issues in team-managed tabs.
@@ -181,7 +188,7 @@ PY
     [ -n "$verb" ] || continue
     case "$verb" in
       close) log "closed empty pane $rest"; herdr pane close "$rest" >/dev/null 2>&1 || true ;;
-      flag)  log "$rest"; herdr agent prompt "$orchestrator" "WATCH $rest" >/dev/null 2>&1 || true ;;
+      flag)  log "$rest"; push "$orchestrator" "$rest" ;;
     esac
   done <<<"$hy"
 }
