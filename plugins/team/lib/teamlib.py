@@ -38,6 +38,20 @@ def fresh_report(scratch, name, rec):
     return not (os.path.exists(brief) and os.path.getmtime(report) < os.path.getmtime(brief))
 
 
+def report_age(scratch, name, topic, now):
+    """The agent's report age as 5m / 3h / 2d, "-" without a report, and
+    whether the report is missing or older than the agent's brief."""
+    report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
+    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
+    if not os.path.exists(report):
+        return "-", True
+    r_mtime = os.path.getmtime(report)
+    s = int(now - r_mtime)
+    age = "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600) if s < 86400 else "%dd" % (s // 86400)
+    stale = os.path.exists(brief) and r_mtime < os.path.getmtime(brief)
+    return age, stale
+
+
 def orchestrator(teamdir):
     try:
         with open(os.path.join(teamdir, "config.json")) as fh:

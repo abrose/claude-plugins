@@ -158,6 +158,16 @@ case "$group $sub" in
         ]}}' ;;
       name_scout_taken)
         emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
+      overview)
+        emit '{"result":{"agents":[
+          {"name":"app-1-orch","pane_id":"w2:p1","agent_status":"working","agent_session":{"value":"oooo0000dddd"}},
+          {"name":"app-1-impl","pane_id":"w2:p3","agent_status":"working","agent_session":{"value":"33333333aaaa"}},
+          {"name":"app-1-rev","pane_id":"w2:p4","agent_status":"idle","agent_session":{"value":"44444444bbbb"}},
+          {"name":"app-2-maker","pane_id":"w3:p2","agent_status":"working","agent_session":{"value":"55555555cccc"}},
+          {"pane_id":"w2:pB","agent_status":"idle","agent_session":{"value":"c23a1be5eeee"}}
+        ]}}' ;;
+      list_fails)
+        fail '{"error":{"code":"server_unavailable"}}' ;;
       *)
         emit '{"result":{"agents":[]}}' ;;
     esac ;;

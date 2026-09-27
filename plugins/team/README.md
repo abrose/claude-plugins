@@ -58,6 +58,7 @@ Or install from the marketplace once published:
 | `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
 | `team-slice <branch> <parent>` | Create a worktree and a Herdr tab for one slice. |
 | `team-watch` | Poll each team's agents, push `WATCH` lines on state change, and keep the layout within budget. |
+| `team-overview [--spawn]` | Show the plan file (`progress-<ticket>.md`: DONE, RUNNING, NEXT) and the live agents in a pane right of the orchestrator; redraws when either changes. |
 | `team-deliver <agent> <text>` | Submit a prompt, but wait while the agent's input box holds a human draft (sends anyway after 5 min). Used for `REPORT` and `WATCH` lines. |
 | `team-status` | Merge `herdr agent list` with `.team/` records into a roster. |
 

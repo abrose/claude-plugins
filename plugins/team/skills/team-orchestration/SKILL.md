@@ -63,25 +63,32 @@ moment a worker stops. These sixteen rules bind everyone.
 14. A watcher runs per team in the orchestrator tab. It reports every state
     change, flags idle-without-report, and keeps the layout within budget.
     Never sit blind: act on `WATCH` lines.
-15. Pane budgets: the orchestrator tab holds at most 2 panes (you and the
-    watcher); a worker tab holds at most 6, tiled as a 2-column, 3-row grid. A
-    7th agent goes to a new tab. Empty panes in team tabs are closed
-    automatically. Open a worker tab only with `team-start --new-tab`, which
-    puts the first agent in the tab's root pane in your own workspace; add more
-    agents with `--into-tab`. Never create a tab with raw `herdr`.
+15. Pane budgets: the orchestrator tab holds at most 3 panes (you, the
+    overview, and the watcher); a worker tab holds at most 6, tiled as a
+    2-column, 3-row grid. A 7th agent goes to a new tab. Empty panes in team
+    tabs are closed automatically. Open a worker tab only with `team-start
+    --new-tab`, which puts the first agent in the tab's root pane in your own
+    workspace; add more agents with `--into-tab`. Never create a tab with raw
+    `herdr`.
 16. After `team-brief send`, subscribe to the agent with `SendMessage`'s
     `notify_when_idle` input, as a second idle signal next to the Stop hook.
     The Stop hook stays the report channel; a notice that arrives without a
     REPORT is handled by rule 8.
+17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
+    it to the human. Orchestrator-level steps only, never a worker's
+    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
+    role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
+    before every `team-brief send`, and whenever you ask the human to act (a
+    `- [ ] you: <action>` item, moved to DONE when the human confirms).
 
 ## Tools
 
 The orchestrator drives agents through the plugin scripts on `PATH`:
 `team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`, `team-watch`,
-`team-status`. They wrap the Herdr CLI; never restate a Herdr command in
-prose. For the Herdr CLI reference, run `herdr --skill`: that is Herdr's own
-guide, not a plugin skill. There is no `team:herdr` skill; do not try to invoke
-one.
+`team-overview`, `team-status`. They wrap the Herdr CLI; never restate a Herdr
+command in prose. For the Herdr CLI reference, run `herdr --skill`: that is
+Herdr's own guide, not a plugin skill. There is no `team:herdr` skill; do not
+try to invoke one.
 
 Deeper operational lessons live in `references/lessons.md`. It is not
 auto-loaded; read it when you plan a run.

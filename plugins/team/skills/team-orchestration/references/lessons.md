@@ -91,6 +91,9 @@ never here.
 - The watcher pane logs each event and a once-a-minute heartbeat. A watcher pane
   with no heartbeat for over a minute is not running; restart it with
   `team-watch --spawn`.
+- The overview pane (`team-overview`) shares the orchestrator tab, and the
+  watcher never closes it; restart it with `team-overview --spawn` if it is
+  closed.
 
 ## The absent human
 

@@ -795,3 +795,25 @@ Read tool, never a Bash `cat`/`find`/heredoc; create and change files with
 Write/Edit only (Write scoped to scratchpad for the investigator, to test and
 scenario files for the tester); never read, search, or write outside your
 own worktree.
+
+## Increment 2026-09-26
+
+Design: `docs/superpowers/specs/2026-09-25-team-overview-pane-design.md`.
+Adds an overview pane right of the orchestrator that shows run progress at
+the orchestrator level.
+
+The orchestrator keeps a plan file, `progress-<ticket>.md` next to the
+decisions file, as a markdown checklist under DONE, RUNNING and NEXT
+(`[x]`, `[>]`, `[ ]`; human actions start with `you:`). `/team:init` creates
+it from `templates/progress.md`, and SKILL.md rule 17 says when to update it.
+Workers never write it.
+
+New script `team-overview` renders the plan file plus a live AGENTS list
+(label, pane, herdr state, report age) built from `herdr agent list` and the
+`.team` records. Rendering is `lib/overview.py`, pure text; when the frame is
+taller than the pane, DONE gives up its oldest items first. The loop redraws
+only when the frame changes. `--spawn` splits right of the orchestrator pane
+(`--ratio 0.72`); `/team:init` runs it before `team-watch --spawn`, so the
+overview spans the full tab height and the orchestrator tab holds three
+panes. `report_age` moved from `team-status` into `teamlib` so both scripts
+share it.

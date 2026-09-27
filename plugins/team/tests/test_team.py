@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -717,6 +718,242 @@ class TeamStatus(Base):
         scout = [r for r in json.loads(p.stdout) if r["name"] == "app-1-scout"][0]
         self.assertEqual(scout, {"name": "app-1-scout", "pane": "w2:p2", "session": "11111111",
                                  "state": "idle", "role": "", "topic": "", "report_age": "-"})
+
+
+class TeamOverview(Base):
+    NOW = 1800000000
+    PLAN = ("# APP-1 round 2\n\n"
+            "## DONE\n- [x] design (inv)\n\n"
+            "## RUNNING\n- [>] fix round 2 (impl)\n\n"
+            "## NEXT\n- [ ] review round 2 (rev)\n- [ ] you: manual test\n")
+    AGENTS = ["AGENTS", " impl  w2:p3  working  2m", " rev   w2:p4  idle     -"]
+
+    def cfg(self):
+        d = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+
+    def plan(self, text):
+        write_text(os.path.join(self.proj, "scratchpad", "progress-APP-1.md"), text)
+
+    def team(self):
+        # impl reported 2 minutes ago; rev has no report.
+        self.cfg()
+        self.write_record("app-1-impl", "implementer", topic="fix")
+        self.write_record("app-1-rev", "tester", topic="review")
+        reports = os.path.join(self.proj, "scratchpad", "reports")
+        os.makedirs(reports)
+        report = os.path.join(reports, "app-1-impl-fix.md")
+        write_text(report, "done")
+        os.utime(report, (self.NOW - 120, self.NOW - 120))
+
+    def overview(self, columns=60, lines=40, scenario="overview"):
+        return self.run_script("team-overview", "--once", scenario=scenario,
+                               env_extra={"COLUMNS": str(columns), "LINES": str(lines),
+                                          "TEAM_NOW": str(self.NOW)})
+
+    def test_renders_plan_and_live_agents(self):
+        # The orchestrator, another team's agent and a nameless pane are in the
+        # herdr list; only this team's role agents appear, without the team id.
+        self.team()
+        self.plan(self.PLAN)
+        p = self.overview()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.splitlines(), [
+            "APP-1 round 2", "=============",
+            "DONE", " [x] design (inv)",
+            "RUNNING", " [>] fix round 2 (impl)",
+            "NEXT", " [ ] review round 2 (rev)", " [ ] you: manual test",
+        ] + self.AGENTS)
+
+    def test_without_plan_file_says_where_it_goes_and_still_lists_agents(self):
+        self.team()
+        p = self.overview()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(),
+                         ["no plan yet: scratchpad/progress-APP-1.md"] + self.AGENTS)
+
+    def test_without_team_config_asks_for_init(self):
+        p = self.overview()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["no team: run /team:init"])
+
+    def test_herdr_failure_keeps_the_plan(self):
+        self.team()
+        self.plan(self.PLAN)
+        p = self.overview(scenario="list_fails")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        lines = p.stdout.splitlines()
+        self.assertEqual(lines[0], "APP-1 round 2")
+        self.assertEqual(lines[-2:], ["AGENTS", " herdr unavailable"])
+
+    def test_no_role_agents_yet(self):
+        self.cfg()
+        self.plan(self.PLAN)
+        p = self.overview()
+        self.assertEqual(p.stdout.splitlines()[-2:], ["AGENTS", " (none)"])
+
+    def six_done(self):
+        return self.PLAN.replace("- [x] design (inv)\n",
+                                 "".join("- [x] d%d\n" % i for i in range(1, 7)))
+
+    def test_short_pane_keeps_the_newest_done_items(self):
+        # Fixed part: title 2 + DONE heading 1 + RUNNING 2 + NEXT 3 + AGENTS 3 = 11.
+        self.team()
+        self.plan(self.six_done())
+        p = self.overview(lines=13)
+        self.assertEqual(p.stdout.splitlines()[:7], [
+            "APP-1 round 2", "=============",
+            "DONE (+4 earlier)", " [x] d5", " [x] d6",
+            "RUNNING", " [>] fix round 2 (impl)",
+        ])
+
+    def test_tiny_pane_keeps_only_the_done_heading(self):
+        self.team()
+        self.plan(self.six_done())
+        p = self.overview(lines=5)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), [
+            "APP-1 round 2", "=============", "DONE (+6 earlier)",
+            "RUNNING", " [>] fix round 2 (impl)",
+            "NEXT", " [ ] review round 2 (rev)", " [ ] you: manual test",
+        ] + self.AGENTS)
+
+    def test_narrow_pane_cuts_long_lines(self):
+        self.team()
+        self.plan(self.PLAN)
+        p = self.overview(columns=20)
+        lines = p.stdout.splitlines()
+        self.assertIn(" [>] fix round 2 (i…", lines)
+        self.assertIn(" impl  w2:p3  worki…", lines)
+        self.assertTrue(all(len(l) <= 20 for l in lines), lines)
+
+    def test_lenient_markdown_still_renders(self):
+        self.cfg()
+        self.plan("#  APP-1\n## Done\n* [X] design\nnotes here\n## next\n- [ ] ship\n")
+        p = self.overview()
+        self.assertEqual(p.stdout.splitlines(), [
+            "APP-1", "=====", "DONE", " [X] design", "RUNNING", "NEXT", " [ ] ship",
+            "AGENTS", " (none)",
+        ])
+
+    def test_plan_without_title_has_no_underline(self):
+        self.cfg()
+        self.plan("## NEXT\n- [ ] ship\n")
+        p = self.overview()
+        self.assertEqual(p.stdout.splitlines(), [
+            "DONE", "RUNNING", "NEXT", " [ ] ship", "AGENTS", " (none)",
+        ])
+
+    def test_spawn_splits_right_of_the_orchestrator_and_runs_the_loop_there(self):
+        self.cfg()
+        p = self.run_script("team-overview", "--spawn")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "w1:p9")
+        calls = self.herdr_calls()
+        split = [c for c in calls if c.startswith("pane split")]
+        self.assertEqual(len(split), 1, calls)
+        self.assertIn("--pane w1:p1 --direction right --ratio 0.72", split[0])
+        self.assertTrue(split[0].endswith("--no-focus"), split)
+        self.assertTrue(any(c.startswith("pane run w1:p9 ")
+                            and c.endswith("/bin/team-overview --interval 5") for c in calls), calls)
+        # --spawn only launches; it renders nothing itself.
+        self.assertFalse(any(c.startswith("agent list") for c in calls), calls)
+
+    def test_loop_redraws_only_when_the_frame_changes(self):
+        self.team()
+        self.plan(self.PLAN)
+        env = self.env(scenario="overview", COLUMNS="40", LINES="40", TEAM_NOW=str(self.NOW))
+        loop = subprocess.Popen([os.path.join(BIN, "team-overview"), "--interval", "0.1"],
+                                cwd=self.proj, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, start_new_session=True)
+        time.sleep(0.6)
+        self.plan(self.PLAN + "- [ ] ship\n")
+        time.sleep(0.6)
+        os.killpg(loop.pid, signal.SIGTERM)
+        out, err = loop.communicate(timeout=5)
+        self.assertEqual(out.count("\x1b[2J"), 2, out)
+        self.assertIn(" [ ] ship", out)
+        self.assertEqual(err, "")
+
+    def test_herdr_missing_from_path_shows_unavailable(self):
+        self.team()
+        self.plan(self.PLAN)
+        env = self.env(scenario="overview", COLUMNS="60", LINES="40", TEAM_NOW=str(self.NOW))
+        path = os.pathsep.join(p for p in env["PATH"].split(os.pathsep) if p != self.shim)
+        if shutil.which("herdr", path=path):
+            # This machine has a real herdr on PATH. Isolate a shim with only
+            # the tools team-overview needs to start (python3, bash, and the
+            # coreutils its argument parsing and path setup call), so herdr
+            # stays the only thing missing.
+            no_herdr = os.path.join(self.proj, "_no_herdr_shim")
+            os.makedirs(no_herdr, exist_ok=True)
+            for tool in ("python3", "bash", "dirname", "basename"):
+                os.symlink(shutil.which(tool), os.path.join(no_herdr, tool))
+            path = no_herdr
+        env["PATH"] = path
+        p = subprocess.run([os.path.join(BIN, "team-overview"), "--once"],
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.splitlines()[-2:], ["AGENTS", " herdr unavailable"])
+
+    def test_non_utf8_plan_still_renders(self):
+        self.team()
+        path = os.path.join(self.proj, "scratchpad", "progress-APP-1.md")
+        with open(path, "wb") as f:
+            f.write(self.PLAN.encode("utf-8") + b"- [ ] bad \xff byte\n")
+        p = self.overview()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        lines = p.stdout.splitlines()
+        self.assertTrue(any(l.startswith(" [ ] bad ") for l in lines), lines)
+
+    def test_herdr_list_not_json_shows_unavailable(self):
+        self.team()
+        self.plan(self.PLAN)
+        p = self.overview(scenario="bad_list")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.splitlines()[-2:], ["AGENTS", " herdr unavailable"])
+
+    def test_bad_interval_is_bad_args(self):
+        p = self.run_script("team-overview", "--interval", "abc")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("bad --interval: abc", p.stderr)
+
+    def test_wide_characters_are_measured_in_columns(self):
+        sys.path.insert(0, os.path.join(ROOT, "lib"))
+        try:
+            from overview import display_width
+        finally:
+            sys.path.pop(0)
+        self.cfg()
+        self.plan("# APP-1 修复\n\n"
+                 "## RUNNING\n- [>] \U0001f680 修复 the login flow for everyone (impl)\n")
+        p = self.overview(columns=20)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertEqual(lines[1], "=" * 10)
+        self.assertTrue(all(display_width(l) <= 20 for l in lines), lines)
+
+
+class DisplayWidth(unittest.TestCase):
+    def test_widths(self):
+        sys.path.insert(0, os.path.join(ROOT, "lib"))
+        try:
+            from overview import cut, display_width
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(display_width("abc"), 3)
+        self.assertEqual(display_width("修复"), 4)
+        self.assertEqual(display_width("é"), 1)
+        cut_result = cut("修复修复修复", 5)
+        self.assertLessEqual(display_width(cut_result), 5)
+        self.assertTrue(cut_result.endswith("…"))
 
 
 class InputDraft(unittest.TestCase):

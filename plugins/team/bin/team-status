@@ -22,22 +22,11 @@ lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 mkdir -p "$teamdir"
 PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" AS_JSON="$as_json" READ_IDLE="$read_idle" python3 - <<'PY'
 import os, json, time, subprocess
-from teamlib import agent_state, records, team_agents
+from teamlib import agent_state, records, report_age, team_agents
 scratch, teamdir = os.environ["SCRATCH"], os.environ["TEAMDIR"]
 now = int(os.environ.get("TEAM_NOW", int(time.time())))
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
 recs = records(teamdir)
-
-def report_age(name, topic):
-    report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
-    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
-    if not os.path.exists(report):
-        return "-", True
-    r_mtime = os.path.getmtime(report)
-    s = int(now - r_mtime)
-    age = "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600) if s < 86400 else "%dd" % (s // 86400)
-    stale = os.path.exists(brief) and r_mtime < os.path.getmtime(brief)
-    return age, stale
 
 def last_screen_line(name):
     out = subprocess.run(["herdr", "agent", "read", name, "--source", "recent-unwrapped", "--lines", "8"],
@@ -51,7 +40,7 @@ for a in team_agents(agents, teamdir):
     state = agent_state(a)
     rec = recs.get(name, {})
     role, topic = rec.get("role", ""), rec.get("topic", "")
-    age, stale = report_age(name, topic)
+    age, stale = report_age(scratch, name, topic, now)
     rec_out = {"name": name, "pane": a.get("pane_id", ""),
                "session": a.get("agent_session", {}).get("value", "")[:8],
                "state": state, "role": role, "topic": topic, "report_age": age}
