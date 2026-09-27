@@ -5,7 +5,7 @@
 # redraws only when the frame changes.
 set -euo pipefail
 
-scratch="${TEAM_SCRATCH:-scratchpad}"
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
 interval=5; once=""; spawn=""
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 while [ $# -gt 0 ]; do
@@ -27,9 +27,10 @@ pane_id_of() { python3 -c "import sys,json;print(json.load(sys.stdin)['result'][
 # before the watcher splits that pane down, so the overview spans the full tab
 # height. --ratio is the fraction the orchestrator keeps.
 spawn_overview() {
-  local anchor new self
+  local anchor new self scratch_abs
+  scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$scratch")"
   anchor="$(herdr pane current | pane_id_of)" || { echo "cannot resolve orchestrator pane" >&2; exit 4; }
-  new="$(herdr pane split --pane "$anchor" --direction right --ratio 0.72 --cwd "$PWD" --no-focus | pane_id_of)" || exit 4
+  new="$(herdr pane split --pane "$anchor" --direction right --ratio 0.72 --cwd "$PWD" --env "TEAM_SCRATCH=$scratch_abs" --no-focus | pane_id_of)" || exit 4
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   herdr pane run "$new" "$self" --interval "$interval" >/dev/null || exit 4
   echo "$new"

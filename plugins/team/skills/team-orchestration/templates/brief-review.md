@@ -23,5 +23,5 @@ and write a review document only.
 4. Count findings by severity.
 
 ## Output
-- `scratchpad/review-{{topic}}.md`: counts by severity, the top three findings
+- `scratchpad/current/review-{{topic}}.md`: counts by severity, the top three findings
   as file:line with one line each, then the full list grouped by severity.

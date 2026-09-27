@@ -12,13 +12,13 @@ Everything about a specific repository lives in that repository's overlay.
   decides with you. It never does operational work itself - no investigating,
   testing, browsing, or editing. Every such task goes to an agent.
 - Each **role agent** runs in its own Herdr pane, started with `team-start`.
-- A **brief** is a file in `scratchpad/`, composed by `team-brief` from
+- A **brief** is a file in `scratchpad/current/`, composed by `team-brief` from
   templates plus your project overlay. The kick-off prompt is one line pointing
   at the brief.
-- The **decisions file** (`scratchpad/decisions-<ticket>.md`) is the single
+- The **decisions file** (`scratchpad/current/decisions-<ticket>.md`) is the single
   binding source. Every brief reads it first.
 - When an agent stops, a **Stop hook** writes its last message to
-  `scratchpad/reports/<name>-<topic>.md` and forwards a `REPORT` line to the
+  `scratchpad/current/reports/<name>-<topic>.md` and forwards a `REPORT` line to the
   orchestrator pane.
 
 The full protocol is the `team-orchestration` skill. Operational lessons are in
@@ -56,7 +56,7 @@ Or install from the marketplace once published:
 | `team-init <ticket>` | Write the team id and config, seed the safe permission allowlist, record the orchestrator's tab. |
 | `team-start <name> <role>` | Start a role agent in a pane, verify its status bar, record it under `.team/`. `--new-tab` opens a worker tab with the agent in its root pane. |
 | `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
-| `team-slice <branch> <parent>` | Create a worktree and a Herdr tab for one slice. |
+| `team-slice <branch> <parent>` | Create a worktree (with the repo's own `worktree_cmd` from the overlay; refuses without one) and a Herdr tab for one slice. |
 | `team-watch` | Poll each team's agents, push `WATCH` lines on state change, and keep the layout within budget. |
 | `team-overview [--spawn]` | Show the plan file (`progress-<ticket>.md`: DONE, RUNNING, NEXT) and the live agents in a pane right of the orchestrator; redraws when either changes. |
 | `team-deliver <agent> <text>` | Submit a prompt, but wait while the agent's input box holds a human draft (sends anyway after 5 min). Used for `REPORT` and `WATCH` lines. |
@@ -120,7 +120,7 @@ warning.
 
 | Path | Used by | Content |
 |---|---|---|
-| `.claude/team/project.yaml` | `team-slice`, `/team:release`, brief compose | `stacked`, `spdd`, `worktree_cmd`, `worktree_dir`, `release_check`, `gate_cmd` |
+| `.claude/team/project.yaml` | `team-slice`, `/team:release`, brief compose | `stacked`, `spdd`, `worktree_cmd` (required by `team-slice`), `worktree_dir` (required by `team-slice`), `release_check`, `gate_cmd` |
 | `.claude/team/env.md` | brief compose ("Environment") | how to run and test locally; a "Slice kick-off" checklist |
 | `.claude/team/gate.md` | brief compose ("Gate") | test command, lint, the greps a delivery must pass |
 | `.claude/team/tracker.md` | analysis and post-notes briefs | ticket system and hygiene rules |
@@ -129,7 +129,8 @@ warning.
 
 ## Task-scope files
 
-All under `$TEAM_SCRATCH` (default `scratchpad/`, git-ignored):
+All under `$TEAM_SCRATCH` (default `scratchpad/current/`, git-ignored). `/team:init`
+archives the previous run and loose scratchpad entries to `scratchpad/.archive/`.
 `decisions-<ticket>.md`, `orchestration-decisions.md`,
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.team/<name>.json`,
 `.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
@@ -144,7 +145,7 @@ tab, or `--new-tab`), or with a `herdr pane run` export into a caller-provided
 `--pane`. The hook reads `TEAM_NAME`, loads `$TEAM_SCRATCH/.team/<name>.json`,
 and exits silently when the variable is absent (any non-team session) or names
 no record. `TEAM_SCRATCH` is absolute so the hook finds the team dir after the
-agent changes its cwd (into `scratchpad/`, or a worktree).
+agent changes its cwd (into `scratchpad/current/`, or a worktree).
 
 Herdr's `agent_session.value` and Claude Code's `session_id` are **not** the
 same identifier, so a session-id match never fires; the pane environment is the

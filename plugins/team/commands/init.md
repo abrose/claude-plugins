@@ -10,15 +10,19 @@ beyond these steps:
 1. Derive the tab label from the ticket, or use the `--label` argument if given.
    Do not ask which roles the run needs: start agents on demand, when a task
    reveals the need for one.
-2. Write the decisions file from
+2. Run `team-init <ticket> --orchestrator-pane <this pane id>`. It archives the
+   previous run and every loose scratchpad entry to `scratchpad/.archive/`,
+   then writes the team id, the config, the safe permission baseline, records
+   this tab, and renames this pane's agent to `<team_id>-orch`. Pass on any
+   `worktree inside scratchpad` warning to the human. If it exits non-zero,
+   stop and report its stderr to the human; do not write any file or continue
+   with the next steps.
+3. Write the decisions file from
    `${CLAUDE_PLUGIN_ROOT}/skills/team-orchestration/templates/decisions.md`
-   into `${TEAM_SCRATCH:-scratchpad}/decisions-<ticket>.md`. Refuse to overwrite.
-3. Write the plan file from
+   into `${TEAM_SCRATCH:-scratchpad/current}/decisions-<ticket>.md`. Refuse to overwrite.
+4. Write the plan file from
    `${CLAUDE_PLUGIN_ROOT}/skills/team-orchestration/templates/progress.md`
-   into `${TEAM_SCRATCH:-scratchpad}/progress-<ticket>.md`. Refuse to overwrite.
-4. Run `team-init <ticket> --orchestrator-pane <this pane id>`. It writes the
-   team id, the config, the safe permission baseline, records this tab, and
-   renames this pane's agent to `<team_id>-orch`.
+   into `${TEAM_SCRATCH:-scratchpad/current}/progress-<ticket>.md`. Refuse to overwrite.
 5. Start the overview: `team-overview --spawn`. It splits a pane right of this
    pane and shows the plan file and the live agents there. Run it before the
    watcher, so the overview spans the full tab height.

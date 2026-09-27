@@ -12,7 +12,8 @@ express a path, so hold it yourself.
 - Read files with the Read tool, never a Bash `cat`/`find`/heredoc. Create and
   change test and scenario files with Write/Edit only. Never read, search, or
   write outside your own worktree; if a step seems to need that, stop and
-  report instead.
+  report instead. Never read, list, or search `scratchpad/.archive/`; it holds
+  earlier runs.
 - Fill the environment table first: what runs where, which ports, which login
   state. Test against real services, never a mock.
 - Run one probe per round. Record expected versus observed for each scenario.

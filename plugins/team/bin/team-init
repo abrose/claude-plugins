@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 # Establish a team: team id, config, allowlist baseline, orchestrator tab record.
-# Exit codes: 0 ok, 1 refused (already initialised), 2 bad arguments, 4 herdr error.
+# Exit codes: 0 ok, 1 refused (live agents, worktree in the way, or archive
+# failed), 2 bad arguments, 4 herdr error.
 set -euo pipefail
 
 usage() { echo "usage: team-init <ticket> [--orchestrator-pane <id>]" >&2; exit 2; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-scratch="${TEAM_SCRATCH:-scratchpad}"
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
+while [[ "$scratch" == */ ]]; do scratch="${scratch%/}"; done
 teamdir="$scratch/.team"
 
-json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
+json_get() { python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+print(d.get('$1', '') if isinstance(d, dict) else '')
+"; }
 
 [ $# -ge 1 ] || usage
 ticket="$1"; shift
@@ -21,37 +30,121 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-mkdir -p "$teamdir"
-
-# A previous team's dir is still here. If none of its agents is live, archive
-# it and continue; a team with a live agent still needs it, so refuse as
-# before and name the live agents.
-if [ -e "$teamdir/config.json" ]; then
-  old_team_id="$(json_get team_id <"$teamdir/config.json")"
-  old_ticket="$(json_get ticket <"$teamdir/config.json")"
-  live="$(OLD_TEAM_ID="$old_team_id" python3 -c "
+# A previous team whose agents are still live needs its files: refuse and name
+# them. Otherwise the previous run and every loose scratchpad entry move to
+# .archive/, out of sight of the new run. Check both the current-layout team
+# dir ($scratch/.team) and the old flat layout (<scratch root>/.team), since a
+# team started before scratchpad/current existed still keeps its state there.
+check_live_team() {
+  cfg="$1"
+  [ -e "$cfg" ] || return 0
+  tid="$(json_get team_id <"$cfg")"
+  result="$(OLD_TEAM_ID="$tid" python3 -c "
 import json, os, subprocess
 tid = os.environ['OLD_TEAM_ID']
 try:
     out = subprocess.run(['herdr', 'agent', 'list'], capture_output=True, text=True)
-    d = json.loads(out.stdout)
-    names = [a.get('name') for a in d.get('result', {}).get('agents', []) if a.get('name')]
-except Exception:
-    names = []
-live = [n for n in names if tid and (n == tid or n.startswith(tid + '-'))]
-print(' '.join(live))
+except OSError as e:
+    print('ERROR:cannot run herdr: %s' % e)
+else:
+    if out.returncode != 0:
+        reason = (out.stderr or out.stdout).strip() or 'exit %d' % out.returncode
+        print('ERROR:%s' % reason)
+    else:
+        try:
+            d = json.loads(out.stdout)
+        except ValueError as e:
+            print('ERROR:bad output from herdr agent list: %s' % e)
+        else:
+            names = [a.get('name') for a in d.get('result', {}).get('agents', []) if a.get('name')]
+            live = [n for n in names if tid and (n == tid or n.startswith(tid + '-'))]
+            print('OK:' + ' '.join(live))
 ")"
+  case "$result" in
+    ERROR:*)
+      echo "cannot check live agents: ${result#ERROR:}" >&2
+      exit 1
+      ;;
+  esac
+  live="${result#OK:}"
   if [ -n "$live" ]; then
-    echo "already initialised: $teamdir/config.json (live agents: $live)" >&2
+    echo "already initialised: $cfg (live agents: $live)" >&2
     exit 1
   fi
-  archive_base="$scratch/.team-${old_ticket:-$old_team_id}"
-  archive="$archive_base"
-  n=2
-  while [ -e "$archive" ]; do archive="$archive_base-$n"; n=$((n + 1)); done
-  mv "$teamdir" "$archive"
-  mkdir -p "$teamdir"
+}
+
+scratch_root="$(dirname "$scratch")"
+old_teamdir="$scratch_root/.team"
+
+check_live_team "$teamdir/config.json"
+if [ "$old_teamdir" != "$teamdir" ]; then
+  check_live_team "$old_teamdir/config.json"
 fi
+
+SCRATCH="$scratch" python3 - <<'PY' || exit 1
+import datetime, json, os, shutil, sys
+
+scratch = os.path.normpath(os.environ["SCRATCH"])
+root = os.path.dirname(scratch) or "."
+archive = os.path.join(root, ".archive")
+today = os.environ.get("TEAM_TODAY") or datetime.date.today().isoformat()
+
+def holds_git(path):
+    if os.path.basename(path) == ".git":
+        return True
+    if os.path.islink(path) or not os.path.isdir(path):
+        return False
+    for _, dirs, files in os.walk(path):
+        if ".git" in dirs or ".git" in files:
+            return True
+    return False
+
+def free_name(base):
+    path, n = os.path.join(archive, base), 2
+    while os.path.lexists(path):
+        path, n = os.path.join(archive, "%s-%d" % (base, n)), n + 1
+    return path
+
+def move(src, dst):
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src, dst)
+    except OSError as e:
+        sys.exit("cannot archive %s: %s" % (src, e))
+
+if os.path.isdir(scratch) and os.listdir(scratch):
+    if holds_git(scratch):
+        bad = next((os.path.join(scratch, e) for e in sorted(os.listdir(scratch)) if holds_git(os.path.join(scratch, e))),
+                   scratch)
+        if os.path.basename(scratch) == "current":
+            advice = "move it out with git worktree move"
+        else:
+            advice = "set TEAM_SCRATCH to a run dir such as scratchpad/current"
+        sys.exit("refusing to archive %s: %s holds a git worktree; %s" % (scratch, bad, advice))
+    try:
+        with open(os.path.join(scratch, ".team", "config.json")) as fh:
+            data = json.load(fh)
+        ticket = str(data.get("ticket") or "") if isinstance(data, dict) else ""
+    except (OSError, ValueError, AttributeError, TypeError):
+        ticket = ""
+    move(scratch, free_name("%s-%s" % (ticket.replace("/", "-") or "run", today)))
+
+if os.path.isdir(root) and os.path.basename(os.path.abspath(root)) == "scratchpad":
+    keep = {os.path.basename(scratch), ".archive"}
+    loose = None
+    for entry in sorted(os.listdir(root)):
+        src = os.path.join(root, entry)
+        if entry in keep:
+            continue
+        if holds_git(src):
+            print("❗️ worktree inside scratchpad: %s - move it out with git worktree move" % src,
+                  file=sys.stderr)
+            continue
+        loose = loose or free_name("loose-%s" % today)
+        move(src, os.path.join(loose, entry))
+PY
+
+mkdir -p "$teamdir"
 
 # Pick a team id whose <team_id>-* name namespace is free among live herdr
 # agents, so two teams (e.g. a prior run for the same ticket) never share names

@@ -24,5 +24,5 @@ You must NOT: edit or write any file outside `tests/` and scenario files.
    logins yourself.
 
 ## Output
-- `scratchpad/test-report-{{topic}}.md`: environment table, scenario rows
+- `scratchpad/current/test-report-{{topic}}.md`: environment table, scenario rows
   (expected versus observed), findings with their class, the round count.

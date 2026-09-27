@@ -8,7 +8,7 @@ description: The orchestrator-plus-team-agents protocol. One session you talk to
 You run or take part in a team workflow. One orchestrator session talks to the
 human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
 Reports arrive as files through a Stop hook, which also pings the orchestrator the
-moment a worker stops. These sixteen rules bind everyone.
+moment a worker stops. These nineteen rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
    composes the team on demand: it starts an agent when a task needs one, and
@@ -27,7 +27,7 @@ moment a worker stops. These sixteen rules bind everyone.
    investigating - one read, then delegate.
 2. The human decides. The orchestrator recommends with one sentence of reasoning
    and names the option it leans to.
-3. Briefs are files in `scratchpad/`. Prompts are one line pointing at the brief.
+3. Briefs are files in `scratchpad/current/`. Prompts are one line pointing at the brief.
    Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
@@ -56,7 +56,7 @@ moment a worker stops. These sixteen rules bind everyone.
     survives in condensed form. Confirm the reset landed (the agent reports a
     cleared or compacted context) before you send the next brief.
 12. When the human is away, the orchestrator writes every own call to
-    `scratchpad/orchestration-decisions.md` with context, so it can be audited.
+    `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
@@ -80,6 +80,12 @@ moment a worker stops. These sixteen rules bind everyone.
     role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
     before every `team-brief send`, and whenever you ask the human to act (a
     `- [ ] you: <action>` item, moved to DONE when the human confirms).
+18. The run's files live only in `scratchpad/current/`. Never read, list or
+    search `scratchpad/.archive/` unless the human asks about an earlier run.
+19. Create a worktree only with `team-slice`, which uses the repo's own
+    worktree tooling from `.claude/team/project.yaml`. If it refuses for lack
+    of an overlay, ask the human how this repo makes worktrees. Never run
+    `git worktree add` yourself, and never put a worktree inside `scratchpad/`.
 
 ## Tools
 

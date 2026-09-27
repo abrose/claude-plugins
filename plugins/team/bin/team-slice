@@ -46,10 +46,12 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$label" ] || usage
 
+# The plugin never picks where a worktree goes: each repo says how it makes
+# worktrees, and a repo with its own tooling keeps using it.
 worktree_cmd="$(yget worktree_cmd)"
-[ -n "$worktree_cmd" ] || worktree_cmd='git worktree add -b {branch} scratchpad/wt-{branch} {parent}'
+[ -n "$worktree_cmd" ] || { echo "no worktree_cmd in $project - ask the human how this repo makes worktrees" >&2; exit 2; }
 worktree_dir="$(yget worktree_dir)"
-[ -n "$worktree_dir" ] || worktree_dir="scratchpad/wt-$branch"
+[ -n "$worktree_dir" ] || { echo "no worktree_dir in $project - ask the human how this repo makes worktrees" >&2; exit 2; }
 
 cmd="${worktree_cmd//\{branch\}/$branch}"
 cmd="${cmd//\{parent\}/$parent}"
@@ -62,8 +64,8 @@ if [ "$(yget stacked)" = "true" ]; then
 fi
 
 if [ "${#copies[@]}" -gt 0 ]; then
-  mkdir -p "$wt/scratchpad"
-  for d in "${copies[@]}"; do cp -R "$d" "$wt/scratchpad/"; done
+  mkdir -p "$wt/scratchpad/current"
+  for d in "${copies[@]}"; do cp -R "$d" "$wt/scratchpad/current/"; done
   [ "$(yget spdd)" = "true" ] && echo "warning: untracked spdd files under a copied dir do not travel" >&2
 fi
 

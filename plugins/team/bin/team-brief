@@ -13,7 +13,7 @@ usage() {
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 templates="$plugin_root/skills/team-orchestration/templates"
 overlay="${TEAM_OVERLAY:-.claude/team}"
-scratch="${TEAM_SCRATCH:-scratchpad}"
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
 teamdir="$scratch/.team"
 
 json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
@@ -143,22 +143,22 @@ PY
   # the brief and the decisions file from the orchestrator's own tree, then
   # never hand the agent a path outside its own working directory:
   # `blockReadsOutsideWorkingDirectories` would block on a dialog. Mirror both
-  # into the worktree's own scratchpad, and name the brief by the path the
-  # agent sees from its own cwd.
+  # into the worktree's own run dir (scratchpad/current), and name the brief
+  # by the path the agent sees from its own cwd.
   agent_cwd="$(json_get cwd <"$jf" 2>/dev/null || true)"
   here_abs="$(python3 -c "import os;print(os.path.realpath('.'))")"
   brief_ref="$brief"
   if [ -n "$agent_cwd" ]; then
     agent_cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$agent_cwd")"
     if [ "$agent_cwd_abs" != "$here_abs" ]; then
-      target_scratch="$agent_cwd_abs/scratchpad"
+      target_scratch="$agent_cwd_abs/scratchpad/current"
       mkdir -p "$target_scratch"
       cp "$brief" "$target_scratch/"
       ticket=""
       [ -f "$teamdir/config.json" ] && ticket="$(json_get ticket <"$teamdir/config.json")"
       decisions_file="$scratch/decisions-$ticket.md"
       [ -n "$ticket" ] && [ -f "$decisions_file" ] && cp "$decisions_file" "$target_scratch/"
-      brief_ref="scratchpad/$(basename "$brief")"
+      brief_ref="scratchpad/current/$(basename "$brief")"
     fi
   fi
 

@@ -43,7 +43,7 @@ on a Rust repo with no Jira and no stacked branches.
 | Kernel | this plugin | `plugins/team/` | protocol, brief skeleton, role rules, commands, scripts |
 | Toolchain | Alfred's environment, global | Herdr CLI (`herdr --skill` for its guide), git worktrees + machete, Claude Code | `herdr agent prompt --wait`, `git m update` guarded |
 | Overlay | the project repository | `.claude/team/`, `.claude/skills/project-<role>/` | ports, tunnels, gate command, tracker hygiene, probe rules |
-| Task | one ticket, ephemeral | `scratchpad/` (git-ignored) | decisions file, briefs, reports, open questions |
+| Task | one ticket, ephemeral | `scratchpad/current/` (git-ignored) | decisions file, briefs, reports, open questions |
 
 The kernel depends on the toolchain only through the Herdr CLI verbs
 (`tab create`, `pane split`, `agent start`, `agent prompt --wait`,
@@ -124,12 +124,12 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
    or verify is not a licence to investigate.
 2. The human decides. The orchestrator recommends with one sentence of
    reasoning and names the option it leans to.
-3. Briefs are files in `scratchpad/`; prompts are one line pointing at the
+3. Briefs are files in `scratchpad/current/`; prompts are one line pointing at the
    brief. Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it
    first. Every decision is numbered, including one-word answers. Amendments
    get a suffix (3a). The file is mirrored into every active worktree's
-   scratchpad after every append.
+   `scratchpad/current/` after every append.
 5. Agents report by name: `REPORT <name> <topic>: <summary>`. The deliverable
    is always a file; the report is a summary of at most ten lines. The
    orchestrator reads the file before discussing.
@@ -150,7 +150,7 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     the context. When the old context holds knowledge the next task needs,
     `/compact` instead. Confirm the reset landed before the next brief.
 12. When Alfred is away, the orchestrator writes every own call to
-    `scratchpad/orchestration-decisions.md` with context, so it can be
+    `scratchpad/current/orchestration-decisions.md` with context, so it can be
     audited. Alfred's decisions stay in the numbered file.
 13. Anything an agent produces is a file; the chat carries summaries and
     decisions only.
@@ -165,7 +165,7 @@ omitted.
 
 | Role | Agent file | Model | Effort | Mode | Read-only | Used for |
 |---|---|---|---|---|---|---|
-| investigator | `team-investigator` | Opus 4.8 | medium | auto | yes for code (Write scoped to scratchpad) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
+| investigator | `team-investigator` | Opus 4.8 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
 | implementer | `team-implementer` | Sonnet 5 | medium | auto | no | code in a worktree, fix rounds, MR creation on go, Jira writes on go |
 | tester | `team-tester` | Sonnet 5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
 
@@ -204,7 +204,7 @@ files by rule (tool filters cannot express paths; the role skill states it).
 The Investigator's read-only guarantee for code holds through two halves:
 `disallowedTools` blocks `Edit`/`MultiEdit`/`NotebookEdit` so it can never
 change an existing file, and `Write` stays available but scoped by
-`team-role-investigator`'s rule to creating new files under the scratchpad
+`team-role-investigator`'s rule to creating new files under `scratchpad/current/`
 only (so a long deliverable does not need a Bash heredoc, which can exceed
 the shell parser limit and trip a permission dialog). A brief must not try to
 lift either half. The Bash tool stays available to every role; destructive
@@ -217,7 +217,7 @@ by removing Bash.
 
 ### Task-scope files
 
-All under `$TEAM_SCRATCH` (default `scratchpad/`, git-ignored). The kernel
+All under `$TEAM_SCRATCH` (default `scratchpad/current/`, git-ignored). The kernel
 creates and reads these; the overlay never does.
 
 | File | Written by | Purpose |
@@ -302,7 +302,7 @@ with its own tools. `compose` refuses to overwrite an existing brief (use
 `send` records `topic` and `brief` in `.team/<name>.json`. If the agent's
 record `cwd` is set and differs from `send`'s own cwd (a worktree agent), it
 first copies the brief and, when the team's `ticket` names one, the decisions
-file into `<cwd>/scratchpad/`, so the agent never reads a path outside its
+file into `<cwd>/scratchpad/current/`, so the agent never reads a path outside its
 own working directory; the kick-off then names the brief relative to that
 cwd instead of the orchestrator's path.
 
@@ -327,17 +327,20 @@ exit 6.
 team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--copy <dir> ...]
 ```
 
-1. Create the worktree. The command comes from the overlay's `project.yaml`
-   (`worktree_cmd`, with `{branch}` and `{parent}` placeholders); default
-   `git worktree add -b {branch} scratchpad/wt-{branch} {parent}`, so the
-   worktree lands inside the repo, not next to it. Resolve the worktree's real
-   path to absolute before handing it to herdr as `--cwd`; a relative path
-   resolves against herdr's own process, not this script's caller.
+1. Create the worktree. The plugin never picks where a worktree goes: both
+   the command and its directory come from the overlay's `project.yaml`.
+   `worktree_cmd` (with `{branch}` and `{parent}` placeholders) builds the
+   shell command that creates it; `worktree_dir` (with `{branch}`) names
+   where it lands. Without either key, the script prints `no worktree_cmd`
+   (or `no worktree_dir`) `in <project.yaml path> - ask the human how this
+   repo makes worktrees` and exits 2. Resolve the worktree's real path to
+   absolute before handing it to herdr as `--cwd`; a relative path resolves
+   against herdr's own process, not this script's caller.
 2. If `project.yaml` says `stacked: true`: `git m add {branch} --onto {parent}`
    in the new worktree.
 3. Copy every `--copy` directory (design folder, decisions, mockups) into the
-   new worktree's scratchpad. Warn about untracked spdd files that will not
-   travel.
+   new worktree's `scratchpad/current/`. Warn about untracked spdd files that
+   will not travel.
 4. `herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd <worktree> --label "<label>" --no-focus`
    and one pane; print `{"worktree","tab","pane"}`.
 5. Print the kick-off checklist from the overlay's `env.md` section
@@ -817,3 +820,25 @@ only when the frame changes. `--spawn` splits right of the orchestrator pane
 overview spans the full tab height and the orchestrator tab holds three
 panes. `report_age` moved from `team-status` into `teamlib` so both scripts
 share it.
+
+## Increment 2026-09-27
+
+Design: `docs/superpowers/specs/2026-09-27-team-scratchpad-per-run-design.md`.
+Every run lives in one folder so a new task never sees an earlier task's
+files.
+
+`TEAM_SCRATCH` now defaults to `scratchpad/current`. `team-init` first keeps
+the live-agent guard, then moves a non-empty run dir to
+`<scratch root>/.archive/<ticket>-<YYYY-MM-DD>/` (`run-<date>` without a
+ticket, `-2`, `-3` on a clash) and, when the scratch root is named
+`scratchpad`, sweeps every other entry except `.archive` into
+`.archive/loose-<date>/`. Nothing that holds a `.git` is ever moved: a loose
+one is skipped with a warning, and a run dir that holds one makes init refuse.
+The live-agent guard also checks a team left in the old flat layout
+(`scratchpad/.team`), so upgrading mid-run never sweeps a live team's files.
+`/team:init` now runs `team-init` before it writes the decisions and plan
+files. Worktree agents get their brief and decisions file in
+`<worktree>/scratchpad/current/`. `team-slice` no longer has a built-in
+worktree location: without `worktree_cmd` and `worktree_dir` in the overlay
+it refuses, so a repo's own worktree tooling is always used. The overview and
+watcher panes now receive an absolute `TEAM_SCRATCH` like agent panes do.

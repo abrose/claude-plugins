@@ -98,7 +98,7 @@ never here.
 ## The absent human
 
 - When the human is away, log every own call to
-  `scratchpad/orchestration-decisions.md` with its context. The human's own
+  `scratchpad/current/orchestration-decisions.md` with its context. The human's own
   decisions stay in the numbered file. The two files never mix.
 
 ## Deferred features

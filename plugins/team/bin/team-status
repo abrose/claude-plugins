@@ -4,7 +4,7 @@
 # Exit codes: 0 ok, 2 bad arguments, 4 herdr error.
 set -euo pipefail
 
-scratch="${TEAM_SCRATCH:-scratchpad}"
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
 teamdir="$scratch/.team"
 
 as_json=""; read_idle=""

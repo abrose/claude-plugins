@@ -25,5 +25,5 @@ destructive command without stopping to report first.
 
 ## Output
 - The code change in the worktree, unstaged.
-- `scratchpad/impl-notes-{{topic}}.md`: what changed, the gate result, any
+- `scratchpad/current/impl-notes-{{topic}}.md`: what changed, the gate result, any
   numbered open question you could not resolve.

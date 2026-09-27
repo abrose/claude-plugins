@@ -19,6 +19,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)          # plugins/team
 BIN = os.path.join(ROOT, "bin")
+SCRATCH = os.path.join("scratchpad", "current")
 
 
 def write_text(path, content):
@@ -52,9 +53,11 @@ class Base(unittest.TestCase):
         e["FAKE_HERDR_LOG"] = self.herdr_log
         e["FAKE_GIT_LOG"] = self.git_log
         e["FAKE_HERDR_SCENARIO"] = scenario
-        e["TEAM_SCRATCH"] = "scratchpad"
+        e["TEAM_SCRATCH"] = SCRATCH
         e["CLAUDE_PLUGIN_ROOT"] = ROOT
         e.update(extra)
+        for k in [k for k, v in e.items() if v is None]:
+            del e[k]
         return e
 
     def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
@@ -67,6 +70,9 @@ class Base(unittest.TestCase):
     def herdr_calls(self):
         with open(self.herdr_log) as f:
             return [l.rstrip("\n") for l in f if l.strip()]
+
+    def sp(self, *parts):
+        return os.path.join(self.proj, SCRATCH, *parts)
 
     def wait_for_calls(self, matches, timeout=5.0):
         """Poll the herdr log until a call satisfies `matches`, for work that a
@@ -84,10 +90,10 @@ class Base(unittest.TestCase):
             return [l.rstrip("\n") for l in f if l.strip()]
 
     def team_json(self, name):
-        return json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", name + ".json")))
+        return json.loads(read_text(self.sp(".team", name + ".json")))
 
     def write_record(self, name, role, topic="", brief="", cwd=None):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         rec = {"role": role, "topic": topic, "brief": brief, "pane": "w1:p2", "started": "t"}
         if cwd is not None:
@@ -172,7 +178,7 @@ class TeamStart(Base):
         calls = self.herdr_calls()
         self.assertFalse(any(c.startswith("agent send-keys") for c in calls), calls)
         self.assertEqual(sum(c.startswith("agent start ") for c in calls), 1)
-        self.assertFalse(os.path.exists(os.path.join(self.proj, "scratchpad", ".team", "scout.json")))
+        self.assertFalse(os.path.exists(self.sp(".team", "scout.json")))
 
     def test_start_error_is_reported_as_herdr_error(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
@@ -204,7 +210,7 @@ class TeamStart(Base):
         self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
 
     def test_prefixes_name_with_team_id_from_config(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
@@ -220,7 +226,7 @@ class TeamStart(Base):
         # The orchestrator refers to agents by their full <team_id>-<label> name
         # everywhere, so it may pass that name to team-start. Prepending again
         # would produce app-5066-app-5066-scout. It must not.
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
@@ -239,7 +245,7 @@ class TeamStart(Base):
         self.assertTrue(any(c.startswith("agent start scout ") for c in self.herdr_calls()))
 
     def config(self, team_id="app-1", orch="app-1-orch"):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": team_id, "orchestrator": orch}))
@@ -263,7 +269,7 @@ class TeamStart(Base):
         self.assertTrue(any(c.startswith("agent start app-1-maker ") for c in self.herdr_calls()))
 
     def test_into_full_tab_spills_to_new_tab(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
@@ -289,7 +295,7 @@ class TeamStart(Base):
     def test_spill_defers_tab_registration_until_agent_live(self):
         # A spilled tab must not be registered while its root pane is still
         # empty; register only after the agent is live (a failed start = no tab).
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
@@ -327,7 +333,7 @@ class TeamStart(Base):
         self.assertTrue(any("pane split --pane w1:g4 --direction down --ratio 0.5" in c for c in splits), splits)
 
     def abs_scratch(self):
-        return os.path.realpath(os.path.join(self.proj, "scratchpad"))
+        return os.path.realpath(self.sp())
 
     def test_direct_pane_exports_team_env(self):
         # team-start did not create this pane, so it exports TEAM_NAME and the
@@ -355,7 +361,7 @@ class TeamStart(Base):
                             for c in splits), splits)
 
     def test_spilled_tab_stamps_team_env(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
@@ -392,7 +398,7 @@ class TeamStart(Base):
         self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
 
     def test_into_empty_tab_is_bad_args(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
@@ -426,13 +432,13 @@ class TeamStart(Base):
     def test_new_tab_is_registered_once_its_agent_is_live(self):
         p = self.new_tab()
         self.assertEqual(p.returncode, 0, p.stderr)
-        tabs = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "tabs.json")))
+        tabs = json.loads(read_text(self.sp(".team", "tabs.json")))
         self.assertIn("w1:t9", tabs)
 
     def test_new_tab_is_not_registered_when_start_fails(self):
         p = self.new_tab("Sonnet 5")   # wrong model bar -> pre-flight fail
         self.assertEqual(p.returncode, 3, p.stderr)
-        tabs_path = os.path.join(self.proj, "scratchpad", ".team", "tabs.json")
+        tabs_path = self.sp(".team", "tabs.json")
         self.assertFalse(os.path.exists(tabs_path) and "w1:t9" in json.loads(read_text(tabs_path)))
 
     def test_new_tab_with_other_placement_is_bad_args(self):
@@ -510,8 +516,8 @@ class TeamBriefCompose(Base):
 class TeamBriefSend(Base):
     def prep(self, name="scout", topic="digest"):
         self.write_record(name, "investigator", topic=topic)
-        os.makedirs(os.path.join(self.proj, "scratchpad"), exist_ok=True)
-        write_text(os.path.join(self.proj, "scratchpad", "brief-%s-%s.md" % (name, topic)), "x")
+        os.makedirs(self.sp(), exist_ok=True)
+        write_text(self.sp("brief-%s-%s.md" % (name, topic)), "x")
 
     def test_settled_state_exits_zero_and_records(self):
         self.prep()
@@ -586,20 +592,20 @@ class TeamBriefSend(Base):
         wt = tempfile.mkdtemp()
         try:
             self.write_record("scout", "investigator", topic="digest", cwd=wt)
-            d = os.path.join(self.proj, "scratchpad", ".team")
+            d = self.sp(".team")
             os.makedirs(d, exist_ok=True)
             write_text(os.path.join(d, "config.json"), json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
-            write_text(os.path.join(self.proj, "scratchpad", "decisions-APP-1.md"), "1. decision\n")
-            write_text(os.path.join(self.proj, "scratchpad", "brief-scout-digest.md"), "brief body\n")
+            write_text(self.sp("decisions-APP-1.md"), "1. decision\n")
+            write_text(self.sp("brief-scout-digest.md"), "brief body\n")
 
             p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
 
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "brief-scout-digest.md")), "brief body\n")
-            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "decisions-APP-1.md")), "1. decision\n")
+            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "current", "brief-scout-digest.md")), "brief body\n")
+            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "current", "decisions-APP-1.md")), "1. decision\n")
             prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
             self.assertEqual(len(prompts), 1)
-            self.assertIn("Read scratchpad/brief-scout-digest.md ", prompts[0])
+            self.assertIn("Read scratchpad/current/brief-scout-digest.md ", prompts[0])
             self.assertNotIn(wt, prompts[0])
         finally:
             shutil.rmtree(wt, ignore_errors=True)
@@ -612,7 +618,7 @@ class TeamBriefSend(Base):
         p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stderr)
         prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
-        self.assertIn("Read scratchpad/brief-scout-digest.md ", prompts[0])
+        self.assertIn("Read scratchpad/current/brief-scout-digest.md ", prompts[0])
 
     def test_send_positions_prompt_before_wait_flag(self):
         self.prep()
@@ -626,52 +632,71 @@ class TeamBriefSend(Base):
 
 
 class TeamSlice(Base):
-    def test_default_worktree_cmd_no_machete(self):
-        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
-                            env_extra={"HERDR_WORKSPACE_ID": "w1"})
+    WS = {"HERDR_WORKSPACE_ID": "w1"}
+
+    def overlay(self, text):
+        d = os.path.join(self.proj, ".claude", "team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "project.yaml"), text)
+
+    def slice(self, *extra):
+        return self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug", *extra,
+                               env_extra=self.WS)
+
+    def test_without_overlay_refuses_and_touches_nothing(self):
+        p = self.slice()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no worktree_cmd in .claude/team/project.yaml - ask the human how this repo makes worktrees",
+                      p.stderr)
+        self.assertEqual(self.git_calls(), [])
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_without_worktree_dir_refuses(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\n')
+        p = self.slice()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no worktree_dir in .claude/team/project.yaml - ask the human how this repo makes worktrees",
+                      p.stderr)
+        self.assertEqual(self.git_calls(), [])
+
+    def test_uses_the_repos_own_worktree_command(self):
+        self.overlay('stacked: true\nworktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        p = self.slice()
         self.assertEqual(p.returncode, 0, p.stderr)
         git = self.git_calls()
-        self.assertIn("worktree add -b feat scratchpad/wt-feat main", git)
-        self.assertFalse(any(c.startswith("m add") for c in git))
-        out = json.loads(p.stdout.splitlines()[0])
-        self.assertEqual(out, {"worktree": "scratchpad/wt-feat", "tab": "w1:t9", "pane": "w1:p9"})
+        self.assertIn("worktree add feat main", git)
+        self.assertIn("m add feat --onto main", git)
 
-    def test_default_worktree_lands_inside_repo_and_herdr_gets_absolute_cwd(self):
-        # No overlay project.yaml: the worktree must land inside the repo
-        # (scratchpad/wt-{branch}), and herdr must receive an absolute --cwd,
-        # never the relative path, so it cannot resolve against the wrong base.
-        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
-                            env_extra={"HERDR_WORKSPACE_ID": "w1"})
+    def test_herdr_gets_the_absolute_worktree_cwd(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        p = self.slice()
         self.assertEqual(p.returncode, 0, p.stderr)
         creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
-        self.assertTrue(creates, self.herdr_calls())
-        expect_abs = os.path.join(os.path.realpath(self.proj), "scratchpad", "wt-feat")
+        expect_abs = os.path.join(os.path.realpath(self.proj), "feat")
         self.assertTrue(any(("--cwd %s " % expect_abs) in c for c in creates), creates)
 
     def test_tab_goes_to_the_callers_live_workspace(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
         p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
                             env_extra={"HERDR_WORKSPACE_ID": "w7"})
         self.assertEqual(p.returncode, 0, p.stderr)
         creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
         self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
 
+    def test_copy_lands_in_the_worktrees_run_dir(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "specs"))
+        write_text(os.path.join(self.proj, "specs", "a.md"), "spec\n")
+        p = self.slice("--copy", "specs")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(os.path.join(self.proj, "feat", "scratchpad", "current", "specs", "a.md")), "spec\n")
+
     def test_rejects_unsafe_git_ref(self):
-        p = self.run_script("team-slice", "evil;rm -rf x", "main", "--label", "T1 X y",
-                            env_extra={"HERDR_WORKSPACE_ID": "w1"})
+        p = self.run_script("team-slice", "evil;rm -rf x", "main", "--label", "T1 X y", env_extra=self.WS)
         self.assertEqual(p.returncode, 2)
         self.assertEqual(self.git_calls(), [])
-
-    def test_custom_worktree_cmd_and_stacked(self):
-        d = os.path.join(self.proj, ".claude", "team")
-        os.makedirs(d)
-        write_text(os.path.join(d, "project.yaml"),
-                   'stacked: true\nworktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
-        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
-                            env_extra={"HERDR_WORKSPACE_ID": "w1"})
-        self.assertEqual(p.returncode, 0, p.stderr)
-        git = self.git_calls()
-        self.assertIn("worktree add feat main", git)
-        self.assertIn("m add feat --onto main", git)
 
 
 class TeamStatus(Base):
@@ -683,11 +708,11 @@ class TeamStatus(Base):
         calls = self.herdr_calls()
         self.assertTrue(any(c.startswith("agent read scout") for c in calls))
         self.assertFalse(any(c.startswith("agent read maker") for c in calls))
-        roster = os.path.join(self.proj, "scratchpad", ".team", "roster.md")
+        roster = self.sp(".team", "roster.md")
         self.assertTrue(os.path.exists(roster))
 
     def cfg(self, orch="app-1-orch"):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-1", "orchestrator": orch}))
@@ -720,6 +745,54 @@ class TeamStatus(Base):
                                  "state": "idle", "role": "", "topic": "", "report_age": "-"})
 
 
+class DefaultScratch(Base):
+    """With TEAM_SCRATCH unset, every run file lives in scratchpad/current/."""
+    UNSET = {"TEAM_SCRATCH": None}
+
+    def cfg(self):
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+
+    def test_init_with_default_path_creates_current(self):
+        p = self.run_script("team-init", "APP-1", env_extra=self.UNSET)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".team", "config.json")))
+
+    def test_status_writes_roster_under_current(self):
+        self.cfg()
+        p = self.run_script("team-status", scenario="status_two_teams", env_extra=self.UNSET)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".team", "roster.md")))
+
+    def test_watch_writes_state_under_current(self):
+        self.cfg()
+        p = self.run_script("team-watch", "--once", scenario="watch_idle", env_extra=self.UNSET)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".team", "watch-state.json")))
+
+    def test_overview_reads_plan_under_current(self):
+        self.cfg()
+        write_text(self.sp("progress-APP-1.md"), "# APP-1\n")
+        p = self.run_script("team-overview", "--once",
+                            env_extra={**self.UNSET, "COLUMNS": "60", "LINES": "40"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines()[0], "APP-1")
+
+    def test_stop_hook_writes_report_under_current(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = os.path.join(self.proj, "t.jsonl")
+        write_text(tr, json.dumps({"type": "assistant", "message": {"role": "assistant",
+                   "content": [{"type": "text", "text": "REPORT scout digest: done"}]}}) + "\n")
+        env = self.env(TEAM_NAME="scout", TEAM_SCRATCH=None)
+        p = subprocess.run(["bash", os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")],
+                           input=json.dumps({"session_id": "s", "transcript_path": tr, "cwd": self.proj}),
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp("reports", "scout-digest.md")))
+
+
 class TeamOverview(Base):
     NOW = 1800000000
     PLAN = ("# APP-1 round 2\n\n"
@@ -729,20 +802,20 @@ class TeamOverview(Base):
     AGENTS = ["AGENTS", " impl  w2:p3  working  2m", " rev   w2:p4  idle     -"]
 
     def cfg(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
 
     def plan(self, text):
-        write_text(os.path.join(self.proj, "scratchpad", "progress-APP-1.md"), text)
+        write_text(self.sp("progress-APP-1.md"), text)
 
     def team(self):
         # impl reported 2 minutes ago; rev has no report.
         self.cfg()
         self.write_record("app-1-impl", "implementer", topic="fix")
         self.write_record("app-1-rev", "tester", topic="review")
-        reports = os.path.join(self.proj, "scratchpad", "reports")
+        reports = self.sp("reports")
         os.makedirs(reports)
         report = os.path.join(reports, "app-1-impl-fix.md")
         write_text(report, "done")
@@ -773,7 +846,7 @@ class TeamOverview(Base):
         p = self.overview()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.splitlines(),
-                         ["no plan yet: scratchpad/progress-APP-1.md"] + self.AGENTS)
+                         ["no plan yet: scratchpad/current/progress-APP-1.md"] + self.AGENTS)
 
     def test_without_team_config_asks_for_init(self):
         p = self.overview()
@@ -863,6 +936,13 @@ class TeamOverview(Base):
         # --spawn only launches; it renders nothing itself.
         self.assertFalse(any(c.startswith("agent list") for c in calls), calls)
 
+    def test_spawn_passes_an_absolute_team_scratch(self):
+        self.cfg()
+        p = self.run_script("team-overview", "--spawn")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        split = [c for c in self.herdr_calls() if c.startswith("pane split")]
+        self.assertIn("--env TEAM_SCRATCH=%s " % os.path.realpath(self.sp()), split[0] + " ")
+
     def test_loop_redraws_only_when_the_frame_changes(self):
         self.team()
         self.plan(self.PLAN)
@@ -903,7 +983,7 @@ class TeamOverview(Base):
 
     def test_non_utf8_plan_still_renders(self):
         self.team()
-        path = os.path.join(self.proj, "scratchpad", "progress-APP-1.md")
+        path = self.sp("progress-APP-1.md")
         with open(path, "wb") as f:
             f.write(self.PLAN.encode("utf-8") + b"- [ ] bad \xff byte\n")
         p = self.overview()
@@ -1055,7 +1135,7 @@ class StopHook(Base):
         return path
 
     def report_path(self, name, topic):
-        return os.path.join(self.proj, "scratchpad", "reports", "%s-%s.md" % (name, topic))
+        return self.sp("reports", "%s-%s.md" % (name, topic))
 
     def test_identifies_by_team_name_env_and_pings(self):
         # The hook learns which agent it is from TEAM_NAME in its environment,
@@ -1079,7 +1159,7 @@ class StopHook(Base):
         # absolute TEAM_SCRATCH, so the hook still finds the team dir.
         self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("REPORT scout digest: done")
-        moved = os.path.join(self.proj, "scratchpad")
+        moved = self.sp()
 
         p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": moved},
                           TEAM_NAME="scout", TEAM_SCRATCH=moved)
@@ -1162,7 +1242,7 @@ class StopHook(Base):
         self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
         calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
         self.assertIn("agent prompt orchestrator REPORT scout digest: done", calls)
-        log = read_text(os.path.join(self.proj, "scratchpad", ".team", "hook.log"))
+        log = read_text(self.sp(".team", "hook.log"))
         self.assertIn("orchestrator still had a draft after 1s, sent anyway", log)
 
     def test_forwards_report_line_after_status_bar(self):
@@ -1190,12 +1270,12 @@ class StopHook(Base):
         prompts = [c for c in calls if c.startswith("agent prompt ")]
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest:")
                             for c in prompts), prompts)
-        self.assertTrue(any("scratchpad/reports/scout-digest.md" in c for c in prompts), prompts)
+        self.assertTrue(any("scratchpad/current/reports/scout-digest.md" in c for c in prompts), prompts)
 
     def test_no_self_ping_when_name_is_orchestrator(self):
         # The orchestrator has no TEAM_NAME today, but if it ever ran the hook as
         # a named agent, it must not prompt itself.
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
@@ -1210,7 +1290,7 @@ class StopHook(Base):
         p = self.run_hook({"transcript_path": "/does/not/exist", "cwd": self.proj},
                           TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
-        log = os.path.join(self.proj, "scratchpad", ".team", "hook.log")
+        log = self.sp(".team", "hook.log")
         self.assertTrue(os.path.exists(log))
         self.assertIn("transcript unreadable", read_text(log))
 
@@ -1251,13 +1331,13 @@ class TeamInit(Base):
     def test_writes_config_with_team_id_and_orch(self):
         p = self.run_script("team-init", "APP-5066")
         self.assertEqual(p.returncode, 0, p.stderr)
-        cfg = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "config.json")))
+        cfg = json.loads(read_text(self.sp(".team", "config.json")))
         self.assertEqual(cfg["team_id"], "app-5066")
         self.assertEqual(cfg["ticket"], "APP-5066")
         self.assertEqual(cfg["orchestrator"], "app-5066-orch")
 
     def test_refuses_second_init_when_agent_still_live(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
@@ -1266,30 +1346,189 @@ class TeamInit(Base):
         self.assertIn("app-1-scout", p.stderr)
         self.assertTrue(os.path.exists(os.path.join(d, "config.json")))
 
-    def test_archives_finished_team_and_continues(self):
-        # No agent of the previous team (app-1-*) is live: team-init archives
-        # scratchpad/.team to scratchpad/.team-APP-1 and starts the new team.
-        d = os.path.join(self.proj, "scratchpad", ".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
-        write_text(os.path.join(d, "roster.md"), "old roster\n")
-        p = self.run_script("team-init", "APP-2")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        archived = os.path.join(self.proj, "scratchpad", ".team-APP-1")
-        self.assertTrue(os.path.exists(os.path.join(archived, "roster.md")))
-        cfg = json.loads(read_text(os.path.join(d, "config.json")))
-        self.assertEqual(cfg["ticket"], "APP-2")
+    TODAY = "2026-01-02"
 
-    def test_archives_with_a_suffix_when_archive_name_taken(self):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+    def init(self, ticket="APP-2", scenario="ok", **env):
+        return self.run_script("team-init", ticket, scenario=scenario,
+                               env_extra={"TEAM_TODAY": self.TODAY, **env})
+
+    def old_run(self, ticket="APP-1"):
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
-        os.makedirs(os.path.join(self.proj, "scratchpad", ".team-APP-1"))
-        p = self.run_script("team-init", "APP-2")
+                   json.dumps({"team_id": "app-1", "ticket": ticket, "orchestrator": "app-1-orch"}))
+        write_text(self.sp("brief-scout-digest.md"), "old brief\n")
+
+    def archive(self, *parts):
+        return os.path.join(self.proj, "scratchpad", ".archive", *parts)
+
+    def test_archives_the_finished_run_and_starts_fresh(self):
+        self.old_run()
+        p = self.init()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertTrue(os.path.exists(os.path.join(self.proj, "scratchpad", ".team-APP-1-2")))
+        self.assertEqual(read_text(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")), "old brief\n")
+        self.assertEqual(sorted(os.listdir(self.sp())), [".team"])
+        self.assertEqual(json.loads(read_text(self.sp(".team", "config.json")))["ticket"], "APP-2")
+
+    def test_archive_name_gets_a_suffix_when_taken(self):
+        self.old_run()
+        os.makedirs(self.archive("APP-1-2026-01-02"))
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02-2", "brief-scout-digest.md")))
+
+    def test_run_without_config_archives_as_run(self):
+        os.makedirs(self.sp())
+        write_text(self.sp("notes.md"), "ad hoc\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("run-2026-01-02", "notes.md")))
+
+    def test_sweeps_loose_entries_out_of_sight(self):
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, "reports"))
+        write_text(os.path.join(root, "decisions-OLD.md"), "old\n")
+        write_text(os.path.join(root, "reports", "x.md"), "old\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(sorted(os.listdir(root)), [".archive", "current"])
+        self.assertTrue(os.path.exists(self.archive("loose-2026-01-02", "decisions-OLD.md")))
+        self.assertTrue(os.path.exists(self.archive("loose-2026-01-02", "reports", "x.md")))
+
+    def test_never_moves_a_worktree_and_warns(self):
+        wt = os.path.join(self.proj, "scratchpad", "wt-feat")
+        os.makedirs(os.path.join(wt, "src"))
+        write_text(os.path.join(wt, ".git"), "gitdir: /elsewhere\n")
+        nested = os.path.join(self.proj, "scratchpad", "deep", "a")
+        os.makedirs(os.path.join(nested, ".git"))
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(wt, ".git")))
+        self.assertTrue(os.path.exists(os.path.join(nested, ".git")))
+        self.assertIn("❗️ worktree inside scratchpad: scratchpad/wt-feat - move it out with git worktree move", p.stderr)
+        self.assertIn("❗️ worktree inside scratchpad: scratchpad/deep - move it out with git worktree move", p.stderr)
+
+    def test_live_agents_block_init_and_nothing_moves(self):
+        self.old_run()
+        write_text(os.path.join(self.proj, "scratchpad", "loose.md"), "x\n")
+        p = self.init(scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("app-1-scout", p.stderr)
+        self.assertTrue(os.path.exists(self.sp("brief-scout-digest.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "scratchpad", "loose.md")))
+        self.assertFalse(os.path.exists(self.archive()))
+
+    def test_herdr_failure_blocks_init_and_nothing_moves(self):
+        # A herdr error or unparsable reply must not read as "no live agents":
+        # that would silence a real team's Stop hooks by archiving it live.
+        self.old_run()
+        for scenario in ("list_fails", "bad_list"):
+            with self.subTest(scenario=scenario):
+                p = self.init(scenario=scenario)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("cannot check live agents", p.stderr)
+                self.assertTrue(os.path.exists(self.sp("brief-scout-digest.md")))
+                self.assertFalse(os.path.exists(self.archive()))
+
+    def test_custom_scratch_archives_next_to_it_and_never_sweeps(self):
+        run = os.path.join(self.proj, "work", "run")
+        os.makedirs(os.path.join(run, ".team"))
+        write_text(os.path.join(run, ".team", "config.json"), json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+        write_text(os.path.join(self.proj, "work", "keep.md"), "mine\n")
+        p = self.init(TEAM_SCRATCH=os.path.join("work", "run"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "work", ".archive", "APP-1-2026-01-02", ".team")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "work", "keep.md")))
+
+    def test_refuses_to_archive_a_run_dir_holding_a_worktree(self):
+        # An old-style TEAM_SCRATCH=scratchpad points at the whole scratchpad,
+        # worktrees included. Moving it would break them.
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, "wt-feat"))
+        write_text(os.path.join(root, "wt-feat", ".git"), "gitdir: /elsewhere\n")
+        p = self.init(TEAM_SCRATCH="scratchpad")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scratchpad/wt-feat", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(root, "wt-feat", ".git")))
+
+    def test_ticket_with_slash_is_archived_under_a_flat_name(self):
+        self.old_run(ticket="team/ABC-1")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("team-ABC-1-2026-01-02", "brief-scout-digest.md")))
+
+    def test_trailing_slash_in_team_scratch_is_normalised(self):
+        self.old_run()
+        p = self.init(TEAM_SCRATCH=SCRATCH + "/")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")))
+
+    def test_symlink_is_swept_without_following_it(self):
+        target = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(target, ".git"))
+            os.makedirs(os.path.join(self.proj, "scratchpad"))
+            os.symlink(target, os.path.join(self.proj, "scratchpad", "link"))
+            p = self.init()
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertTrue(os.path.islink(self.archive("loose-2026-01-02", "link")))
+            self.assertTrue(os.path.exists(os.path.join(target, ".git")))
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
+
+    def test_top_level_git_dir_is_never_swept(self):
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, ".git", "objects"))
+        os.makedirs(os.path.join(root, "notes"))
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(root, ".git", "objects")))
+        self.assertIn("❗️ worktree inside scratchpad: scratchpad/.git - move it out with git worktree move", p.stderr)
+
+    def test_refusal_names_a_top_level_git_dir_without_a_traceback(self):
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, ".git", "objects"))
+        p = self.init(TEAM_SCRATCH="scratchpad")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn("scratchpad/.git", p.stderr)
+
+    def test_worktree_inside_current_gets_move_advice(self):
+        # The default run dir IS scratchpad/current, so "set TEAM_SCRATCH to a
+        # run dir such as scratchpad/current" would tell the human to point at
+        # the very dir that already holds the worktree.
+        os.makedirs(self.sp("wt-x"))
+        write_text(self.sp("wt-x", ".git"), "gitdir: /elsewhere\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("move it out with git worktree move", p.stderr)
+        self.assertNotIn("such as scratchpad/current", p.stderr)
+
+    def test_old_layout_team_dir_blocks_init_when_live(self):
+        old_dir = os.path.join(self.proj, "scratchpad", ".team")
+        os.makedirs(old_dir)
+        write_text(os.path.join(old_dir, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+        p = self.init(scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("app-1-scout", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(old_dir, "config.json")))
+
+    def test_double_trailing_slash_in_team_scratch_is_normalised(self):
+        self.old_run()
+        p = self.init(TEAM_SCRATCH=SCRATCH + "//")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")))
+
+    def test_malformed_config_archives_as_run_instead_of_crashing(self):
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps([1, 2, 3]))
+        write_text(self.sp("brief-scout-digest.md"), "old brief\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(os.path.exists(self.archive("run-2026-01-02", "brief-scout-digest.md")))
 
     def test_seeds_allowlist_without_clobbering(self):
         d = os.path.join(self.proj, ".claude")
@@ -1307,7 +1546,7 @@ class TeamInit(Base):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
                             scenario="pane_in_tab")
         self.assertEqual(p.returncode, 0, p.stderr)
-        tabs = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "tabs.json")))
+        tabs = json.loads(read_text(self.sp(".team", "tabs.json")))
         self.assertIn("w1:t1", tabs)
 
     def test_renames_orchestrator_agent_to_namespaced_name(self):
@@ -1326,7 +1565,7 @@ class TeamInit(Base):
         # deterministic slug would cross-poison them, so init must disambiguate.
         p = self.run_script("team-init", "APP-1", scenario="names_app1_taken")
         self.assertEqual(p.returncode, 0, p.stderr)
-        cfg = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "config.json")))
+        cfg = json.loads(read_text(self.sp(".team", "config.json")))
         self.assertEqual(cfg["team_id"], "app-1-2")
         self.assertEqual(cfg["orchestrator"], "app-1-2-orch")
 
@@ -1340,7 +1579,7 @@ class TeamInit(Base):
 
 class TeamWatch(Base):
     def cfg(self, orch="app-1-orch", team_id="app-1"):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": team_id, "orchestrator": orch}))
@@ -1352,7 +1591,7 @@ class TeamWatch(Base):
         p = self.run_script("team-watch", "--once", scenario="watch_change")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
-        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
         self.assertEqual(state["agents"]["app-1-scout"], "working")
 
     def test_second_pass_pushes_watch_line_on_change(self):
@@ -1378,7 +1617,7 @@ class TeamWatch(Base):
         self.write_record("app-1-scout", "investigator", topic="digest")
         # app-2-maker is live but has no record here; must be ignored.
         self.run_script("team-watch", "--once", scenario="watch_two_teams")
-        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
         self.assertNotIn("app-2-maker", state["agents"])
 
     def test_blocked_line_includes_dialog(self):
@@ -1402,7 +1641,7 @@ class TeamWatch(Base):
         self.assertEqual(len(flags), 1)
 
     def prep_tabs(self, tabs, own_pane="w1:p9"):
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(tabs))
         write_text(os.path.join(d, "watch-state.json"),
@@ -1462,7 +1701,7 @@ class TeamWatch(Base):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest")
         self.run_script("team-watch", "--once")
-        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
         self.assertEqual(state.get("own_pane"), "w1:p1")
 
     def test_never_closes_own_pane(self):
@@ -1474,7 +1713,7 @@ class TeamWatch(Base):
     def test_pending_pane_not_closed(self):
         self.cfg()
         self.prep_tabs(["w1:t2"])   # own_pane defaults to w1:p9
-        pend = os.path.join(self.proj, "scratchpad", ".team", "pending")
+        pend = self.sp(".team", "pending")
         os.makedirs(pend, exist_ok=True)
         open(os.path.join(pend, "w1_p3"), "w").close()   # mark w1:p3 pending
         self.run_script("team-watch", "--once", scenario="panes_empty")
@@ -1482,7 +1721,7 @@ class TeamWatch(Base):
 
     def test_unknown_own_pane_closes_nothing(self):
         self.cfg()
-        d = os.path.join(self.proj, "scratchpad", ".team")
+        d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         write_text(os.path.join(d, "watch-state.json"), json.dumps({"agents": {}, "_flagged": {}}))
@@ -1495,7 +1734,7 @@ class TeamWatch(Base):
         p = self.run_script("team-watch", "--once", scenario="watch_idle")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("No such file", p.stderr)
-        state = os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")
+        state = self.sp(".team", "watch-state.json")
         self.assertTrue(os.path.exists(state))
 
     def test_loop_survives_failing_pass(self):
@@ -1519,7 +1758,7 @@ class TeamWatch(Base):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest")
         self.run_script("team-watch", "--once", "--own-pane", "w1:zz")
-        state = json.loads(read_text(os.path.join(self.proj, "scratchpad", ".team", "watch-state.json")))
+        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
         self.assertEqual(state.get("own_pane"), "w1:zz")
         self.assertFalse(any(c.startswith("pane current") for c in self.herdr_calls()))
 
@@ -1556,15 +1795,22 @@ class TeamWatch(Base):
         self.assertTrue(split, self.herdr_calls())
         self.assertTrue(any("--ratio" in c for c in split), split)
 
+    def test_spawn_passes_an_absolute_team_scratch(self):
+        self.cfg()
+        p = self.run_script("team-watch", "--spawn")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        split = [c for c in self.herdr_calls() if c.startswith("pane split")]
+        self.assertIn("--env TEAM_SCRATCH=%s " % os.path.realpath(self.sp()), split[0] + " ")
+
     def write_report(self, name, topic):
-        d = os.path.join(self.proj, "scratchpad", "reports")
+        d = self.sp("reports")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "%s-%s.md" % (name, topic)), "# Report")
 
     def test_idle_briefed_tab_flags_release(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest",
-                          brief="scratchpad/brief-app-1-scout-digest.md")
+                          brief="scratchpad/current/brief-app-1-scout-digest.md")
         self.write_report("app-1-scout", "digest")
         self.prep_tabs(["w1:t2"])   # own_pane w1:p9, not in the idle tab
         self.run_script("team-watch", "--once", scenario="panes_idle_only")
@@ -1575,7 +1821,7 @@ class TeamWatch(Base):
         # An idle agent whose report never arrived must not be released unread.
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest",
-                          brief="scratchpad/brief-app-1-scout-digest.md")
+                          brief="scratchpad/current/brief-app-1-scout-digest.md")
         self.prep_tabs(["w1:t2"])
         self.run_script("team-watch", "--once", scenario="panes_idle_only")
         pushes = [c for c in self.herdr_calls() if "WATCH" in c]

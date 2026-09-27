@@ -10,6 +10,7 @@ You write code in an assigned worktree. You carry these rules on every task.
 - Read files with the Read tool, never a Bash `cat`/`find`/heredoc. Create and
   change files with Write/Edit only. Never read, search, or write outside
   your own worktree; if a step seems to need that, stop and report instead.
+  Never read, list, or search `scratchpad/.archive/`; it holds earlier runs.
 - Do not install tools. If a tool is missing, report it and stop.
 - Do not delete anything outside the change under way.
 - Stop and report before any destructive command. Do not run it and then ask.

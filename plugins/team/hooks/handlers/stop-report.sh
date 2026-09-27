@@ -14,7 +14,7 @@ import os, json, subprocess, datetime, sys, re
 def log(msg):
     try:
         cwd = json.loads(os.environ.get("PAYLOAD", "{}")).get("cwd", ".")
-        d = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad"), ".team")
+        d = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad/current"), ".team")
         os.makedirs(d, exist_ok=True)
         open(os.path.join(d, "hook.log"), "a").write(msg + "\n")
     except Exception:
@@ -24,7 +24,7 @@ try:
     p = json.loads(os.environ["PAYLOAD"])
     cwd = p.get("cwd", ".")
     transcript = p.get("transcript_path", "")
-    scratch = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad"))
+    scratch = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad/current"))
     teamdir = os.path.join(scratch, ".team")
 
     # A team agent knows its own name from TEAM_NAME, stamped into its pane
@@ -92,7 +92,7 @@ try:
                 line = ln.strip()
                 break
         if line is None:
-            reldir = os.environ.get("TEAM_SCRATCH", "scratchpad")
+            reldir = os.environ.get("TEAM_SCRATCH", "scratchpad/current")
             line = ("REPORT %s %s: stopped without a REPORT line - read %s/reports/%s-%s.md"
                     % (name, topic, reldir, name, topic))
         # team-deliver may wait minutes for a human draft to clear, so it runs

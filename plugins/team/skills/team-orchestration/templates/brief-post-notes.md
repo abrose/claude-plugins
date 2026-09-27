@@ -21,5 +21,5 @@ You must NOT: invent findings, or post anything not on the approved list below.
 3. On go, post each approved note to the tracker.
 
 ## Output
-- `scratchpad/post-notes-{{topic}}.md`: one row per note, the target and the
+- `scratchpad/current/post-notes-{{topic}}.md`: one row per note, the target and the
   exact text posted. No summary verdict.

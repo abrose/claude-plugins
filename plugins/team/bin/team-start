@@ -58,7 +58,7 @@ fi
 [ -n "$cwd" ] || cwd="$PWD"
 
 label="$name"
-teamcfg="${TEAM_SCRATCH:-scratchpad}/.team/config.json"
+teamcfg="${TEAM_SCRATCH:-scratchpad/current}/.team/config.json"
 if [ -f "$teamcfg" ]; then
   team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
   if [ -n "${team_id:-}" ]; then
@@ -92,7 +92,7 @@ fi
 
 # The agent and its Stop hook identify themselves from this env. TEAM_SCRATCH is
 # absolute so the hook finds the team dir wherever the agent moves its cwd.
-scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad}")"
+scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad/current}")"
 team_env=(--env "TEAM_NAME=$name" --env "TEAM_SCRATCH=$scratch_abs")
 
 # Create a tab in the caller's live workspace and take its root pane. The pane
@@ -188,7 +188,7 @@ start() {
     --name "$name" --settings '{"crossSessionInbound":"accept"}'
 }
 
-pending_dir="${TEAM_SCRATCH:-scratchpad}/.team/pending"
+pending_dir="${TEAM_SCRATCH:-scratchpad/current}/.team/pending"
 mkdir -p "$pending_dir"
 pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
 : > "$pending_file"
@@ -222,7 +222,7 @@ session=$(echo "$out" | json_get "d['result']['agent']['agent_session']['value']
 session="${session:0:8}"
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-teamdir="${TEAM_SCRATCH:-scratchpad}/.team"
+teamdir="${TEAM_SCRATCH:-scratchpad/current}/.team"
 mkdir -p "$teamdir"
 
 # Register a created tab now that its agent is live and its root pane occupied.

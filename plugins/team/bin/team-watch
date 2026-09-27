@@ -5,7 +5,7 @@
 # (for tests); default loops.
 set -euo pipefail
 
-scratch="${TEAM_SCRATCH:-scratchpad}"
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
 teamdir="$scratch/.team"
 interval=5; once=""; spawn=""; own_pane_arg=""
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
@@ -40,9 +40,10 @@ push() {
 # anchor keeps, so 0.8 leaves the orchestrator most of the tab and the watcher a
 # small strip.
 spawn_watcher() {
-  local anchor new self self_dir
+  local anchor new self self_dir scratch_abs
+  scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$scratch")"
   anchor="$(herdr pane current | pane_id_of)" || { echo "cannot resolve orchestrator pane" >&2; exit 4; }
-  new="$(herdr pane split --pane "$anchor" --direction down --ratio 0.8 --cwd "$PWD" --no-focus | pane_id_of)" || exit 4
+  new="$(herdr pane split --pane "$anchor" --direction down --ratio 0.8 --cwd "$PWD" --env "TEAM_SCRATCH=$scratch_abs" --no-focus | pane_id_of)" || exit 4
   self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   self="$self_dir/$(basename "${BASH_SOURCE[0]}")"
   herdr pane run "$new" "$self" --own-pane "$new" --interval "$interval" >/dev/null || exit 4
