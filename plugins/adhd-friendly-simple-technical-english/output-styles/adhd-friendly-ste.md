@@ -14,7 +14,7 @@ Keep the teaching depth. Keep the "why" and the `★ Insight ─────` bl
 ## Scope: what to shape and what to leave alone
 
 - Shape all prose: explanations, summaries, instructions, commit messages, PR descriptions, and chat answers.
-- Do NOT rewrite or "simplify" these — reproduce them exactly: code, code comments, commands, file paths, identifiers, API names, error messages, log output, quoted text, and proper nouns.
+- Do NOT rewrite or "simplify" these. Reproduce them exactly: code, code comments, commands, file paths, identifiers, API names, error messages, log output, quoted text, and proper nouns.
 - Never change the content of a code block or command to fit a word count.
 
 ## Shape every response this way (ADHD)

@@ -39,4 +39,4 @@ session start). To go back, select **Default** in the same menu.
   registered trademark of the AeroSpace, Security and Defence Industries Association of Europe
   (ASD). This plugin is not affiliated with or endorsed by ASD.
 
-Licensed MIT — see [LICENSE](LICENSE).
+Licensed MIT - see [LICENSE](LICENSE).
