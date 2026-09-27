@@ -1,4 +1,4 @@
-# Spec: `quota-statusline` — a Claude Code quota-projection engine plugin
+# Spec: `quota-statusline` - a Claude Code quota-projection engine plugin
 
 ## Goal
 
@@ -27,15 +27,15 @@ What a plugin *can* do, and what this plugin uses:
   Bash tool's `PATH` while the plugin is enabled.
 - Ship bundled files referenced by `${CLAUDE_PLUGIN_ROOT}` from hooks/skills.
 
-So this plugin ships `bin/cquota`. The user wires their own `statusLine.command`
-to call `cquota`, or Chebu's chezmoi statusline calls it by absolute path (see
+So this plugin ships `bin/quota-statusline`. The user wires their own `statusLine.command`
+to call `quota-statusline`, or Chebu's chezmoi statusline calls it by absolute path (see
 [Consuming the engine](#consuming-the-engine)). The plugin is the distribution
 and versioning vehicle; the engine is a standalone script that also works from a
 plain `git clone`.
 
 ## Scope
 
-- **In scope:** the `cquota` engine (usage-log writer + projector), its tests,
+- **In scope:** the `quota-statusline` engine (usage-log writer + projector), its tests,
   the plugin manifest, the marketplace entry, README, LICENSE.
 - **Out of scope:** any rendering (colors/glyphs/bar), and Chebu's chezmoi
   statusline changes. Those live in the chezmoi repo and consume this engine.
@@ -45,7 +45,7 @@ plain `git clone`.
 
 ## Interface contract
 
-`cquota` reads the Claude Code statusline JSON payload on **stdin** (the same
+`quota-statusline` reads the Claude Code statusline JSON payload on **stdin** (the same
 object Claude Code pipes to a `statusLine.command`). It uses only
 `.rate_limits`. It needs **no `jq`** - it parses the JSON itself.
 
@@ -53,9 +53,9 @@ object Claude Code pipes to a `statusLine.command`). It uses only
 
 | Invocation | Effect |
 |---|---|
-| `cquota` | Log one usage sample (throttled + retained), then print the verdict JSON for **both** windows. This is the normal statusline path. |
-| `cquota --no-log` | Project only. Do **not** write the log. For tests and dry runs. |
-| `cquota --window 7d` | Print the verdict for one window only (`5h` or `7d`). Still logs unless `--no-log`. |
+| `quota-statusline` | Log one usage sample (throttled + retained), then print the verdict JSON for **both** windows. This is the normal statusline path. |
+| `quota-statusline --no-log` | Project only. Do **not** write the log. For tests and dry runs. |
+| `quota-statusline --window 7d` | Print the verdict for one window only (`5h` or `7d`). Still logs unless `--no-log`. |
 
 One process per render. Reading stdin once covers both windows.
 
@@ -137,7 +137,7 @@ landing_pct   = used + active_rate_h * active_hpd * (remaining / 86400)
 
 ### Usage log
 
-`cquota` appends a rolling per-profile sample so the projector has velocity and
+`quota-statusline` appends a rolling per-profile sample so the projector has velocity and
 duty-cycle history. JSONL, one line per sample:
 
 ```json
@@ -191,7 +191,7 @@ claude-plugins/                              # the marketplace repo (already exi
         ├── .claude-plugin/
         │   └── plugin.json                  # the plugin manifest
         ├── bin/
-        │   └── cquota                       # the engine (python3, +x)   <- the payload
+        │   └── quota-statusline             # the engine (python3, +x)   <- the payload
         ├── tests/
         │   └── test_cquota.py               # behaviour + unit tests (stdlib unittest)
         ├── SPEC.md                          # this file
@@ -199,7 +199,7 @@ claude-plugins/                              # the marketplace repo (already exi
         └── LICENSE                          # MIT
 ```
 
-`cquota` is a single python3 file structured as an importable module (pure
+`quota-statusline` is a single python3 file structured as an importable module (pure
 functions + `if __name__ == "__main__": main()`), so tests can call `project()`
 directly *and* drive the CLI over stdin.
 
@@ -223,15 +223,15 @@ directly *and* drive the CLI over stdin.
 ```json
 {
   "name": "quota-statusline",
-  "version": "1.0.0",
-  "description": "Quota-spend projection engine (bin/cquota). Reads the Claude Code rate-limit payload and emits a per-window JSON verdict for statuslines; the 7d projection counts active hours, not 24/7.",
+  "version": "1.0.1",
+  "description": "Quota-spend projection engine (bin/quota-statusline). Reads the Claude Code rate-limit payload and emits a per-window JSON verdict for statuslines; the 7d projection counts active hours, not 24/7.",
   "author": {
     "name": "Alfred Brose"
   }
 }
 ```
 
-### `plugins/quota-statusline/bin/cquota`
+### `plugins/quota-statusline/bin/quota-statusline`
 
 Single python3 file. No third-party deps. Ports the log block and `projection()`
 from the chezmoi statusline; adds arg parsing, env config, and JSON output.
@@ -239,7 +239,7 @@ from the chezmoi statusline; adds arg parsing, env config, and JSON output.
 
 ```python
 #!/usr/bin/env python3
-"""cquota - quota-spend projection engine for Claude Code statuslines.
+"""quota-statusline - quota-spend projection engine for Claude Code statuslines.
 
 Reads the statusline JSON payload on stdin (uses only .rate_limits). Appends a
 rolling per-profile usage sample, then prints a JSON verdict per rate-limit
@@ -461,11 +461,11 @@ def main(argv):
             i += 1
             only = argv[i]
         else:
-            sys.stderr.write(f"cquota: unknown arg {a}\n")
+            sys.stderr.write(f"quota-statusline: unknown arg {a}\n")
             return 2
         i += 1
     if only is not None and only not in WINDOWS:
-        sys.stderr.write(f"cquota: unknown window {only}\n")
+        sys.stderr.write(f"quota-statusline: unknown window {only}\n")
         return 2
 
     try:
@@ -499,9 +499,9 @@ if __name__ == "__main__":
 Stdlib `unittest`, run with `python3 -m unittest` (pristine output, no deps).
 Two layers, per the testing rules:
 
-- **Unit:** import `cquota`, call `project(...)` directly with synthetic `pts`.
+- **Unit:** import `quota-statusline`, call `project(...)` directly with synthetic `pts`.
   Assert on the verdict dict. Fast, no I/O.
-- **Behaviour / e2e:** run `bin/cquota` as a subprocess. Pipe a crafted payload
+- **Behaviour / e2e:** run `bin/quota-statusline` as a subprocess. Pipe a crafted payload
   on stdin, set `CQUOTA_NOW` and `CQUOTA_LOG_PATH` to a temp file. Assert on the
   parsed JSON output and on the log file contents.
 
@@ -548,9 +548,9 @@ MIT, `Alfred Brose`. (Matches the sibling plugin.)
 Then point `statusLine.command` at the engine. **Open question to verify:**
 whether a `statusLine.command` runs with the enabled plugin's `bin/` on `PATH`.
 
-- If **yes**: the command is just `cquota` (plus the user's renderer). Cleanest.
+- If **yes**: the command is just `quota-statusline` (plus the user's renderer). Cleanest.
 - If **no**: the user references the engine by its installed path, or symlinks
-  `bin/cquota` into their own `PATH` (e.g. `~/.local/bin`). The README documents
+  `bin/quota-statusline` into their own `PATH` (e.g. `~/.local/bin`). The README documents
   the fallback.
 
 This must be tested on a real install before publishing - see [Verify](#verify).
@@ -565,7 +565,7 @@ engine by a known path:
    tpm), with a `refreshPeriod`.
 2. In `dot_claude/executable_statusline.sh`, **remove** the embedded log block
    and the `projection()` python. Call
-   `python3 "$HOME/<clone>/plugins/quota-statusline/bin/cquota"` once, read the
+   `python3 "$HOME/<clone>/plugins/quota-statusline/bin/quota-statusline"` once, read the
    JSON with `jq`, and keep all existing rendering (profile, bar, glyphs,
    colors).
 3. Graceful degrade: if the engine path is missing (fresh machine, external not
@@ -580,7 +580,7 @@ not built from this spec.
 
 ## Publish steps (run in the `claude-plugins` repo)
 
-1. Create the files above; `chmod +x plugins/quota-statusline/bin/cquota`.
+1. Create the files above; `chmod +x plugins/quota-statusline/bin/quota-statusline`.
 2. Add the marketplace entry to `.claude-plugin/marketplace.json`.
 3. `python3 -m unittest discover -s plugins/quota-statusline/tests` - all green.
 4. `git add -A && git commit -m "feat: quota-statusline projection engine plugin"`
@@ -597,12 +597,12 @@ not built from this spec.
 - **CLI smoke:** pipe a real captured payload:
   ```bash
   echo "$PAYLOAD" | CQUOTA_LOG_PATH=/tmp/cq.jsonl CQUOTA_NOW=1789200000 \
-    plugins/quota-statusline/bin/cquota | python3 -m json.tool
+    plugins/quota-statusline/bin/quota-statusline | python3 -m json.tool
   ```
   Confirm both windows appear with believable `info`/`landing_pct`, and that
   `/tmp/cq.jsonl` gained one line.
 - **Plugin PATH question:** install the plugin on a scratch profile; from a
-  `statusLine.command`, test whether bare `cquota` resolves. Record the answer in
+  `statusLine.command`, test whether bare `quota-statusline` resolves. Record the answer in
   the README (drives the public install instructions).
 - **No-limits guard:** a payload with no `rate_limits` prints `{}` and writes no
   log line.
@@ -621,8 +621,9 @@ value.
 
 ## Decisions to confirm before building
 
-1. **Executable name `cquota`** - short for "claude quota". Keep it, or prefer
-   `quota-statusline` / `claude-quota`?
+1. **Executable name `quota-statusline`** - resolved: matches the plugin name
+   (first drafted as `cquota`, short for "claude quota"; the tests keep the
+   `test_cquota.py` file name). `claude-quota` was the other alternative.
 2. **Engine language python3** - matches the current implementation and needs no
    `jq`. Keep it (vs a bash + embedded-python port)?
 3. **Marketplace slug** - the README/install lines assume the GitHub repo is
@@ -637,6 +638,6 @@ value.
   `block-agent-attribution` hook enforces this in the chezmoi repo; keep the same
   discipline here).
 - The engine is behaviour-compatible with today's statusline output. The chezmoi
-  statusline must render identically after switching to `cquota` - that is the
+  statusline must render identically after switching to `quota-statusline` - that is the
   acceptance bar for the migration.
 ```

@@ -4,7 +4,7 @@ Alfred Brose's personal Claude Code **marketplace** (`abrose-plugins`).
 
 | Plugin | Mechanism | What it does |
 |--------|-----------|--------------|
-| [`adhd-friendly-simple-technical-english`](plugins/adhd-friendly-simple-technical-english/) | Output style | Combines Simplified Technical English (ASD-STE100) short, direct sentences with an ADHD action-first shape — numbered, skimmable, no fluff — and keeps the depth (the "why" and the `★ Insight ─────` blocks). Code is exempt. Select it from `/config`. |
+| [`adhd-friendly-simple-technical-english`](plugins/adhd-friendly-simple-technical-english/) | Output style | Combines Simplified Technical English (ASD-STE100) short, direct sentences with an ADHD action-first shape (numbered, skimmable, no fluff) and keeps the depth (the "why" and the `★ Insight ─────` blocks). Code is exempt. Select it from `/config`. |
 | [`quota-statusline`](plugins/quota-statusline/) | `bin/` executable | A quota-spend projection engine (`quota-statusline`). Reads the Claude Code rate-limit payload, logs a rolling per-profile usage sample, and prints a JSON verdict per window (5h/7d): on pace to blow the limit before it resets, or coasting under it? The weekly projection counts active hours, not 24/7. Bring your own rendering. |
 | [`team`](plugins/team/) | Skills + agents + commands + hook + `bin/` | Orchestrator-plus-team-agents workflow with Herdr. One session you talk to, role agents in panes, briefs as files, a numbered decisions file, reports by a Stop hook. Kernel only; each project adds a small overlay. |
 
@@ -22,11 +22,17 @@ The `marketplace add` argument is the GitHub repo slug. The `install` argument i
 
 ## How it works
 
-The plugin ships an **output style**. Unlike a hook, an output style *replaces* the system
-prompt. This style sets `keep-coding-instructions: true`, so Claude Code keeps its
-software-engineering instructions and only adds the shaping rules. Only one output style is
-active at a time. Select it from `/config` → Output style, then `/clear` or start a new
-session.
+Each plugin uses a different mechanism; its own README has the details.
+
+- **`adhd-friendly-simple-technical-english`** ships an **output style**. Unlike a hook, an
+  output style *replaces* the system prompt. This style sets `keep-coding-instructions: true`,
+  so Claude Code keeps its software-engineering instructions and only adds the shaping rules.
+  Only one output style is active at a time. Select it from `/config` → Output style, then
+  `/clear` or start a new session.
+- **`quota-statusline`** ships an executable. A plugin cannot register a `statusLine`, so you
+  wire your own `statusLine.command` to call `bin/quota-statusline` and render its JSON.
+- **`team`** ships skills, agents, commands, a Stop hook and `bin/` scripts that drive Herdr.
+  Each project adds a small overlay under `.claude/team/`.
 
 ## Repo layout
 
@@ -52,7 +58,8 @@ plugins/team/                                    # orchestration workflow plugin
 ├── agents/                                      # team-investigator, -implementer, -tester
 ├── commands/                                     # /team:init, brief, status, release
 ├── hooks/                                        # Stop hook: forwards reports
-├── bin/                                          # team-start, team-brief, team-slice, team-status
+├── bin/                                          # team-init, team-start, team-brief, team-watch, team-overview, ...
+├── lib/                                          # shared python: teamlib.py, overview.py
 ├── tests/test_team.py                            # behaviour tests against fake CLIs
 ├── README.md
 └── LICENSE

@@ -43,7 +43,7 @@ Or install from the marketplace once published:
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket>` | Create the tab, write the decisions file, start the watcher, write the first roster. Agents are started on demand, not chosen up front. |
+| `/team:init <ticket>` | Archive the previous run, write the decisions file and the plan file, start the overview and the watcher, write the first roster. Agents are started on demand, not chosen up front. |
 | `/team:brief <name> <topic>` | Compose a brief, fill its task section, send the kick-off, report the status line. |
 | `/team:status` | Read the roster, read idle agents that owe a report, flag anything that needs you. |
 | `/team:release [name ...|all]` | Clear and close finished agents; refuse a working one. |
@@ -53,7 +53,7 @@ Or install from the marketplace once published:
 | Script | Does |
 |---|---|
 | `team-id slug\|hash\|for` | Compute a team id: slug a ticket, or a random hash. |
-| `team-init <ticket>` | Write the team id and config, seed the safe permission allowlist, record the orchestrator's tab. |
+| `team-init <ticket>` | Archive the previous run to `scratchpad/.archive/` (refuses while its agents are live), write the team id and config, seed the safe permission allowlist, record the orchestrator's tab. |
 | `team-start <name> <role>` | Start a role agent in a pane, verify its status bar, record it under `.team/`. `--new-tab` opens a worker tab with the agent in its root pane. |
 | `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
 | `team-slice <branch> <parent>` | Create a worktree (with the repo's own `worktree_cmd` from the overlay; refuses without one) and a Herdr tab for one slice. |
@@ -131,7 +131,7 @@ warning.
 
 All under `$TEAM_SCRATCH` (default `scratchpad/current/`, git-ignored). `/team:init`
 archives the previous run and loose scratchpad entries to `scratchpad/.archive/`.
-`decisions-<ticket>.md`, `orchestration-decisions.md`,
+`decisions-<ticket>.md`, `progress-<ticket>.md`, `orchestration-decisions.md`,
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.team/<name>.json`,
 `.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
 `.team/roster.md`.

@@ -76,6 +76,7 @@ claude-plugins/                          # marketplace repo (exists)
         │   │       ├── brief-review.md
         │   │       ├── brief-post-notes.md
         │   │       ├── decisions.md
+        │   │       ├── progress.md
         │   │       └── report.md
         │   ├── team-role-investigator/SKILL.md
         │   ├── team-role-implementer/SKILL.md
@@ -93,13 +94,22 @@ claude-plugins/                          # marketplace repo (exists)
         │   ├── hooks.json
         │   └── handlers/stop-report.sh
         ├── bin/
+        │   ├── team-id
+        │   ├── team-init
         │   ├── team-start
         │   ├── team-brief
         │   ├── team-slice
+        │   ├── team-watch
+        │   ├── team-overview
+        │   ├── team-deliver
         │   └── team-status
+        ├── lib/
+        │   ├── teamlib.py               # team membership and agent state, shared by bin/
+        │   └── overview.py              # pure renderer for the overview pane
         └── tests/
             ├── test_team.py             # stdlib unittest, subprocess the scripts
-            └── fake-herdr               # PATH shim that records calls, returns canned JSON
+            ├── fake-herdr               # PATH shim that records calls, returns canned JSON
+            └── fake-git                 # PATH shim that records git calls
 ```
 
 Scripts are bash with `set -euo pipefail`, and `python3` for JSON. No other
@@ -341,8 +351,10 @@ team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--cop
 3. Copy every `--copy` directory (design folder, decisions, mockups) into the
    new worktree's `scratchpad/current/`. Warn about untracked spdd files that
    will not travel.
-4. `herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd <worktree> --label "<label>" --no-focus`
-   and one pane; print `{"worktree","tab","pane"}`.
+4. `herdr tab create --workspace <live workspace> --cwd <worktree> --label "<label>" --no-focus`
+   and one pane, where the live workspace comes from `herdr pane current
+   --current` (never the stale spawn-time `$HERDR_WORKSPACE_ID`); print
+   `{"worktree","tab","pane"}`.
 5. Print the kick-off checklist from the overlay's `env.md` section
    "Slice kick-off" if present (which worktree runs the dev server, ports).
 
@@ -364,7 +376,7 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket> [--label]` | Confirms tab label and roles needed (one question), creates the tab, writes `decisions-<ticket>.md` from the template, names the current pane `orchestrator`, writes the first roster. |
+| `/team:init <ticket> [--label]` | Derives the tab label (never asks which roles; agents start on demand), runs `team-init` (archives the previous run, renames the current pane's agent to `<team_id>-orch`), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, starts the overview and the watcher, writes the first roster. |
 | `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then `team-brief send`, then reports the status line to Alfred. |
 | `/team:status` | `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. |
 | `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <name> "/clear"`, run the overlay's `release_check` command if defined (orphan processes), then close the pane; closing the last pane closes the tab. Refuses to release an agent that is `working`. |
