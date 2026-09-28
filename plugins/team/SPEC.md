@@ -275,9 +275,15 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    stderr, exit 1), the agent is at a startup dialog (folder trust, MCP
    servers). Never answer it: it is a security decision for the human. Abort
    with exit 3, the pane id and the `agent read --source detection` screen
-   text; the human answers it, closes that pane and re-runs `team-start`. Any
-   other start error -> exit 4. Then verify the status bar once: model, mode,
-   cwd. Abort with exit 3 and the screen text if any of the three is wrong.
+   text; the human answers it, closes that pane and re-runs `team-start`. If
+   start fails with `agent_pane_busy` on a pane this run created (`--split`,
+   `--into-tab`, or `--new-tab`'s root pane), the pane's shell has not reached
+   its interactive prompt yet: retry with a short backoff, bounded by a budget
+   (90s by default; `TEAM_START_BUSY_BUDGET_MS` and `TEAM_START_BUSY_BACKOFF_MS`
+   override it for tests). Any other start error, or `agent_pane_busy` past the
+   budget or on a caller-provided `--pane`, -> exit 4. Then verify the status
+   bar once: model, mode, cwd. Abort with exit 3 and the screen text if any of
+   the three is wrong.
 6. Write `.team/<name>.json` with role, pane, started, and the resolved
    `cwd` (absolute), so `team-brief send` can tell a worktree agent from a
    main-repo one.

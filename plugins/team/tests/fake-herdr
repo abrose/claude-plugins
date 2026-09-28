@@ -18,6 +18,17 @@ same_before="$(prior "$group" "$sub")"
 
 printf '%s\n' "$*" >>"$log"
 
+# Record whether a caller-named marker file exists at the moment this call
+# runs, so a test can prove team-start writes the pending marker before it
+# calls a given group/sub (e.g. "agent start").
+if [ -n "${FAKE_MARKER_CHECK_GROUP:-}" ] && [ "$group $sub" = "$FAKE_MARKER_CHECK_GROUP $FAKE_MARKER_CHECK_SUB" ]; then
+  if [ -e "${FAKE_MARKER_CHECK_FILE:?FAKE_MARKER_CHECK_FILE unset}" ]; then
+    echo present >>"${FAKE_MARKER_CHECK_LOG:?FAKE_MARKER_CHECK_LOG unset}"
+  else
+    echo missing >>"$FAKE_MARKER_CHECK_LOG"
+  fi
+fi
+
 emit() { printf '%s\n' "$1"; }
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 
@@ -84,6 +95,12 @@ case "$group $sub" in
       fail '{"error":{"code":"agent_not_ready","message":"agent is blocked during startup and is not ready for prompts"}}'
     elif [ "$scenario" = "start_fails" ]; then
       fail '{"error":{"code":"agent_pane_not_found","message":"agent target pane w1:p2 not found"}}'
+    # A pane just created by team-start is not yet at its shell prompt, so
+    # herdr answers agent_pane_busy for the first FAKE_AGENT_START_BUSY_COUNT
+    # calls, then succeeds. Independent of $scenario, which --into-tab still
+    # needs for its own pane list/layout picture.
+    elif [ "$same_before" -lt "${FAKE_AGENT_START_BUSY_COUNT:-0}" ]; then
+      fail '{"error":{"code":"agent_pane_busy","message":"agent target pane w1:p9 is not an available shell"}}'
     else
       emit '{"result":{"agent":{"name":"a","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef1234567890"}}}}'
     fi ;;

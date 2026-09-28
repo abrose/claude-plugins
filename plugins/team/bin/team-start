@@ -95,6 +95,13 @@ fi
 scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad/current}")"
 team_env=(--env "TEAM_NAME=$name" --env "TEAM_SCRATCH=$scratch_abs")
 
+# The pending marker shields a pane from the watcher's empty-pane cleanup
+# (team-watch). Mark a created pane right after herdr hands it back, before
+# any other herdr call touches it, so the watcher can never see it unmarked.
+pending_dir="${TEAM_SCRATCH:-scratchpad/current}/.team/pending"
+pending_file_for() { printf '%s/%s' "$pending_dir" "$(printf '%s' "$1" | tr ':/' '__')"; }
+mark_pending() { mkdir -p "$pending_dir"; : > "$(pending_file_for "$1")"; }
+
 # Create a tab in the caller's live workspace and take its root pane. The pane
 # env's HERDR_WORKSPACE_ID is a spawn-time snapshot and goes stale after a pane
 # move; herdr resolves the calling pane live. The tab is registered only after
@@ -109,6 +116,7 @@ create_tab() {
   created_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
   pane=$(echo "$out" | json_get "d['result']['root_pane']['pane_id']")
   pane_created=1
+  mark_pending "$pane"
 }
 
 if [ -n "$new_tab" ]; then
@@ -163,6 +171,7 @@ PY
     out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" "${team_env[@]}" --no-focus) || exit 4
     pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
     pane_created=1
+    mark_pending "$pane"
   fi
 fi
 
@@ -170,6 +179,7 @@ if [ -z "$pane" ]; then
   out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" "${team_env[@]}" --no-focus) || exit 4
   pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
   pane_created=1
+  mark_pending "$pane"
 fi
 
 # A caller-provided pane was not created by us, so it carries no team env.
@@ -188,26 +198,44 @@ start() {
     --name "$name" --settings '{"crossSessionInbound":"accept"}'
 }
 
-pending_dir="${TEAM_SCRATCH:-scratchpad/current}/.team/pending"
-mkdir -p "$pending_dir"
-pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
-: > "$pending_file"
+# Re-mark the target pane so the trap below always has a marker to remove,
+# including a caller-provided --pane that create_tab/split never marked.
+pending_file="$(pending_file_for "$pane")"
+mark_pending "$pane"
 
 # A startup dialog (folder trust, MCP servers) is a security decision for the
 # human, so hand it over instead of answering it. Answering it trusts the
 # folder; a re-run then needs a fresh pane, since this one holds the agent.
 start_err="$(mktemp)"
 trap 'rm -f "$pending_file" "$start_err"' EXIT
-if ! out=$(start 2>"$start_err"); then
+
+# A pane team-start just created is handed back before its shell has drawn its
+# interactive prompt, so `agent start` fails with agent_pane_busy on the first
+# call(s) (herdr agent start --help: "pane must be at its interactive shell
+# prompt"). Retry only that code, only on a pane we created, with a short
+# backoff, bounded by a budget (env-overridable for fast tests).
+busy_budget_ms="${TEAM_START_BUSY_BUDGET_MS:-90000}"
+busy_backoff_ms="${TEAM_START_BUSY_BACKOFF_MS:-500}"
+now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
+deadline_ms=$(( $(now_ms) + busy_budget_ms ))
+
+while true; do
+  if out=$(start 2>"$start_err"); then
+    break
+  fi
   code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$start_err" 2>/dev/null || true)"
   if [ "$code" = "agent_not_ready" ]; then
     echo "$name is at a startup dialog in pane $pane. Answer it there, close that pane, then re-run team-start:" >&2
     herdr agent read "$name" --source detection --lines 20 >&2 || true
     exit 3
   fi
+  if [ "$code" = "agent_pane_busy" ] && [ -n "$pane_created" ] && [ "$(now_ms)" -lt "$deadline_ms" ]; then
+    python3 -c "import time;time.sleep($busy_backoff_ms/1000)"
+    continue
+  fi
   cat "$start_err" >&2
   exit 4
-fi
+done
 
 bar=$(herdr agent read "$name" --source detection --lines 20) || exit 4
 if ! { echo "$bar" | grep -qF "$bar_model" \

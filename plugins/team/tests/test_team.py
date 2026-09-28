@@ -187,6 +187,72 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
         self.assertIn("agent_pane_not_found", p.stderr)
 
+    def test_retries_agent_start_on_pane_busy_until_shell_is_ready(self):
+        # A pane team-start just created is not at its shell prompt yet, so
+        # `agent start` answers agent_pane_busy on the first call(s). team-start
+        # must retry and still succeed, for both a pane it creates via grid
+        # split (--into-tab) and via a direct split (--split).
+        cases = {
+            "into_tab": ("--into-tab", "w1:tG"),
+            "split": ("--split", "w1:p1", "right"),
+        }
+        for kind, args in cases.items():
+            with self.subTest(kind=kind):
+                open(self.herdr_log, "w").close()
+                scenario = "grid2" if kind == "into_tab" else "ok"
+                p = self.run_script("team-start", "scout", "investigator", *args,
+                                    "--cwd", self.proj, scenario=scenario,
+                                    env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1",
+                                               "FAKE_AGENT_START_BUSY_COUNT": "2",
+                                               "TEAM_START_BUSY_BACKOFF_MS": "1"})
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertTrue(os.path.exists(self.sp(".team", "scout.json")))
+                starts = [c for c in self.herdr_calls() if c.startswith("agent start ")]
+                self.assertGreater(len(starts), 1, starts)
+
+    def test_persistent_pane_busy_fails_once_budget_spent(self):
+        # A pane whose shell never reaches its prompt must not retry forever:
+        # team-start gives up once the budget (env-overridable so the test
+        # stays fast) is spent, and exits 4 like any other herdr error.
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 4.8"),
+                                       "FAKE_AGENT_START_BUSY_COUNT": "999",
+                                       "TEAM_START_BUSY_BUDGET_MS": "20",
+                                       "TEAM_START_BUSY_BACKOFF_MS": "5"})
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("agent_pane_busy", p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".team", "scout.json")))
+
+    def test_other_error_code_on_created_pane_is_not_retried(self):
+        # Only agent_pane_busy is transient on a fresh pane. Any other error
+        # code (e.g. agent_pane_not_found) is a real failure: report it at
+        # once, with a single agent start call, not a retry loop.
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, scenario="start_fails",
+                            env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        starts = [c for c in self.herdr_calls() if c.startswith("agent start ")]
+        self.assertEqual(len(starts), 1, starts)
+
+    def test_pending_marker_exists_before_first_agent_start_call(self):
+        # The marker must protect a created pane from the watcher's empty-pane
+        # cleanup before team-start ever calls `agent start` on it, not after.
+        check_log = os.path.join(self.proj, "marker_check.log")
+        open(check_log, "w").close()
+        marker = self.sp(".team", "pending", "w1_p9")
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 4.8"),
+                                       "FAKE_MARKER_CHECK_GROUP": "agent",
+                                       "FAKE_MARKER_CHECK_SUB": "start",
+                                       "FAKE_MARKER_CHECK_FILE": marker,
+                                       "FAKE_MARKER_CHECK_LOG": check_log})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        with open(check_log) as f:
+            lines = [l.strip() for l in f if l.strip()]
+        self.assertEqual(lines, ["present"], lines)
+
     def test_writes_record_when_bar_shows_basename_only(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj,
