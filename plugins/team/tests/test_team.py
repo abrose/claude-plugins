@@ -1341,18 +1341,17 @@ class StopHook(Base):
         self.assertTrue(any("REPORT scout digest: done, 2 files" in c for c in prompts), prompts)
         self.assertFalse(any("status bar" in c for c in prompts), prompts)
 
-    def test_fallback_ping_when_no_report_line(self):
-        # A worker that stops without any REPORT line must still wake the
-        # orchestrator, with a nudge that points at the report file on disk.
+    def test_stop_without_report_line_writes_report_but_stays_quiet(self):
+        # A stop without a REPORT line is often a pause (the worker waits on its
+        # own subagents), not an end. team-watch flags a worker that stays idle
+        # without a REPORT, so the hook itself never wakes the orchestrator here.
         self.write_record("scout", "investigator", topic="digest")
-        tr = self.transcript("just some final prose, no report line")
+        tr = self.transcript("two subagents still running, waiting")
         p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        prompts = [c for c in calls if c.startswith("agent prompt ")]
-        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest:")
-                            for c in prompts), prompts)
-        self.assertTrue(any("scratchpad/current/reports/scout-digest.md" in c for c in prompts), prompts)
+        self.assertIn("waiting", read_text(self.report_path("scout", "digest")))
+        time.sleep(0.3)   # room for a wrong background ping to land
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
 
     def test_no_self_ping_when_name_is_orchestrator(self):
         # The orchestrator has no TEAM_NAME today, but if it ever ran the hook as
@@ -1685,6 +1684,19 @@ class TeamWatch(Base):
         pushes = [c for c in calls if c.startswith("agent prompt app-1-orch WATCH")]
         self.assertTrue(any("app-1-scout: working -> blocked" in c for c in pushes), calls)
 
+    def test_working_to_idle_is_logged_but_not_pushed(self):
+        # A worker that waits on its own subagents flips between working and
+        # idle. The REPORT line and the idle-without-report flag cover what the
+        # orchestrator needs, so the flip only shows in the watcher's own pane.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_pause")        # baseline: working
+        p = self.run_script("team-watch", "--once", scenario="watch_pause")    # now: idle
+        self.assertIn("app-1-scout: working -> idle", p.stdout)
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()),
+                         self.herdr_calls())
+
     def test_watch_line_waits_for_the_orchestrator_input_box(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest")
@@ -1715,12 +1727,106 @@ class TeamWatch(Base):
     def test_idle_without_report_is_flagged_once(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_idle")   # baseline, flags once
-        self.run_script("team-watch", "--once", scenario="watch_idle")   # same state, must NOT flag again
+        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
+        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
         self.wait_for_calls(lambda c: "no report" in c)
         time.sleep(0.3)   # room for a wrong second push to land
         flags = [c for c in self.herdr_calls() if "no report" in c]
         self.assertEqual(len(flags), 1)
+
+    def test_short_idle_without_report_is_not_flagged(self):
+        # A worker that waits on its own subagents sits idle between their
+        # results. That pause is not worth the orchestrator's attention.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", scenario="watch_idle")
+        self.run_script("team-watch", "--once", scenario="watch_idle")
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_idle_without_report_is_flagged_once_the_grace_period_ends(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_idle")
+        time.sleep(1.1)
+        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_idle")
+        calls = self.wait_for_calls(lambda c: "no report" in c)
+        flags = [c for c in calls if "no report" in c]
+        self.assertEqual(len(flags), 1, calls)
+        self.assertIn("scratchpad/current/reports/app-1-scout-digest.md", flags[0])
+
+    def test_report_file_without_report_line_still_counts_as_no_report(self):
+        # The Stop hook rewrites the report file on every stop, so the file
+        # alone proves nothing. Only a REPORT line in it means the worker reported.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.write_report("app-1-scout", "digest", "still waiting on two subagents")
+        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
+        calls = self.wait_for_calls(lambda c: "no report" in c)
+        self.assertTrue(any("no report" in c for c in calls), calls)
+
+    def turn(self, role, text):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
+        return json.dumps({"type": role, "timestamp": stamp,
+                           "message": {"role": role, "content": [{"type": "text", "text": text}]}})
+
+    def stop_without_report(self, name):
+        """A real Stop hook run for a worker whose last message has no REPORT."""
+        tr = os.path.join(self.proj, "transcript-%s.jsonl" % name)
+        write_text(tr, self.turn("assistant", "two subagents still running, waiting") + "\n"
+                   + json.dumps({"type": "system", "subtype": "stop_hook_summary"}) + "\n")
+        env = self.env(TEAM_NAME=name)
+        subprocess.run(["bash", StopHook.HOOK], input=json.dumps({"transcript_path": tr, "cwd": self.proj}),
+                       capture_output=True, text=True, env=env, cwd=self.proj, check=True)
+        return tr
+
+    def test_quiet_worker_that_herdr_calls_working_is_flagged(self):
+        # A worker that waits on background subagents stays "working" in herdr
+        # even at an empty prompt. No turn since its last stop means it is quiet.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.stop_without_report("app-1-scout")
+        time.sleep(1.1)
+        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_working")
+        calls = self.wait_for_calls(lambda c: "no report" in c)
+        flags = [c for c in calls if "no report" in c]
+        self.assertEqual(len(flags), 1, calls)
+        self.assertIn("scratchpad/current/reports/app-1-scout-digest.md", flags[0])
+
+    def test_working_worker_with_a_turn_after_its_stop_is_not_flagged(self):
+        # A teammate result or a new prompt starts a turn: the worker is busy again.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        tr = self.stop_without_report("app-1-scout")
+        time.sleep(1.1)
+        with open(tr, "a") as f:
+            f.write(self.turn("user", "teammate A finished") + "\n")
+        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_working")
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_working_worker_within_the_grace_period_is_not_flagged(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.stop_without_report("app-1-scout")
+        self.run_script("team-watch", "--once", scenario="watch_working")
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_working_worker_that_never_stopped_is_not_flagged(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_working")
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_idle_with_report_line_is_not_flagged(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.write_report("app-1-scout", "digest")
+        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
 
     def prep_tabs(self, tabs, own_pane="w1:p9"):
         d = self.sp(".team")
@@ -1902,10 +2008,13 @@ class TeamWatch(Base):
         split = [c for c in self.herdr_calls() if c.startswith("pane split")]
         self.assertIn("--env TEAM_SCRATCH=%s " % os.path.realpath(self.sp()), split[0] + " ")
 
-    def write_report(self, name, topic):
+    def write_report(self, name, topic, message=None):
         d = self.sp("reports")
         os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "%s-%s.md" % (name, topic)), "# Report")
+        if message is None:
+            message = "| status bar |\n\nREPORT %s %s: done" % (name, topic)
+        write_text(os.path.join(d, "%s-%s.md" % (name, topic)),
+                   "# Report: %s / %s\n\n---\n\n%s\n" % (name, topic, message))
 
     def test_idle_briefed_tab_flags_release(self):
         self.cfg()
@@ -1922,6 +2031,16 @@ class TeamWatch(Base):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest",
                           brief="scratchpad/current/brief-app-1-scout-digest.md")
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_idle_only")
+        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
+        self.assertFalse(any("consider release" in c for c in pushes), pushes)
+
+    def test_idle_tab_with_report_file_but_no_report_line_not_flagged_release(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest",
+                          brief="scratchpad/current/brief-app-1-scout-digest.md")
+        self.write_report("app-1-scout", "digest", "still waiting on two subagents")
         self.prep_tabs(["w1:t2"])
         self.run_script("team-watch", "--once", scenario="panes_idle_only")
         pushes = [c for c in self.herdr_calls() if "WATCH" in c]

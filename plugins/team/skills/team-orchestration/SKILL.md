@@ -8,7 +8,7 @@ description: The orchestrator-plus-team-agents protocol. One session you talk to
 You run or take part in a team workflow. One orchestrator session talks to the
 human. Role agents run in Herdr panes. Briefs are files. Decisions are numbered.
 Reports arrive as files through a Stop hook, which also pings the orchestrator the
-moment a worker stops. These twenty rules bind everyone.
+moment a worker stops with a REPORT line. These twenty rules bind everyone.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
    composes the team on demand: it starts an agent when a task needs one, and
@@ -40,8 +40,10 @@ moment a worker stops. These twenty rules bind everyone.
    reframes an open one, say so and ask to combine.
 7. Every mention of an agent to the human carries `name (pane, session)`. With
    more than two agents alive, every status message starts with the roster.
-8. Idle is not done. An idle agent without a REPORT gets an `agent read` within a
-   minute. A `done` wait without a REPORT means read the screen.
+8. Idle is not done. A worker that goes idle without a REPORT is often waiting
+   on its own subagents: leave it alone. When the watcher flags
+   `idle, no report`, `agent read` that worker. A `done` wait without a REPORT
+   means read the screen.
 9. Only source-backed facts in every artifact. Unknowns become numbered open
    questions, never guesses. Verify one load-bearing claim of every report
    before relaying it.
@@ -60,8 +62,9 @@ moment a worker stops. These twenty rules bind everyone.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
-14. A watcher runs per team in the orchestrator tab. It reports every state
-    change, flags idle-without-report, and keeps the layout within budget.
+14. A watcher runs per team in the orchestrator tab. It flags an agent that
+    turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
+    layout within budget. Other state changes show only in its own pane.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the orchestrator tab holds at most 3 panes (you, the
     overview, and the watcher); a worker tab holds at most 6, tiled as a
@@ -71,10 +74,11 @@ moment a worker stops. These twenty rules bind everyone.
     hand, is left alone. Open a worker tab only with `team-start --new-tab`,
     which puts the first agent in the tab's root pane in your own workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
-16. After `team-brief send`, subscribe to the agent with `SendMessage`'s
-    `notify_when_idle` input, as a second idle signal next to the Stop hook.
-    The Stop hook stays the report channel; a notice that arrives without a
-    REPORT is handled by rule 8.
+16. Quiet acks. A notice that needs nothing from the human gets a one-line
+    reply (the status bar alone, if you keep one): an idle notice without a
+    REPORT, a progress note. No analysis, no early findings, no word on what
+    you will ignore. Speak to the human only for a REPORT to discuss, a
+    decision, a blocked agent, or a flag you acted on.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the

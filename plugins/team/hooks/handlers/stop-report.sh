@@ -9,7 +9,7 @@ payload="$(cat)"
 
 PLUGIN_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../bin" && pwd)" \
 PAYLOAD="$payload" python3 - <<'PY' || true
-import os, json, subprocess, datetime, sys, re
+import os, json, subprocess, datetime, sys, re, time
 
 def log(msg):
     try:
@@ -21,6 +21,8 @@ def log(msg):
         pass
 
 try:
+    sys.path.insert(0, os.path.join(os.environ["PLUGIN_BIN"], "..", "lib"))
+    from teamlib import report_line
     p = json.loads(os.environ["PAYLOAD"])
     cwd = p.get("cwd", ".")
     transcript = p.get("transcript_path", "")
@@ -71,9 +73,19 @@ try:
     body = "# Report: %s / %s\n- Brief: %s\n- Written: %s\n\n---\n\n%s\n" % (name, topic, brief, ts, message)
     open(os.path.join(reports, "%s-%s.md" % (name, topic)), "w").write(body)
 
-    # Ping the orchestrator on every stop of a team worker, so it never waits on
-    # a worker that is already done. Forward the worker's REPORT line if it wrote
-    # one anywhere in its final message; otherwise send a nudge to the report file.
+    # Record the stop, so team-watch can tell a worker that stays quiet after
+    # it from one that started a new turn, even while herdr shows it working.
+    stops = os.path.join(teamdir, "stops")
+    os.makedirs(stops, exist_ok=True)
+    json.dump({"transcript": transcript, "at": time.time()},
+              open(os.path.join(stops, name + ".json"), "w"))
+
+    # Forward the worker's REPORT line to the orchestrator. A stop without one
+    # is often a pause (the worker waits on its own subagents), so it stays
+    # quiet; team-watch flags a worker that stays quiet without a REPORT.
+    line = report_line(message)
+    if line is None:
+        sys.exit(0)
     orch = "orchestrator"
     cf = os.path.join(teamdir, "config.json")
     if os.path.exists(cf):
@@ -86,15 +98,6 @@ try:
     elif not re.match(r"^[a-z][a-z0-9_-]{0,31}$", orch):
         log("bad orchestrator name, not forwarding: %r" % orch)
     else:
-        line = None
-        for ln in message.splitlines():
-            if ln.strip().startswith("REPORT "):
-                line = ln.strip()
-                break
-        if line is None:
-            reldir = os.environ.get("TEAM_SCRATCH", "scratchpad/current")
-            line = ("REPORT %s %s: stopped without a REPORT line - read %s/reports/%s-%s.md"
-                    % (name, topic, reldir, name, topic))
         # team-deliver may wait minutes for a human draft to clear, so it runs
         # in its own session: the worker's stop never waits on it.
         try:

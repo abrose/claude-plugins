@@ -96,11 +96,15 @@ its own pane. Its pane logs each event plus a once-a-minute heartbeat, so you
 can see it working. It polls
 `herdr agent list` and `herdr pane list`, and on every pass:
 
-- pushes one `WATCH <name>: <old> -> <new>` line to the orchestrator for
-  every team agent whose state changed (a transition into `blocked` includes
-  the dialog's first line);
-- flags an agent that is `idle` or `done` with no report file newer than its
-  brief, once per state;
+- logs a `<name>: <old> -> <new>` line in its own pane for every team agent
+  whose state changed, and pushes it as a `WATCH` line to the orchestrator
+  only for a transition into `blocked` (with the dialog's first line);
+- flags an agent that has been quiet for 2 minutes (`--no-report-after`)
+  without a report, once per quiet spell. Quiet means `idle` or `done` in
+  herdr, or no new turn in its transcript since its last stop (herdr shows a
+  worker that waits on background subagents as `working`). A report counts
+  only when the report file holds a `REPORT` line and is newer than the
+  brief; a shorter pause is usually a worker waiting on its own subagents;
 - closes an empty pane in a team-managed tab only when a team record (an
   agent that exited) names that pane (never its own pane); a pane no record
   names, such as one a human opened by hand, is left alone; `team-start`

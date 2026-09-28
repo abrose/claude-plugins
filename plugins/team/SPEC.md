@@ -151,8 +151,10 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
    reframes an open one, say so and ask to combine.
 7. Every mention of an agent to the human carries `name (pane, session)`. With
    more than two agents alive, every status message starts with the roster.
-8. Idle is not done. An idle agent without a REPORT gets an `agent read` within a
-   minute. A `done` wait without a REPORT means read the screen.
+8. Idle is not done. A worker that goes idle without a REPORT is often waiting
+   on its own subagents: leave it alone. When the watcher flags
+   `idle, no report`, `agent read` that worker. A `done` wait without a REPORT
+   means read the screen.
 9. Only source-backed facts in every artifact. Unknowns become numbered open
    questions, never guesses. Verify one load-bearing claim of every report
    before relaying it.
@@ -171,8 +173,9 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
-14. A watcher runs per team in the orchestrator tab. It reports every state
-    change, flags idle-without-report, and keeps the layout within budget.
+14. A watcher runs per team in the orchestrator tab. It flags an agent that
+    turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
+    layout within budget. Other state changes show only in its own pane.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the orchestrator tab holds at most 3 panes (you, the
     overview, and the watcher); a worker tab holds at most 6, tiled as a
@@ -182,10 +185,11 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     hand, is left alone. Open a worker tab only with `team-start --new-tab`,
     which puts the first agent in the tab's root pane in your own workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
-16. After `team-brief send`, subscribe to the agent with `SendMessage`'s
-    `notify_when_idle` input, as a second idle signal next to the Stop hook.
-    The Stop hook stays the report channel; a notice that arrives without a
-    REPORT is handled by rule 8.
+16. Quiet acks. A notice that needs nothing from the human gets a one-line
+    reply (the status bar alone, if you keep one): an idle notice without a
+    REPORT, a progress note. No analysis, no early findings, no word on what
+    you will ignore. Speak to the human only for a REPORT to discuss, a
+    decision, a blocked agent, or a flag you acted on.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
@@ -311,8 +315,6 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    `--name` gives `claude` the same resolved name Herdr knows it by, so
    `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
    cross-session messages so a peer question is never held pending approval.
-   Requires Claude Code v2.1.236 or later for `notify_when_idle` to work
-   against this agent (see Increment 2026-09-24).
 5. Pre-flight, in order: if start fails with `agent_not_ready` (an error on
    stderr, exit 1), the agent is at a startup dialog (folder trust, MCP
    servers). Never answer it: it is a security decision for the human. Abort
@@ -459,8 +461,11 @@ enabled, so it must be silent and cheap when it does not apply:
 3. Extract the last assistant message from the transcript. Write it to
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,
    timestamp). Overwrite on every stop, so the file always holds the latest.
-4. Push a line to the orchestrator pane on every stop, so it never waits on a
-   worker that is already done: `team-deliver <orchestrator> "<line>"`, started
+   Also write `.team/stops/<name>.json` with the transcript path and the stop
+   time (epoch seconds), for `team-watch`. It sits in a subdirectory because
+   every top-level `*.json` in `.team/` is read as an agent record.
+4. When the message holds a REPORT line, push it to the orchestrator pane:
+   `team-deliver <orchestrator> "<line>"`, started
    detached so the stop does not wait on it,
    where `<orchestrator>` comes from `.team/config.json` (default `orchestrator`).
    `team-deliver` reads the orchestrator screen first. While the Claude Code
@@ -469,9 +474,10 @@ enabled, so it must be silent and cheap when it does not apply:
    `.team/hook.log`. A screen without an input box sends at once.
    `team-watch` pushes its `WATCH` lines the same way.
    The `<line>` is the first line in the message that starts with `REPORT ` (found
-   anywhere, not only at the start), or, when the message has none, a synthesized
-   `REPORT <name> <topic>: stopped without a REPORT line - read <report path>`.
-   Never push when `<name>` equals `<orchestrator>` (no self-ping).
+   anywhere, not only at the start). A stop without one pushes nothing: it is
+   often a pause while the worker waits on its own subagents, and `team-watch`
+   flags a worker that stays quiet without a REPORT. Never push when `<name>`
+   equals `<orchestrator>` (no self-ping).
 5. Never block the stop; on any error exit 0 and append one line to
    `.team/hook.log`.
 
@@ -923,3 +929,28 @@ worker tab, is left alone. `team-start` now closes the pane it created itself
 when a start fails outright (exit 4), so no orphan empty shell is left behind;
 it leaves the pane open on the `agent_not_ready` exit 3, since its own message
 tells the human to answer the dialog there and close it themselves.
+
+Quiet orchestrator channel. A worker that waits on its own subagents ends a
+turn each time one of them reports back, and each stop used to push a
+synthesized `stopped without a REPORT line` nudge. The Stop hook now pushes
+only a real REPORT line; a stop without one writes the report file and stays
+quiet. `team-watch` covers a stuck worker instead: it flags `idle, no report -
+read <report path>` once an agent without a REPORT has been quiet for
+`--no-report-after` seconds (default 120, passed through `--spawn`). Quiet
+means either herdr showed it idle or done for that long, or its last stop is
+that old and its transcript holds no `user` or `assistant` entry newer than
+the stop. The second test exists because herdr shows a worker `working` for
+as long as it waits on background subagents or swarm teammates, even at an
+empty prompt (seen live with both in the E2E runs). It reads turn timestamps, not the file's mtime: Claude Code keeps
+appending metadata (`stop_hook_summary`, `turn_duration`, `cost-state`) after
+a stop. A report
+counts as present only when the report file holds a `REPORT ` line and is newer
+than the brief, because the hook rewrites the file on every stop; the same rule
+gates the `consider release` flag. A plain state change (such as
+`working -> idle`) is now logged only in the watcher pane; the watcher pushes
+to the orchestrator only a transition into `blocked`, the no-report flag, and
+layout flags. Protocol rule 8 now says to leave a quiet worker alone until the
+watcher flags it. Rule 16 no longer subscribes the orchestrator with
+`notify_when_idle`, a second idle signal that fired on every pause; it now
+holds the quiet-acks rule, which keeps notices that need nothing from the
+human out of the conversation.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Watch this team's agents. Push one WATCH line to the orchestrator on each
-# state change, and log the same events to this pane so it shows activity.
+# Watch this team's agents. Push a WATCH line to the orchestrator when an agent
+# turns blocked or stays idle without a report, and log every state change to
+# this pane so it shows activity.
 # --spawn launches the watcher in its own small pane; --once runs a single pass
 # (for tests); default loops.
 set -euo pipefail
@@ -8,6 +9,9 @@ set -euo pipefail
 scratch="${TEAM_SCRATCH:-scratchpad/current}"
 teamdir="$scratch/.team"
 interval=5; once=""; spawn=""; own_pane_arg=""
+# Seconds an agent stays quiet without a REPORT before the watcher flags it. A
+# worker that waits on its own subagents sits quiet between their results.
+no_report_after=120
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while [ $# -gt 0 ]; do
@@ -16,6 +20,7 @@ while [ $# -gt 0 ]; do
     --spawn) spawn=1; shift ;;
     --own-pane) own_pane_arg="${2:?}"; shift 2 ;;
     --interval) interval="${2:?}"; shift 2 ;;
+    --no-report-after) no_report_after="${2:?}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -46,7 +51,7 @@ spawn_watcher() {
   new="$(herdr pane split --pane "$anchor" --direction down --ratio 0.8 --cwd "$PWD" --env "TEAM_SCRATCH=$scratch_abs" --no-focus | pane_id_of)" || exit 4
   self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   self="$self_dir/$(basename "${BASH_SOURCE[0]}")"
-  herdr pane run "$new" "$self" --own-pane "$new" --interval "$interval" >/dev/null || exit 4
+  herdr pane run "$new" "$self" --own-pane "$new" --interval "$interval" --no-report-after "$no_report_after" >/dev/null || exit 4
   echo "$new"
 }
 
@@ -69,9 +74,9 @@ pass() {
   orchestrator="$(orch)"
   # Compute the WATCH lines to send; the python prints one shell-safe line per push.
   local lines
-  lines="$(PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" OWN_PANE="$op" python3 - <<'PY'
-import os, json
-from teamlib import agent_state, fresh_report, records, role_agents
+  lines="$(PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" OWN_PANE="$op" NO_REPORT_AFTER="$no_report_after" python3 - <<'PY'
+import os, json, time
+from teamlib import agent_state, fresh_report, quiet_since_stop, records, role_agents
 teamdir = os.environ["TEAMDIR"]
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
 cur = {a["name"]: agent_state(a) for a in role_agents(agents, teamdir)}
@@ -79,13 +84,17 @@ sp = os.path.join(teamdir, "watch-state.json")
 state_prev = json.load(open(sp)) if os.path.exists(sp) else {}
 prev = state_prev.get("agents", {})
 flag_prev = state_prev.get("_flagged", {})
+since_prev = state_prev.get("_idle_since", {})
 own_pane = os.environ.get("OWN_PANE") or state_prev.get("own_pane")
 
 scratch = os.environ["SCRATCH"]
 recs = records(teamdir)
+now = time.time()
+no_report_after = float(os.environ["NO_REPORT_AFTER"])
 
 out = []
 flagged = {}
+idle_since = {}
 for name, state in cur.items():
     old = prev.get(name)
     if old is not None and old != state:
@@ -93,12 +102,20 @@ for name, state in cur.items():
             out.append(("blocked", name, "%s: %s -> %s" % (name, old, state)))
         else:
             out.append(("change", name, "%s: %s -> %s" % (name, old, state)))
-    if state in ("idle", "done") and not fresh_report(scratch, name, recs.get(name, {})):
-        if not flag_prev.get(name):
-            out.append(("noreport", name, "%s: idle, no report" % name))
-        flagged[name] = True
+    if state != "blocked" and not fresh_report(scratch, name, recs.get(name, {})):
+        # herdr shows a worker "working" while it waits on background
+        # subagents, so a quiet stop counts too, not only a long idle.
+        idle = state in ("idle", "done")
+        if idle:
+            idle_since[name] = since_prev.get(name, now)
+        if ((idle and now - idle_since[name] >= no_report_after)
+                or quiet_since_stop(teamdir, name, now, no_report_after)):
+            if not flag_prev.get(name):
+                report = os.path.join(scratch, "reports", "%s-%s.md" % (name, recs.get(name, {}).get("topic", "")))
+                out.append(("noreport", name, "%s: idle, no report - read %s" % (name, report)))
+            flagged[name] = True
 
-state_out = {"agents": cur, "_flagged": flagged}
+state_out = {"agents": cur, "_flagged": flagged, "_idle_since": idle_since}
 if own_pane:
     state_out["own_pane"] = own_pane
 json.dump(state_out, open(sp, "w"))
@@ -113,7 +130,10 @@ PY
       line="$line: $dlg"
     fi
     log "$line"
-    push "$orchestrator" "$line"
+    # A plain state change only shows here: a worker waiting on its own
+    # subagents flips between working and idle, and REPORT lines plus the
+    # no-report flag already tell the orchestrator what it needs.
+    [ "$kind" = "change" ] || push "$orchestrator" "$line"
   done <<<"$lines"
 
   # Layout hygiene: close empty panes and flag budget/idle issues in team-managed tabs.

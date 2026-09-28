@@ -30,8 +30,10 @@ never here.
 
 ## Agents
 
-- Idle is not done. An agent that goes quiet without a REPORT gets an
-  `agent read`. Silence is not success.
+- Idle is not done. An agent that stays quiet without a REPORT until the
+  watcher flags it gets an `agent read`. Silence is not success. A short idle
+  is not silence: a worker that waits on its own subagents ends a turn each
+  time one reports back.
 - Reset an agent before every reuse. Never brief a new task on an un-reset
   context: each reuse stacks another layer and the context grows every round.
   `/clear` by default (the brief and the decisions file carry the context), or

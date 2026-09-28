@@ -3,6 +3,7 @@
 A role agent has a record at <teamdir>/<name>.json. The team is the role
 agents plus the orchestrator named in <teamdir>/config.json.
 """
+import datetime
 import glob
 import json
 import os
@@ -28,14 +29,67 @@ def records(teamdir):
     return out
 
 
+def report_line(message):
+    """The first line of the message that starts with "REPORT ", or None."""
+    for line in message.splitlines():
+        if line.strip().startswith("REPORT "):
+            return line.strip()
+    return None
+
+
 def fresh_report(scratch, name, rec):
-    """True when the agent's report exists and is newer than its brief."""
+    """True when the agent's report holds a REPORT line and is newer than its brief."""
     topic = rec.get("topic", "")
     report = os.path.join(scratch, "reports", "%s-%s.md" % (name, topic))
     brief = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
-    if not os.path.exists(report):
+    try:
+        with open(report) as fh:
+            if report_line(fh.read()) is None:
+                return False
+    except OSError:
         return False
     return not (os.path.exists(brief) and os.path.getmtime(report) < os.path.getmtime(brief))
+
+
+def last_turn_at(transcript):
+    """Epoch seconds of the transcript's last user or assistant entry, or None.
+    Claude Code keeps appending metadata after a stop, so only turns count."""
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 262144))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    last = None
+    for line in tail.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("type") in ("user", "assistant") and ev.get("timestamp"):
+            last = ev["timestamp"]
+    if last is None:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(last.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def quiet_since_stop(teamdir, name, now, after):
+    """True when the agent's last stop is at least `after` seconds old and no
+    turn has started since, whatever state herdr shows for it."""
+    try:
+        with open(os.path.join(teamdir, "stops", name + ".json")) as fh:
+            stop = json.load(fh)
+        stopped = float(stop["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if now - stopped < after:
+        return False
+    last = last_turn_at(stop.get("transcript", ""))
+    return last is None or last <= stopped
 
 
 def report_age(scratch, name, topic, now):

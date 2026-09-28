@@ -147,11 +147,19 @@ case "$group $sub" in
         else
           emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"blocked","agent_session":{"value":"aaaa1111"}}]}}'
         fi ;;
+      watch_pause)
+        if [ "$same_before" -eq 0 ]; then
+          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"aaaa1111"}}]}}'
+        else
+          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"aaaa1111"}}]}}'
+        fi ;;
       watch_two_teams)
         emit '{"result":{"agents":[
           {"name":"app-1-scout","pane_id":"w1:p2","agent_status":"blocked","agent_session":{"value":"aaaa1111"}},
           {"name":"app-2-maker","pane_id":"w2:p2","agent_status":"working","agent_session":{"value":"bbbb2222"}}
         ]}}' ;;
+      watch_working)
+        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"aaaa1111"}}]}}' ;;
       watch_idle)
         emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"aaaa1111"}}]}}' ;;
       bad_list)
