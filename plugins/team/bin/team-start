@@ -233,6 +233,9 @@ while true; do
     python3 -c "import time;time.sleep($busy_backoff_ms/1000)"
     continue
   fi
+  # agent start failed for good: close the pane we created so no empty shell
+  # is left behind. A caller-provided --pane is never ours to close.
+  [ -z "$pane_created" ] || herdr pane close "$pane" >/dev/null 2>&1 || true
   cat "$start_err" >&2
   exit 4
 done

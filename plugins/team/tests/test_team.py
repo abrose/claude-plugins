@@ -92,10 +92,10 @@ class Base(unittest.TestCase):
     def team_json(self, name):
         return json.loads(read_text(self.sp(".team", name + ".json")))
 
-    def write_record(self, name, role, topic="", brief="", cwd=None):
+    def write_record(self, name, role, topic="", brief="", cwd=None, pane="w1:p2"):
         d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
-        rec = {"role": role, "topic": topic, "brief": brief, "pane": "w1:p2", "started": "t"}
+        rec = {"role": role, "topic": topic, "brief": brief, "pane": pane, "started": "t"}
         if cwd is not None:
             rec["cwd"] = cwd
         write_text(os.path.join(d, name + ".json"), json.dumps(rec))
@@ -186,6 +186,8 @@ class TeamStart(Base):
                             env_extra=self.bar_env("Opus 4.8"))
         self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
         self.assertIn("agent_pane_not_found", p.stderr)
+        # w1:p2 is a caller-provided pane, never ours to close.
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
 
     def test_retries_agent_start_on_pane_busy_until_shell_is_ready(self):
         # A pane team-start just created is not at its shell prompt yet, so
@@ -223,6 +225,9 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
         self.assertIn("agent_pane_busy", p.stderr)
         self.assertFalse(os.path.exists(self.sp(".team", "scout.json")))
+        # The pane team-start created (w1:p9, from the fake "pane split"
+        # response) is closed so no orphan empty shell is left behind.
+        self.assertTrue(any(c.startswith("pane close w1:p9") for c in self.herdr_calls()), self.herdr_calls())
 
     def test_other_error_code_on_created_pane_is_not_retried(self):
         # Only agent_pane_busy is transient on a fresh pane. Any other error
@@ -234,6 +239,17 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
         starts = [c for c in self.herdr_calls() if c.startswith("agent start ")]
         self.assertEqual(len(starts), 1, starts)
+        self.assertTrue(any(c.startswith("pane close w1:p9") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_startup_dialog_leaves_created_pane_open(self):
+        # team-start's own message tells the human to answer the startup
+        # dialog in this pane, then close it themselves: team-start must not
+        # close a pane it created out from under that instruction.
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, scenario="first_run_dialog",
+                            env_extra=self.bar_env("Opus 4.8"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
 
     def test_pending_marker_exists_before_first_agent_start_call(self):
         # The marker must protect a created pane from the watcher's empty-pane
@@ -1713,13 +1729,25 @@ class TeamWatch(Base):
         write_text(os.path.join(d, "watch-state.json"),
                    json.dumps({"agents": {}, "_flagged": {}, "own_pane": own_pane}))
 
-    def test_closes_empty_pane_in_team_tab(self):
+    def test_closes_named_empty_pane_in_team_tab(self):
+        # p3 is empty, but only closes because a team record (an agent that
+        # exited) names it; see test_leaves_unnamed_empty_pane_in_team_tab for
+        # the pane no record names.
         self.cfg()
         self.prep_tabs(["w1:t2"])
+        self.write_record("app-1-scout", "investigator", pane="w1:p3")
         self.run_script("team-watch", "--once", scenario="panes_empty")
         self.assertTrue(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()), self.herdr_calls())
         # p2 hosts an agent (idle status) -> not closed
         self.assertFalse(any(c.startswith("pane close w1:p2") for c in self.herdr_calls()))
+
+    def test_leaves_unnamed_empty_pane_in_team_tab(self):
+        # A pane no team record names, such as one a human opened by hand in
+        # a managed worker tab, is never closed.
+        self.cfg()
+        self.prep_tabs(["w1:t2"])
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
 
     def test_does_not_close_panes_in_foreign_tabs(self):
         self.cfg()
@@ -1771,14 +1799,20 @@ class TeamWatch(Base):
         self.assertEqual(state.get("own_pane"), "w1:p1")
 
     def test_never_closes_own_pane(self):
+        # Named by a record too, so it is the own-pane rule doing the work
+        # here, not the naming rule.
         self.cfg()
         self.prep_tabs(["w1:t2"], own_pane="w1:p3")
+        self.write_record("app-1-scout", "investigator", pane="w1:p3")
         self.run_script("team-watch", "--once", scenario="panes_empty")
         self.assertFalse(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()))
 
     def test_pending_pane_not_closed(self):
+        # Named by a record too, so it is the pending guard doing the work
+        # here, not the naming rule.
         self.cfg()
         self.prep_tabs(["w1:t2"])   # own_pane defaults to w1:p9
+        self.write_record("app-1-scout", "investigator", pane="w1:p3")
         pend = self.sp(".team", "pending")
         os.makedirs(pend, exist_ok=True)
         open(os.path.join(pend, "w1_p3"), "w").close()   # mark w1:p3 pending

@@ -135,7 +135,12 @@ def is_pending(pane_id):
 # never while a briefed agent there has no fresh report: releasing it would
 # lose a report nobody read.
 scratch = os.environ["SCRATCH"]
-briefed = {rec.get("pane"): (name, rec) for name, rec in records(teamdir).items() if rec.get("brief")}
+recs = records(teamdir)
+briefed = {rec.get("pane"): (name, rec) for name, rec in recs.items() if rec.get("brief")}
+# A pane closes only when a team record names it (an agent that exited,
+# leaving its pane behind). A pane no record names, such as one a human
+# opened by hand, is never closed.
+named_panes = {rec.get("pane") for rec in recs.values() if rec.get("pane")}
 sp = os.path.join(teamdir, "watch-state.json")
 own_pane = os.environ.get("OWN_PANE") or (json.load(open(sp)).get("own_pane") if os.path.exists(sp) else None)
 panes = json.loads(os.environ["PANES"]).get("result", {}).get("panes", [])
@@ -167,7 +172,8 @@ for tab, plist in by_tab.items():
         status = p.get("agent_status", "unknown")
         if p.get("pane_id") == own_pane:
             continue
-        if status not in occupied and own_pane and not is_pending(p.get("pane_id")):
+        if (status not in occupied and own_pane and not is_pending(p.get("pane_id"))
+                and p.get("pane_id") in named_panes):
             closes.append(p.get("pane_id"))
         else:
             occupied_statuses.append(status)

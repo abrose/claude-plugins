@@ -101,8 +101,10 @@ can see it working. It polls
   the dialog's first line);
 - flags an agent that is `idle` or `done` with no report file newer than its
   brief, once per state;
-- closes any pane in a team-managed tab that hosts no live agent (never its
-  own pane);
+- closes an empty pane in a team-managed tab only when a team record (an
+  agent that exited) names that pane (never its own pane); a pane no record
+  names, such as one a human opened by hand, is left alone; `team-start`
+  closes the pane it created itself when a start fails, so no orphan is left;
 - flags a tab that is over its pane budget, and a worker tab whose agents are
   all idle or done, and at least one was briefed, as a release candidate. A
   freshly spawned, un-briefed agent looks idle but is not flagged. A tab where
