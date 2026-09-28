@@ -23,6 +23,8 @@ beyond these steps:
 4. Write the plan file from
    `${CLAUDE_PLUGIN_ROOT}/skills/team-orchestration/templates/progress.md`
    into `${TEAM_SCRATCH:-scratchpad/current}/progress-<ticket>.md`. Refuse to overwrite.
+   In both files, replace `{{ticket}}` with the ticket. Read the templates with
+   the Read tool, not a shell command.
 5. Start the overview: `team-overview --spawn`. It splits a pane right of this
    pane and shows the plan file and the live agents there. Run it before the
    watcher, so the overview spans the full tab height.
