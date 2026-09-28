@@ -24,6 +24,7 @@ Do not run any command to send it. Stopping saves your whole message to the repo
 file and delivers the REPORT line to {{orchestrator}}.
 
 ## Rules
+- Shell discipline: see rule 20 of the team-orchestration skill.
 - Source-backed facts only; unknowns become numbered open questions.
 - No em dashes. No agent-attribution trailers in commits.
 - One thing at a time; stop after reporting.

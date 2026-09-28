@@ -121,49 +121,91 @@ dependencies. `chmod +x` before commit.
 
 Verbatim rules, kept to one page. Everything else is in `references/`.
 
-1. The orchestrator plans, briefs, reads reports, and decides with Alfred. It
-   composes the team on demand - it starts an agent when a task needs one, and
-   never asks up front which roles the run will use. It never does operational
-   work itself: no investigating a question, no analysing
-   code to answer one, no running tests, no driving a browser, no editing files,
-   no running project or build commands. If a task is worth doing, it briefs an
-   agent, even when the task looks quick. The only self-actions: talk to the
-   human; read the decisions file, briefs, reports, and delivered files; run the
-   `team-*` scripts; one read-only lookup to get a fact a brief needs or to
-   verify one report claim; git fast-forward its own worktree. Reading to brief
-   or verify is not a licence to investigate.
-2. The human decides. The orchestrator recommends with one sentence of
-   reasoning and names the option it leans to.
-3. Briefs are files in `scratchpad/current/`; prompts are one line pointing at the
-   brief. Revisions are new files (`-rev2`), never edits of the original.
-4. The decisions file is the single binding source. Every brief reads it
-   first. Every decision is numbered, including one-word answers. Amendments
-   get a suffix (3a). The file is mirrored into every active worktree's
-   `scratchpad/current/` after every append.
-5. Agents report by name: `REPORT <name> <topic>: <summary>`. The deliverable
-   is always a file; the report is a summary of at most ten lines. The
+1. The orchestrator plans, briefs, reads reports, and decides with the human. It
+   composes the team on demand: it starts an agent when a task needs one, and
+   never asks the human up front which roles the run will use. It never does
+   operational work itself. It never investigates a question, never
+   analyses code to answer one, never runs a test, never drives a browser, never
+   edits a file, never runs a project or build command. If a task is worth
+   doing, it briefs an agent to do it, even when the task looks quick and even
+   when no agent is running yet (start one). When you notice yourself about to do
+   the work, stop and brief an agent instead.
+   The orchestrator does only these things with its own hands: talk to the human;
+   read the decisions file, briefs, reports, and delivered files; run the
+   `team-*` scripts; read one file or run one read-only command to get a single
+   fact a brief needs or to verify one claim of a report; git fast-forward its
+   own worktree. Reading to brief or to verify is never a licence to start
+   investigating - one read, then delegate.
+2. The human decides. The orchestrator recommends with one sentence of reasoning
+   and names the option it leans to.
+3. Briefs are files in `scratchpad/current/`. Prompts are one line pointing at the brief.
+   Revisions are new files (`-rev2`), never edits of the original.
+4. The decisions file is the single binding source. Every brief reads it first.
+   Every decision is numbered, including one-word answers. Amendments get a
+   suffix (3a).
+5. Agents report by name: `REPORT <name> <topic>: <summary>`. A worker writes that
+   line as plain text and stops; the Stop hook delivers it to the orchestrator. The
+   deliverable is always a file. The report is a summary of at most ten lines. The
    orchestrator reads the file before discussing.
 6. Reports are discussed one at a time in arrival order. If a later report
    reframes an open one, say so and ask to combine.
-7. Every mention of an agent to Alfred carries `name (pane, session)`. With
+7. Every mention of an agent to the human carries `name (pane, session)`. With
    more than two agents alive, every status message starts with the roster.
-8. Idle is not done. An idle agent without a REPORT gets an `agent read`
-   within a minute. A `done` wait without a REPORT means read the screen.
+8. Idle is not done. An idle agent without a REPORT gets an `agent read` within a
+   minute. A `done` wait without a REPORT means read the screen.
 9. Only source-backed facts in every artifact. Unknowns become numbered open
    questions, never guesses. Verify one load-bearing claim of every report
    before relaying it.
 10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
-    count in every status. A fourth round is Alfred's explicit exception.
+    count in every status. A fourth round is the human's explicit exception.
     Behaviour-neutral tidy-ups do not count as rounds.
-11. Reset an agent's context before every reuse; never stack a new task on an
-    old context. `/clear` is the default - briefs and the decisions file carry
-    the context. When the old context holds knowledge the next task needs,
-    `/compact` instead. Confirm the reset landed before the next brief.
-12. When Alfred is away, the orchestrator writes every own call to
-    `scratchpad/current/orchestration-decisions.md` with context, so it can be
-    audited. Alfred's decisions stay in the numbered file.
-13. Anything an agent produces is a file; the chat carries summaries and
+11. Reset an agent's context before every reuse. Never brief a new task on top
+    of an old context: each reuse then stacks another layer, and the context
+    grows every round for no gain. `/clear` is the default - the brief and the
+    decisions file carry all the context a task needs. When the old context
+    holds knowledge the next task needs, `/compact` instead, so that knowledge
+    survives in condensed form. Confirm the reset landed (the agent reports a
+    cleared or compacted context) before you send the next brief.
+12. When the human is away, the orchestrator writes every own call to
+    `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
+    The human's decisions stay in the numbered file.
+13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
+14. A watcher runs per team in the orchestrator tab. It reports every state
+    change, flags idle-without-report, and keeps the layout within budget.
+    Never sit blind: act on `WATCH` lines.
+15. Pane budgets: the orchestrator tab holds at most 3 panes (you, the
+    overview, and the watcher); a worker tab holds at most 6, tiled as a
+    2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
+    empty pane closes automatically only when a team record names it (an
+    agent that exited); a pane no record names, such as one a human opened by
+    hand, is left alone. Open a worker tab only with `team-start --new-tab`,
+    which puts the first agent in the tab's root pane in your own workspace;
+    add more agents with `--into-tab`. Never create a tab with raw `herdr`.
+16. After `team-brief send`, subscribe to the agent with `SendMessage`'s
+    `notify_when_idle` input, as a second idle signal next to the Stop hook.
+    The Stop hook stays the report channel; a notice that arrives without a
+    REPORT is handled by rule 8.
+17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
+    it to the human. Orchestrator-level steps only, never a worker's
+    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
+    role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
+    before every `team-brief send`, and whenever you ask the human to act (a
+    `- [ ] you: <action>` item, moved to DONE when the human confirms).
+18. The run's files live only in `scratchpad/current/`. Never read, list or
+    search `scratchpad/.archive/` unless the human asks about an earlier run.
+19. Create a worktree only with `team-slice`, which uses the repo's own
+    worktree tooling from `.claude/team/project.yaml`. If it refuses for lack
+    of an overlay, ask the human how this repo makes worktrees. Never run
+    `git worktree add` yourself, and never put a worktree inside `scratchpad/`.
+20. Shell discipline: one simple command per Bash call. No `$VAR` or
+    `${...}` expansions, no `$(...)`, no `<(...)`, no `;`, `&&`, pipes or
+    `2>&1`. Read files
+    with the Read tool; search with a dedicated search tool when the session
+    has one, otherwise one plain `grep -n <literal> <file>` per call (an em
+    dash can be typed literally), including em dash scans. If a command still
+    prompts, find a simpler form instead of waiting. Such commands trigger
+    permission prompts that stall the run.
 
 ---
 
@@ -281,7 +323,10 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    its interactive prompt yet: retry with a short backoff, bounded by a budget
    (90s by default; `TEAM_START_BUSY_BUDGET_MS` and `TEAM_START_BUSY_BACKOFF_MS`
    override it for tests). Any other start error, or `agent_pane_busy` past the
-   budget or on a caller-provided `--pane`, -> exit 4. Then verify the status
+   budget or on a caller-provided `--pane`, -> exit 4, closing the pane this run
+created first (never a caller-provided `--pane`), so no orphan empty shell is
+left; the `agent_not_ready` exit 3 above leaves its pane open, since the
+message above tells the human to answer the dialog there. Then verify the status
    bar once: model, mode, cwd. Abort with exit 3 and the screen text if any of
    the three is wrong.
 6. Write `.team/<name>.json` with role, pane, started, and the resolved
@@ -489,6 +534,7 @@ Do not run any command to send it. Stopping saves your whole message to the repo
 file and delivers the REPORT line to {{orchestrator}}.
 
 ## Rules
+- Shell discipline: see rule 20 of the team-orchestration skill.
 - Source-backed facts only; unknowns become numbered open questions.
 - No em dashes. No agent-attribution trailers in commits.
 - One thing at a time; stop after reporting.
@@ -860,3 +906,20 @@ files. Worktree agents get their brief and decisions file in
 worktree location: without `worktree_cmd` and `worktree_dir` in the overlay
 it refuses, so a repo's own worktree tooling is always used. The overview and
 watcher panes now receive an absolute `TEAM_SCRATCH` like agent panes do.
+
+## Increment 2026-09-28
+
+Fixes `team-start` failing with `agent_pane_busy` ("target pane is not an
+available shell") when `herdr agent start` ran before a freshly created
+pane's shell reached its interactive prompt. `team-start` now retries only
+that error code, only on a pane it created, with a short backoff bounded by
+a budget (see the `team-start` contract above), and marks a created pane
+`pending` immediately after creation so the watcher never closes it mid-setup.
+
+Watcher pane cleanup narrowed: an empty pane in a team-managed tab closes
+only when a team record (`.team/<name>.json`) names that pane, i.e. an agent
+that exited. A pane no record names, such as one a human opened by hand in a
+worker tab, is left alone. `team-start` now closes the pane it created itself
+when a start fails outright (exit 4), so no orphan empty shell is left behind;
+it leaves the pane open on the `agent_not_ready` exit 3, since its own message
+tells the human to answer the dialog there and close it themselves.
