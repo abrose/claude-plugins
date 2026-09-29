@@ -124,7 +124,12 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 
 1. The orchestrator plans, briefs, reads reports, and decides with the human. It
    composes the team on demand: it starts an agent when a task needs one, and
-   never asks the human up front which roles the run will use. It never does
+   never asks the human up front which roles the run will use. It fits
+   `team-start --model` and `--effort` to each job: `opus-5-5` for deep
+   analysis and review, `sonnet-5-5` for code and tests, `haiku-4-5` for
+   mechanical jobs such as Jira writes (it starts in accept-edits, so budget
+   an approval round). Omit a flag only when the role default fits the job; a
+   human or project rule for a kind of job wins. It never does
    operational work itself. It never investigates a question, never
    analyses code to answer one, never runs a test, never drives a browser, never
    edits a file, never runs a project or build command. If a task is worth
