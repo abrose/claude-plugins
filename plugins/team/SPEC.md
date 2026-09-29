@@ -22,8 +22,9 @@ Companion: the workflow log `team-orchestration-workflow.md` (2026-09-10 to
   **Not** `hooks`, `mcpServers`, `permissionMode`, `initialPrompt`. So:
   - the report hook is a plugin-level hook in `hooks/hooks.json`, gated at
     runtime (see [Report hook](#report-hook));
-  - permission mode and effort are start flags on the pane's `claude` process
-    (`--permission-mode`, `--effort`), passed by `team-start`;
+  - model, permission mode and effort are start flags on the pane's `claude`
+    process (`--model`, `--permission-mode`, `--effort`), passed by
+    `team-start`; the agent file's `model` only matches the role default;
   - the kick-off prompt is sent by `team-brief send`, not by the agent file.
 - `bin/` of an enabled plugin is on the Bash tool's `PATH`. The orchestrator
   calls `team-start`, `team-brief`, `team-slice`, `team-status` bare.
@@ -215,20 +216,23 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 
 ## Roles
 
-Fixed mapping. Never Opus 5 or Fable for a team agent. Effort is a start
-flag; the defaults below are what `team-start` passes when `--effort` is
-omitted.
+Model and effort are start flags. The defaults below are what `team-start`
+passes when `--model` or `--effort` is omitted. The orchestrator picks
+another model or effort per job with `--model` and `--effort`. The model
+allowlist is `opus-5-5`, `sonnet-5-5`, `haiku-4-5`. Every other model,
+Fable included, is refused with exit 2.
 
 | Role | Agent file | Model | Effort | Mode | Read-only | Used for |
 |---|---|---|---|---|---|---|
-| investigator | `team-investigator` | Opus 4.8 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
-| implementer | `team-implementer` | Sonnet 5 | medium | auto | no | code in a worktree, fix rounds, MR creation on go, Jira writes on go |
-| tester | `team-tester` | Sonnet 5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
+| investigator | `team-investigator` | Opus 5.5 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
+| implementer | `team-implementer` | Sonnet 5.5 | medium | auto | no | code in a worktree, fix rounds, MR creation on go, Jira writes on go |
+| tester | `team-tester` | Sonnet 5.5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
 
-Reviewer and Mechanic are not separate agent files in 1.0: a reviewer is
-`team-investigator` with `brief-review.md`; mechanical jobs run on
-`team-implementer` until a Haiku role earns its own file (Haiku has no auto
-mode; `team-start` must then use accept-edits and budget an approval round).
+Reviewer and Mechanic are not separate agent files: a reviewer is
+`team-investigator` with `brief-review.md`; a mechanical job runs on
+`team-implementer` with `--model haiku-4-5`. Haiku has no auto mode, so
+`team-start` defaults it to `accept-edits` and refuses `--mode auto` with
+exit 2; budget an approval round for it.
 
 ### Agent frontmatter
 
@@ -237,7 +241,7 @@ mode; `team-start` must then use accept-edits and budget an approval round).
 ---
 name: team-investigator
 description: Read-only analysis, review and design-document agent for the team workflow. Started as a main session with --agent.
-model: claude-opus-4-8
+model: claude-opus-5-5
 disallowedTools: Edit, MultiEdit, NotebookEdit
 skills:
   - team-orchestration
@@ -289,11 +293,15 @@ creates and reads these; the overlay never does.
 
 ```
 team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])
-           [--effort low|medium|high]
+           [--model opus-5-5|sonnet-5-5|haiku-4-5] [--effort low|medium|high|xhigh|max]
            [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]
 ```
 
-1. Resolve `<role>` to the agent file and default effort from the role table.
+1. Resolve `<role>` to the agent file, default model and default effort from
+   the role table. Refuse with exit 2 a model outside the allowlist, an
+   effort claude does not know, or Haiku with `--mode auto`. The mode
+   defaults to `auto`, or to `accept-edits` for Haiku. `accept-edits` goes
+   to claude as `--permission-mode acceptEdits`.
    Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
    refuse with exit 3 if the live `herdr agent list` already holds that name: a
    name a live agent owns is not restartable without seizing its pane.
@@ -311,7 +319,7 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    this step creates, or a
    `herdr pane run <pane> "export TEAM_NAME=<name> TEAM_SCRATCH=<abs>"` into a
    caller-provided `--pane`.
-4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
+4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --model <model id> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
    `--name` gives `claude` the same resolved name Herdr knows it by, so
    `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
    cross-session messages so a peer question is never held pending approval.
@@ -329,8 +337,9 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
 created first (never a caller-provided `--pane`), so no orphan empty shell is
 left; the `agent_not_ready` exit 3 above leaves its pane open, since the
 message above tells the human to answer the dialog there. Then verify the status
-   bar once: model, mode, cwd. Abort with exit 3 and the screen text if any of
-   the three is wrong.
+   bar once: model family (Opus, Sonnet, Haiku), mode (`auto` or
+   `accept edits`), cwd. Abort with exit 3 and the screen text if any of the
+   three is wrong.
 6. Write `.team/<name>.json` with role, pane, started, and the resolved
    `cwd` (absolute), so `team-brief send` can tell a worktree agent from a
    main-repo one.
@@ -584,7 +593,9 @@ Every brief reads this file first. Mirror to every active worktree after each ap
 answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
 
 1. `team-start` builds the exact `herdr agent start` argument list for each
-   role (model file, default effort, mode) and writes `.team/<name>.json`.
+   role (agent file, default model, default effort, mode) and for `--model`
+   and `--effort` overrides, refuses a model outside the allowlist, and writes
+   `.team/<name>.json`.
 2. `team-start` hands a startup dialog to the human (exit 3, no keys sent)
    and aborts with exit 3 on a wrong model in the status bar.
 3. `team-brief compose` concatenates skeleton, overlay role fragment, env and
@@ -954,3 +965,16 @@ watcher flags it. Rule 16 no longer subscribes the orchestrator with
 `notify_when_idle`, a second idle signal that fired on every pause; it now
 holds the quiet-acks rule, which keeps notices that need nothing from the
 human out of the conversation.
+
+## Increment 2026-09-29
+
+The orchestrator picks the model per job. `team-start --model
+opus-5-5|sonnet-5-5|haiku-4-5` overrides the role default and always reaches
+`claude` as `--model <id>`; any other model, Fable included, is refused with
+exit 2. The role defaults move to Opus 5.5 (investigator) and Sonnet 5.5
+(implementer, tester). `--effort` accepts every level `claude` knows (`low`
+through `max`) and refuses the rest with exit 2. Haiku defaults to
+`accept-edits` and refuses `--mode auto`, since it has no auto mode. Fixes
+`--mode accept-edits`, which reached `claude` as the invalid
+`--permission-mode accept-edits`; it now goes as `acceptEdits`, and the
+status-bar check looks for `accept edits`.

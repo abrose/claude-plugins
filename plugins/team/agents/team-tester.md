@@ -1,7 +1,7 @@
 ---
 name: team-tester
 description: Test and gate agent for the team workflow. Diff review, live rounds, finding classification, manual-test partner. Started as a main session with --agent.
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 skills:
   - team-orchestration
   - team-role-tester

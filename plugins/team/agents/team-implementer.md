@@ -1,7 +1,7 @@
 ---
 name: team-implementer
 description: Code-writing agent for the team workflow. Works in a worktree, runs fix rounds, creates MRs on go. Started as a main session with --agent.
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 skills:
   - team-orchestration
   - team-role-implementer

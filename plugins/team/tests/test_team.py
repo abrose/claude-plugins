@@ -106,24 +106,94 @@ class TeamStart(Base):
         return {"FAKE_STATUS_MODEL": model, "FAKE_STATUS_MODE": mode,
                 "FAKE_STATUS_CWD": cwd or self.proj}
 
+    def start_argv(self, name, agent, model, effort, mode="auto"):
+        return ("agent start %s --kind claude --pane w1:p2 --timeout 90000 "
+                "-- --agent %s --model %s --effort %s --permission-mode %s "
+                "--name %s --settings {\"crossSessionInbound\":\"accept\"}"
+                % (name, agent, model, effort, mode, name))
+
     def test_builds_exact_agent_start_argv_per_role(self):
         cases = {
-            "investigator": ("team-investigator", "medium", "Opus 4.8"),
-            "implementer": ("team-implementer", "medium", "Sonnet 5"),
-            "tester": ("team-tester", "low", "Sonnet 5"),
+            "investigator": ("team-investigator", "claude-opus-5-5", "medium", "Opus 5.5"),
+            "implementer": ("team-implementer", "claude-sonnet-5-5", "medium", "Sonnet 5.5"),
+            "tester": ("team-tester", "claude-sonnet-5-5", "low", "Sonnet 5.5"),
         }
-        for role, (agent, effort, model) in cases.items():
+        for role, (agent, model, effort, bar) in cases.items():
             with self.subTest(role=role):
                 open(self.herdr_log, "w").close()
                 p = self.run_script("team-start", role[:4], role, "--pane", "w1:p2",
                                     "--cwd", self.proj,
-                                    env_extra=self.bar_env(model, cwd=self.proj))
+                                    env_extra=self.bar_env(bar, cwd=self.proj))
                 self.assertEqual(p.returncode, 0, p.stderr)
-                expect = ("agent start %s --kind claude --pane w1:p2 --timeout 90000 "
-                          "-- --agent %s --effort %s --permission-mode auto "
-                          "--name %s --settings {\"crossSessionInbound\":\"accept\"}"
-                          % (role[:4], agent, effort, role[:4]))
-                self.assertIn(expect, self.herdr_calls())
+                self.assertIn(self.start_argv(role[:4], agent, model, effort), self.herdr_calls())
+                self.assertEqual(json.loads(p.stdout)["model"], model)
+
+    def test_model_and_effort_override_role_defaults(self):
+        cases = {
+            "opus-5-5": ("claude-opus-5-5", "Opus 5.5"),
+            "sonnet-5-5": ("claude-sonnet-5-5", "Sonnet 5.5"),
+        }
+        for flag, (model, bar) in cases.items():
+            with self.subTest(model=flag):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
+                                    "--cwd", self.proj, "--model", flag, "--effort", "xhigh",
+                                    env_extra=self.bar_env(bar))
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn(self.start_argv("maker", "team-implementer", model, "xhigh"),
+                              self.herdr_calls())
+                self.assertEqual(json.loads(p.stdout)["model"], model)
+
+    def test_haiku_starts_in_accept_edits_mode(self):
+        # Haiku has no auto mode, so the default mode follows the model.
+        p = self.run_script("team-start", "clerk", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--model", "haiku-4-5", "--effort", "low",
+                            env_extra=self.bar_env("Haiku 4.5", mode="accept edits on"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(self.start_argv("clerk", "team-implementer", "claude-haiku-4-5-20251001",
+                                      "low", mode="acceptEdits"), self.herdr_calls())
+        out = json.loads(p.stdout)
+        self.assertEqual(out["mode"], "accept-edits")
+
+    def test_accept_edits_mode_uses_claude_permission_mode_name(self):
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--mode", "accept-edits",
+                            env_extra=self.bar_env("Sonnet 5.5", mode="accept edits on"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(self.start_argv("maker", "team-implementer", "claude-sonnet-5-5",
+                                      "medium", mode="acceptEdits"), self.herdr_calls())
+
+    def test_haiku_with_auto_mode_is_bad_args(self):
+        p = self.run_script("team-start", "clerk", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--model", "haiku-4-5", "--mode", "auto")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("haiku-4-5 has no auto mode", p.stderr)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_rejects_model_outside_allowlist(self):
+        for flag in ("fable", "opus", "opus-4-8", "sonnet-5", "claude-opus-5-5"):
+            with self.subTest(model=flag):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                                    "--cwd", self.proj, "--model", flag)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("unknown model: %s" % flag, p.stderr)
+                self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_effort_accepts_every_claude_level(self):
+        for effort in ("low", "medium", "high", "xhigh", "max"):
+            with self.subTest(effort=effort):
+                p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                                    "--cwd", self.proj, "--effort", effort, "--dry-run")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("--effort %s " % effort, p.stdout)
+
+    def test_rejects_unknown_effort(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--effort", "extreme")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("unknown effort: extreme", p.stderr)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
 
     def test_passes_resolved_name_to_claude(self):
         # ListAgents/SendMessage on other sessions match by name, so the name
@@ -131,7 +201,7 @@ class TeamStart(Base):
         # gives Herdr, including the team-id prefix.
         self.config()
         p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertTrue(any(c.startswith("agent start app-1-maker ") and "--name app-1-maker" in c
@@ -139,7 +209,7 @@ class TeamStart(Base):
 
     def test_passes_cross_session_inbound_accept_setting(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         start_call = next(c for c in calls if c.startswith("agent start scout "))
@@ -152,11 +222,12 @@ class TeamStart(Base):
                             "--cwd", self.proj, "--dry-run")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("--name scout", p.stdout)
+        self.assertIn("--model claude-opus-5-5", p.stdout)
         self.assertIn('--settings \'{"crossSessionInbound":"accept"}\'', p.stdout)
 
     def test_writes_team_record(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         rec = self.team_json("scout")
         self.assertEqual(rec["role"], "investigator")
@@ -164,14 +235,14 @@ class TeamStart(Base):
         self.assertNotIn("session", rec)
         self.assertEqual(rec["cwd"], os.path.realpath(self.proj))
         out = json.loads(p.stdout)
-        self.assertEqual(out["model"], "claude-opus-4-8")
+        self.assertEqual(out["model"], "claude-opus-5-5")
 
     def test_startup_dialog_is_handed_to_the_human(self):
         # A trust dialog is a security decision: team-start never answers it.
         # It names the pane and shows the dialog, and writes no record.
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, scenario="first_run_dialog",
-                            env_extra=self.bar_env("Opus 4.8"))
+                            env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertIn("scout is at a startup dialog in pane w1:p2", p.stderr)
         self.assertIn("Yes, I trust this folder", p.stderr)
@@ -183,7 +254,7 @@ class TeamStart(Base):
     def test_start_error_is_reported_as_herdr_error(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, scenario="start_fails",
-                            env_extra=self.bar_env("Opus 4.8"))
+                            env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
         self.assertIn("agent_pane_not_found", p.stderr)
         # w1:p2 is a caller-provided pane, never ours to close.
@@ -204,7 +275,7 @@ class TeamStart(Base):
                 scenario = "grid2" if kind == "into_tab" else "ok"
                 p = self.run_script("team-start", "scout", "investigator", *args,
                                     "--cwd", self.proj, scenario=scenario,
-                                    env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1",
+                                    env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1",
                                                "FAKE_AGENT_START_BUSY_COUNT": "2",
                                                "TEAM_START_BUSY_BACKOFF_MS": "1"})
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -218,7 +289,7 @@ class TeamStart(Base):
         # stays fast) is spent, and exits 4 like any other herdr error.
         p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
                             "--cwd", self.proj,
-                            env_extra={**self.bar_env("Opus 4.8"),
+                            env_extra={**self.bar_env("Opus 5.5"),
                                        "FAKE_AGENT_START_BUSY_COUNT": "999",
                                        "TEAM_START_BUSY_BUDGET_MS": "20",
                                        "TEAM_START_BUSY_BACKOFF_MS": "5"})
@@ -235,7 +306,7 @@ class TeamStart(Base):
         # once, with a single agent start call, not a retry loop.
         p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
                             "--cwd", self.proj, scenario="start_fails",
-                            env_extra=self.bar_env("Opus 4.8"))
+                            env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
         starts = [c for c in self.herdr_calls() if c.startswith("agent start ")]
         self.assertEqual(len(starts), 1, starts)
@@ -247,7 +318,7 @@ class TeamStart(Base):
         # close a pane it created out from under that instruction.
         p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
                             "--cwd", self.proj, scenario="first_run_dialog",
-                            env_extra=self.bar_env("Opus 4.8"))
+                            env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
 
@@ -259,7 +330,7 @@ class TeamStart(Base):
         marker = self.sp(".team", "pending", "w1_p9")
         p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
                             "--cwd", self.proj,
-                            env_extra={**self.bar_env("Opus 4.8"),
+                            env_extra={**self.bar_env("Opus 5.5"),
                                        "FAKE_MARKER_CHECK_GROUP": "agent",
                                        "FAKE_MARKER_CHECK_SUB": "start",
                                        "FAKE_MARKER_CHECK_FILE": marker,
@@ -272,14 +343,14 @@ class TeamStart(Base):
     def test_writes_record_when_bar_shows_basename_only(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj,
-                            env_extra=self.bar_env("Opus 4.8", cwd=os.path.basename(self.proj)))
+                            env_extra=self.bar_env("Opus 5.5", cwd=os.path.basename(self.proj)))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         rec = self.team_json("scout")
         self.assertEqual(rec["role"], "investigator")
 
     def test_aborts_on_wrong_model(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
 
     def test_unknown_role_is_bad_args(self):
@@ -297,7 +368,7 @@ class TeamStart(Base):
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent start app-5066-scout ") for c in self.herdr_calls()))
         self.assertTrue(os.path.exists(os.path.join(d, "app-5066-scout.json")))
@@ -313,7 +384,7 @@ class TeamStart(Base):
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
         p = self.run_script("team-start", "app-5066-scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent start app-5066-scout ") for c in self.herdr_calls()),
                         self.herdr_calls())
@@ -322,7 +393,7 @@ class TeamStart(Base):
 
     def test_no_team_id_keeps_bare_name(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent start scout ") for c in self.herdr_calls()))
 
@@ -338,7 +409,7 @@ class TeamStart(Base):
         self.config()
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, scenario="name_scout_taken",
-                            env_extra=self.bar_env("Opus 4.8"))
+                            env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
 
@@ -346,7 +417,7 @@ class TeamStart(Base):
         self.config()
         p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
                             "--cwd", self.proj, scenario="name_scout_taken",
-                            env_extra=self.bar_env("Sonnet 5"))
+                            env_extra=self.bar_env("Sonnet 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("agent start app-1-maker ") for c in self.herdr_calls()))
 
@@ -356,7 +427,7 @@ class TeamStart(Base):
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
                             "--cwd", self.proj, scenario="panes_overbudget",
-                            env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+                            env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertTrue(any(c.startswith("tab create") for c in calls), calls)
@@ -367,7 +438,7 @@ class TeamStart(Base):
     def test_into_underbudget_tab_splits_in_place(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:tG",
                             "--cwd", self.proj, scenario="grid2",
-                            env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+                            env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertFalse(any(c.startswith("tab create") for c in calls))
@@ -382,7 +453,7 @@ class TeamStart(Base):
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
                             "--cwd", self.proj, scenario="panes_overbudget",
-                            env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1"})
+                            env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 3, p.stderr)   # wrong model bar -> pre-flight fail
         tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
         self.assertNotIn("w1:t9", tabs)
@@ -390,7 +461,7 @@ class TeamStart(Base):
     def grid_split(self, scenario):
         p = self.run_script("team-start", "scout", "investigator", "--into-tab", "w1:tG",
                             "--cwd", self.proj, scenario=scenario,
-                            env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1"})
+                            env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         return [c for c in self.herdr_calls() if c.startswith("pane split")]
 
@@ -423,14 +494,14 @@ class TeamStart(Base):
         # so the agent (and its Stop hook) inherits them. The absolute path
         # keeps the hook working after the agent changes its cwd.
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("pane run w1:p2 export TEAM_NAME=scout TEAM_SCRATCH=%s" % self.abs_scratch(),
                       self.herdr_calls())
 
     def test_split_stamps_team_env(self):
         p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "down",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("pane split") and "--env TEAM_NAME=scout" in c
                             and "--env TEAM_SCRATCH=%s " % self.abs_scratch() in c
@@ -448,7 +519,7 @@ class TeamStart(Base):
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
                             "--cwd", self.proj, scenario="panes_overbudget",
-                            env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+                            env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(any(c.startswith("tab create") and "--env TEAM_NAME=maker" in c
                             and "--env TEAM_SCRATCH=%s " % self.abs_scratch() in c
@@ -457,7 +528,7 @@ class TeamStart(Base):
     def test_namespaced_name_exported_to_pane(self):
         self.config(team_id="app-1", orch="app-1-orch")
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            "--cwd", self.proj, env_extra=self.bar_env("Opus 4.8"))
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("pane run w1:p2 export TEAM_NAME=app-1-scout TEAM_SCRATCH=%s" % self.abs_scratch(),
                       self.herdr_calls())
@@ -468,7 +539,7 @@ class TeamStart(Base):
         # so the status-bar cwd check compares against the right value.
         pane_cwd = os.path.join(self.proj, "elsewhere")
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
-                            env_extra={**self.bar_env("Opus 4.8", cwd=os.path.basename(pane_cwd)),
+                            env_extra={**self.bar_env("Opus 5.5", cwd=os.path.basename(pane_cwd)),
                                        "FAKE_PANE_CWD": pane_cwd})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertTrue(any(c.startswith("pane get w1:p2") for c in self.herdr_calls()),
@@ -484,20 +555,20 @@ class TeamStart(Base):
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
-                            "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5"), "HERDR_WORKSPACE_ID": "w1"})
+                            "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 2)
 
     # The pane env's HERDR_WORKSPACE_ID is a spawn-time snapshot; "w7" stands
     # for a stale one. The live workspace of the calling pane is w1.
     STALE_WS = {"HERDR_WORKSPACE_ID": "w7"}
 
-    def new_tab(self, model="Opus 4.8", *extra):
+    def new_tab(self, model="Opus 5.5", *extra):
         return self.run_script("team-start", "scout", "investigator", "--new-tab", *extra,
                                "--cwd", self.proj,
                                env_extra={**self.bar_env(model), **self.STALE_WS})
 
     def test_new_tab_starts_agent_in_its_root_pane(self):
-        p = self.new_tab("Opus 4.8", "--label", "T1 scout")
+        p = self.new_tab("Opus 5.5", "--label", "T1 scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertFalse(any(c.startswith("pane split") for c in calls), calls)
@@ -518,7 +589,7 @@ class TeamStart(Base):
         self.assertIn("w1:t9", tabs)
 
     def test_new_tab_is_not_registered_when_start_fails(self):
-        p = self.new_tab("Sonnet 5")   # wrong model bar -> pre-flight fail
+        p = self.new_tab("Sonnet 5.5")   # wrong model bar -> pre-flight fail
         self.assertEqual(p.returncode, 3, p.stderr)
         tabs_path = self.sp(".team", "tabs.json")
         self.assertFalse(os.path.exists(tabs_path) and "w1:t9" in json.loads(read_text(tabs_path)))
@@ -531,7 +602,7 @@ class TeamStart(Base):
     def test_spill_goes_to_the_callers_live_workspace(self):
         p = self.run_script("team-start", "maker", "implementer", "--into-tab", "w1:t2",
                             "--cwd", self.proj, scenario="panes_overbudget",
-                            env_extra={**self.bar_env("Sonnet 5"), **self.STALE_WS})
+                            env_extra={**self.bar_env("Sonnet 5.5"), **self.STALE_WS})
         self.assertEqual(p.returncode, 0, p.stderr)
         creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
         self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
@@ -541,7 +612,7 @@ class TeamStart(Base):
         # leave that shell empty next to the agent.
         p = self.run_script("team-start", "scout", "investigator", "--into-tab", "w1:tG",
                             "--cwd", self.proj, scenario="fresh_tab",
-                            env_extra={**self.bar_env("Opus 4.8"), "HERDR_WORKSPACE_ID": "w1"})
+                            env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1"})
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertFalse(any(c.startswith("pane split") for c in calls), calls)

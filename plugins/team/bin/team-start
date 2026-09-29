@@ -5,7 +5,8 @@ set -euo pipefail
 
 usage() {
   echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])" >&2
-  echo "       [--effort low|medium|high] [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
+  echo "       [--model opus-5-5|sonnet-5-5|haiku-4-5] [--effort low|medium|high|xhigh|max]" >&2
+  echo "       [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
   exit 2
 }
 
@@ -16,13 +17,13 @@ name="$1"; role="$2"; shift 2
 [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "bad name: $name" >&2; exit 2; }
 
 case "$role" in
-  investigator) def_effort=medium; model=claude-opus-4-8; bar_model=Opus ;;
-  implementer)  def_effort=medium; model=claude-sonnet-5; bar_model=Sonnet ;;
-  tester)       def_effort=low;    model=claude-sonnet-5; bar_model=Sonnet ;;
+  investigator) def_effort=medium; def_model=opus-5-5 ;;
+  implementer)  def_effort=medium; def_model=sonnet-5-5 ;;
+  tester)       def_effort=low;    def_model=sonnet-5-5 ;;
   *) echo "unknown role: $role" >&2; exit 2 ;;
 esac
 
-pane=""; split_pane=""; split_dir=""; into_tab=""; new_tab=""; tab_label=""; effort=""; mode=auto; cwd=""; dry_run=""; created_tab=""; pane_created=""
+pane=""; split_pane=""; split_dir=""; into_tab=""; new_tab=""; tab_label=""; model_flag=""; effort=""; mode=""; cwd=""; dry_run=""; created_tab=""; pane_created=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane)     pane="${2:?}"; shift 2 ;;
@@ -30,6 +31,7 @@ while [ $# -gt 0 ]; do
     --into-tab) into_tab="${2:?}"; shift 2 ;;
     --new-tab)  new_tab=1; shift ;;
     --label)    tab_label="${2:?}"; shift 2 ;;
+    --model)    model_flag="${2:?}"; shift 2 ;;
     --effort)   effort="${2:?}"; shift 2 ;;
     --mode)     mode="${2:?}"; shift 2 ;;
     --cwd)      cwd="${2:?}"; shift 2 ;;
@@ -38,7 +40,31 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+model_flag="${model_flag:-$def_model}"
+case "$model_flag" in
+  opus-5-5)   model=claude-opus-5-5;           bar_model=Opus;   def_mode=auto ;;
+  sonnet-5-5) model=claude-sonnet-5-5;         bar_model=Sonnet; def_mode=auto ;;
+  haiku-4-5)  model=claude-haiku-4-5-20251001; bar_model=Haiku;  def_mode=accept-edits ;;
+  *) echo "unknown model: $model_flag" >&2; exit 2 ;;
+esac
+
 effort="${effort:-$def_effort}"
+case "$effort" in
+  low|medium|high|xhigh|max) ;;
+  *) echo "unknown effort: $effort" >&2; exit 2 ;;
+esac
+
+mode="${mode:-$def_mode}"
+case "$mode" in
+  auto)         permission_mode=auto;        bar_mode=auto ;;
+  accept-edits) permission_mode=acceptEdits; bar_mode="accept edits" ;;
+  *) echo "unknown mode: $mode" >&2; exit 2 ;;
+esac
+if [ "$model_flag" = haiku-4-5 ] && [ "$mode" = auto ]; then
+  echo "haiku-4-5 has no auto mode; use --mode accept-edits" >&2
+  exit 2
+fi
+
 placements=0
 for p in "$pane" "$split_pane" "$into_tab" "$new_tab"; do [ -n "$p" ] && placements=$((placements + 1)); done
 [ "$placements" -ge 1 ] || usage
@@ -74,7 +100,7 @@ if [ -f "$teamcfg" ]; then
 fi
 
 if [ -n "$dry_run" ]; then
-  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --effort $effort --permission-mode $mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'"
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'"
   exit 0
 fi
 
@@ -194,7 +220,7 @@ start() {
   # ListAgents/SendMessage match. --settings accepts cross-session messages so
   # a peer question never sits held pending human approval.
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
-    --agent "team-$role" --effort "$effort" --permission-mode "$mode" \
+    --agent "team-$role" --model "$model" --effort "$effort" --permission-mode "$permission_mode" \
     --name "$name" --settings '{"crossSessionInbound":"accept"}'
 }
 
@@ -242,9 +268,9 @@ done
 
 bar=$(herdr agent read "$name" --source detection --lines 20) || exit 4
 if ! { echo "$bar" | grep -qF "$bar_model" \
-    && echo "$bar" | grep -qF "$mode" \
+    && echo "$bar" | grep -qF "$bar_mode" \
     && echo "$bar" | grep -qF "$(basename "$cwd")"; }; then
-  echo "status bar mismatch (want $bar_model/$mode/$(basename "$cwd")):" >&2
+  echo "status bar mismatch (want $bar_model/$bar_mode/$(basename "$cwd")):" >&2
   echo "$bar" >&2
   exit 3
 fi

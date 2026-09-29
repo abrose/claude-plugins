@@ -66,12 +66,18 @@ Or install from the marketplace once published:
 
 | Role | Agent | Model | Default effort | Read-only |
 |---|---|---|---|---|
-| investigator | `team-investigator` | Opus 4.8 | medium | yes (tool filter) |
-| implementer | `team-implementer` | Sonnet 5 | medium | no |
-| tester | `team-tester` | Sonnet 5 | low | yes, except test files (by rule) |
+| investigator | `team-investigator` | Opus 5.5 | medium | yes (tool filter) |
+| implementer | `team-implementer` | Sonnet 5.5 | medium | no |
+| tester | `team-tester` | Sonnet 5.5 | low | yes, except test files (by rule) |
+
+The orchestrator overrides the defaults per job with `team-start --model
+opus-5-5|sonnet-5-5|haiku-4-5` and `--effort low|medium|high|xhigh|max`. Any
+other model is refused. Haiku starts in `accept-edits` mode, since it has no
+auto mode.
 
 Reviewer and post-notes work run on `team-investigator` with the `brief-review`
-and `brief-post-notes` templates. Mechanical jobs run on `team-implementer`.
+and `brief-post-notes` templates. Mechanical jobs run on `team-implementer`
+with `--model haiku-4-5`.
 
 ## Multiple teams
 
