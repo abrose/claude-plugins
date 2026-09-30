@@ -109,7 +109,7 @@ for name, state in cur.items():
         if idle:
             idle_since[name] = since_prev.get(name, now)
         if ((idle and now - idle_since[name] >= no_report_after)
-                or quiet_since_stop(teamdir, name, now, no_report_after)):
+                or quiet_since_stop(scratch, name, recs.get(name, {}), now, no_report_after)):
             if not flag_prev.get(name):
                 report = os.path.join(scratch, "reports", "%s-%s.md" % (name, recs.get(name, {}).get("topic", "")))
                 out.append(("noreport", name, "%s: idle, no report - read %s" % (name, report)))

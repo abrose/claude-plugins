@@ -77,16 +77,20 @@ def last_turn_at(transcript):
         return None
 
 
-def quiet_since_stop(teamdir, name, now, after):
+def quiet_since_stop(scratch, name, rec, now, after):
     """True when the agent's last stop is at least `after` seconds old and no
-    turn has started since, whatever state herdr shows for it."""
+    turn has started since, whatever state herdr shows for it. A stop older
+    than the agent's brief belongs to its previous task and never counts."""
     try:
-        with open(os.path.join(teamdir, "stops", name + ".json")) as fh:
+        with open(os.path.join(scratch, ".team", "stops", name + ".json")) as fh:
             stop = json.load(fh)
         stopped = float(stop["at"])
     except (OSError, ValueError, KeyError, TypeError):
         return False
     if now - stopped < after:
+        return False
+    brief = os.path.join(scratch, "brief-%s-%s.md" % (name, rec.get("topic", "")))
+    if os.path.exists(brief) and os.path.getmtime(brief) > stopped:
         return False
     last = last_turn_at(stop.get("transcript", ""))
     return last is None or last <= stopped

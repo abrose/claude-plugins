@@ -1876,6 +1876,18 @@ class TeamWatch(Base):
         time.sleep(0.3)   # room for a wrong push to land
         self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
 
+    def test_working_worker_on_a_new_brief_is_not_flagged_by_its_previous_stop(self):
+        # A /clear before a new brief starts a new transcript, so the previous
+        # task's stop record points at a transcript that no longer grows.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="replay")
+        self.stop_without_report("app-1-scout")
+        time.sleep(1.1)
+        write_text(self.sp("brief-app-1-scout-replay.md"), "# Brief: replay\n")
+        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_working")
+        time.sleep(0.3)   # room for a wrong push to land
+        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
+
     def test_working_worker_within_the_grace_period_is_not_flagged(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest")

@@ -983,3 +983,13 @@ through `max`) and refuses the rest with exit 2. Haiku defaults to
 `--mode accept-edits`, which reached `claude` as the invalid
 `--permission-mode accept-edits`; it now goes as `acceptEdits`, and the
 status-bar check looks for `accept edits`.
+
+## Increment 2026-09-30
+
+Fixes a false `idle, no report` flag on a busy worker. The orchestrator
+`/clear`s a worker before a new brief, which starts a new transcript, but the
+worker's stop record still named the previous task's transcript. That file
+no longer grows, so the watcher saw no turn since the stop and flagged the
+worker while it worked. A stop older than the worker's current brief now
+belongs to the previous task and never makes the worker count as quiet; the
+next stop writes a fresh record with the new transcript.
