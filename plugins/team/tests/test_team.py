@@ -1096,6 +1096,12 @@ class TeamOverview(Base):
         split = [c for c in self.herdr_calls() if c.startswith("pane split")]
         self.assertIn("--env TEAM_SCRATCH=%s " % os.path.realpath(self.sp()), split[0] + " ")
 
+    def test_spawn_records_the_overview_pane_for_release(self):
+        self.cfg()
+        p = self.run_script("team-overview", "--spawn")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("overview"), {"pane": "w1:p9"})
+
     def test_loop_redraws_only_when_the_frame_changes(self):
         self.team()
         self.plan(self.PLAN)
@@ -1929,6 +1935,13 @@ class TeamWatch(Base):
         self.assertTrue(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()), self.herdr_calls())
         # p2 hosts an agent (idle status) -> not closed
         self.assertFalse(any(c.startswith("pane close w1:p2") for c in self.herdr_calls()))
+
+    def test_overview_file_is_not_an_agent_record(self):
+        self.cfg()
+        self.prep_tabs(["w1:t2"])
+        write_text(self.sp(".team", "overview.json"), json.dumps({"pane": "w1:p3"}))
+        self.run_script("team-watch", "--once", scenario="panes_empty")
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
 
     def test_leaves_unnamed_empty_pane_in_team_tab(self):
         # A pane no team record names, such as one a human opened by hand in

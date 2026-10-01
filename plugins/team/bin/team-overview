@@ -33,6 +33,9 @@ spawn_overview() {
   new="$(herdr pane split --pane "$anchor" --direction right --ratio 0.72 --cwd "$PWD" --env "TEAM_SCRATCH=$scratch_abs" --no-focus | pane_id_of)" || exit 4
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   herdr pane run "$new" "$self" --interval "$interval" >/dev/null || exit 4
+  mkdir -p "$scratch_abs/.team"
+  python3 -c "import json,sys;json.dump({'pane':sys.argv[2]},open(sys.argv[1],'w'))" \
+    "$scratch_abs/.team/overview.json" "$new"
   echo "$new"
 }
 

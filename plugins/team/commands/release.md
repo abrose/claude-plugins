@@ -17,8 +17,10 @@ when `all`):
 3. If the overlay defines `release_check` in `.claude/team/project.yaml`, run it
    to catch orphan processes.
 4. Close its pane with `herdr pane close`. Closing the last pane closes the tab.
-5. When releasing `all`, also stop the watcher: send its pane Ctrl-C, then
-   close it. Remove `${TEAM_SCRATCH:-scratchpad/current}/.team/watch-state.json` and
-   `${TEAM_SCRATCH:-scratchpad/current}/.team/tabs.json`.
+5. When releasing `all`, also stop the watcher and the overview. For each of
+   the watcher pane (`own_pane` in `.team/watch-state.json`) and the overview
+   pane (`pane` in `.team/overview.json`), send it Ctrl-C, then close it.
+   Remove `.team/watch-state.json`, `.team/overview.json` and
+   `.team/tabs.json`, all under `${TEAM_SCRATCH:-scratchpad/current}`.
 
 Report which agents were released and which were refused.

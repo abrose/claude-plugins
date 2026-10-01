@@ -446,7 +446,7 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 | `/team:init <ticket> [--label]` | Derives the tab label (never asks which roles; agents start on demand), runs `team-init` (archives the previous run, renames the current pane's agent to `<team_id>-orch`), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, starts the overview and the watcher, writes the first roster. |
 | `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then `team-brief send`, then reports the status line to Alfred. |
 | `/team:status` | `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. |
-| `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <name> "/clear"`, run the overlay's `release_check` command if defined (orphan processes), then close the pane; closing the last pane closes the tab. Refuses to release an agent that is `working`. |
+| `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <name> "/clear"`, run the overlay's `release_check` command if defined (orphan processes), then close the pane; closing the last pane closes the tab. With `all`, also stops and closes the watcher and overview panes. Refuses to release an agent that is `working`. |
 
 ### Report hook
 
@@ -993,3 +993,12 @@ no longer grows, so the watcher saw no turn since the stop and flagged the
 worker while it worked. A stop older than the worker's current brief now
 belongs to the previous task and never makes the worker count as quiet; the
 next stop writes a fresh record with the new transcript.
+
+## Increment 2026-10-01
+
+Fixes `/team:release all` leaving the overview pane open. `team-overview
+--spawn` now records its pane in `.team/overview.json` (`{"pane": <id>}`),
+and `/team:release all` stops and closes that pane next to the watcher's,
+then removes the file. `overview.json` joins the non-record files, so the
+watcher never reads it as an agent record and closes the overview as an
+exited agent's pane.

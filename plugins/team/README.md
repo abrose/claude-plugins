@@ -146,7 +146,7 @@ archives the previous run and loose scratchpad entries to `scratchpad/.archive/`
 `decisions-<ticket>.md`, `progress-<ticket>.md`, `orchestration-decisions.md`,
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.team/<name>.json`,
 `.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
-`.team/roster.md`.
+`.team/overview.json`, `.team/roster.md`.
 
 ## Hook identity
 

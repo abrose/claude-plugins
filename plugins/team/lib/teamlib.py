@@ -9,7 +9,7 @@ import json
 import os
 import re
 
-NON_RECORD_FILES = ("config.json", "watch-state.json", "tabs.json", "layout-flags.json")
+NON_RECORD_FILES = ("config.json", "watch-state.json", "tabs.json", "layout-flags.json", "overview.json")
 
 
 def agent_state(agent):
