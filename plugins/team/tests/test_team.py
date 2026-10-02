@@ -1377,6 +1377,19 @@ class StopHook(Base):
         self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
                             for c in calls), calls)
 
+    def test_forwards_last_message_the_transcript_does_not_hold_yet(self):
+        # Claude Code may flush the final message to the transcript after the
+        # Stop hook runs. The payload's last_assistant_message already holds it.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("Now writing the deliverable.")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj,
+                           "last_assistant_message": "Done.\n\nREPORT scout digest: done, 1 file"},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done, 1 file", read_text(self.report_path("scout", "digest")))
+        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
+        self.assertIn("agent prompt orchestrator REPORT scout digest: done, 1 file", calls)
+
     def test_holds_report_until_orchestrator_draft_clears(self):
         self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("REPORT scout digest: done")

@@ -20,6 +20,31 @@ def log(msg):
     except Exception:
         pass
 
+def last_message_in(transcript):
+    """Last assistant text in the JSONL transcript, "" when there is none."""
+    message = ""
+    try:
+        for line in open(transcript):
+            line = line.strip()
+            if not line:
+                continue
+            ev = json.loads(line)
+            m = ev.get("message") if isinstance(ev.get("message"), dict) else None
+            role = (m or ev).get("role") or ev.get("type")
+            if role != "assistant":
+                continue
+            content = (m or ev).get("content", "")
+            if isinstance(content, list):
+                parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+                text = "".join(parts)
+            else:
+                text = str(content)
+            if text.strip():
+                message = text
+    except Exception as e:
+        log("transcript unreadable: %s" % e)
+    return message
+
 try:
     sys.path.insert(0, os.path.join(os.environ["PLUGIN_BIN"], "..", "lib"))
     from teamlib import report_line
@@ -42,28 +67,9 @@ try:
     except Exception:
         sys.exit(0)
 
-    # Last assistant message from the JSONL transcript.
-    message = ""
-    try:
-        for line in open(transcript):
-            line = line.strip()
-            if not line:
-                continue
-            ev = json.loads(line)
-            m = ev.get("message") if isinstance(ev.get("message"), dict) else None
-            role = (m or ev).get("role") or ev.get("type")
-            if role != "assistant":
-                continue
-            content = (m or ev).get("content", "")
-            if isinstance(content, list):
-                parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
-                text = "".join(parts)
-            else:
-                text = str(content)
-            if text.strip():
-                message = text
-    except Exception as e:
-        log("transcript unreadable: %s" % e)
+    # Last assistant message. The payload carries it; the transcript may not
+    # hold it yet when the hook runs, so it is only the fallback.
+    message = p.get("last_assistant_message") or last_message_in(transcript)
 
     topic = rec.get("topic", "")
     brief = rec.get("brief", "")

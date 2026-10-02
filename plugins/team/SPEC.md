@@ -466,13 +466,16 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 `stop-report.sh` runs in every session of every profile that has the plugin
 enabled, so it must be silent and cheap when it does not apply:
 
-1. Read the hook payload from stdin (`transcript_path`, `cwd`).
+1. Read the hook payload from stdin (`last_assistant_message`,
+   `transcript_path`, `cwd`).
 2. Read `TEAM_NAME` and `TEAM_SCRATCH` from the environment (`team-start`
    stamps both onto the pane; `TEAM_SCRATCH` is absolute, so the agent's cwd
    does not matter). No `TEAM_NAME`, a malformed one, or no
    `$TEAM_SCRATCH/.team/<TEAM_NAME>.json` -> exit 0.
    This is how a session knows it is a team agent and which one.
-3. Extract the last assistant message from the transcript. Write it to
+3. Take the last assistant message from the payload's
+   `last_assistant_message`; only without it, extract it from the transcript,
+   which may not hold the final message yet when the hook runs. Write it to
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,
    timestamp). Overwrite on every stop, so the file always holds the latest.
    Also write `.team/stops/<name>.json` with the transcript path and the stop
@@ -1002,3 +1005,12 @@ and `/team:release all` stops and closes that pane next to the watcher's,
 then removes the file. `overview.json` joins the non-record files, so the
 watcher never reads it as an agent record and closes the overview as an
 exited agent's pane.
+
+## Increment 2026-10-02
+
+Fixes worker REPORT lines that never reach the orchestrator. Claude Code can
+run the Stop hook before it writes the final message to the transcript, so
+the hook read the message before it, found no REPORT line, and forwarded
+nothing; the watcher then flagged the worker `idle, no report`. The hook now
+takes the message from the payload's `last_assistant_message` and reads the
+transcript only when the payload lacks it.
