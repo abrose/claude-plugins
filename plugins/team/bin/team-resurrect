@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Relaunch team workers that a herdr restore brought back without their team
+# env and flags (marked by the SessionStart hook in .team/restored/), resuming
+# their Claude sessions in the same panes. Workers are found by session id.
+# Exit codes: 0 ok, 4 herdr error.
+set -euo pipefail
+
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
+teamdir="$scratch/.team"
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$scratch")"
+
+list="$(herdr agent list)" || exit 4
+
+plan="$(PYTHONPATH="$lib" TEAMDIR="$teamdir" LIST="$list" python3 - <<'PY'
+import json, os
+from teamlib import records
+teamdir = os.environ["TEAMDIR"]
+agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
+panes = {a.get("agent_session", {}).get("value"): a.get("pane_id") for a in agents}
+for name, rec in sorted(records(teamdir).items()):
+    sid = rec.get("session", "")
+    if not sid:
+        continue
+    pane = panes.get(sid)
+    marked = os.path.exists(os.path.join(teamdir, "restored", name))
+    kind = "missing" if not pane else "relaunch" if marked else "healthy"
+    print("\t".join([kind, name, pane or "-", sid, rec.get("role", ""), rec.get("model", ""),
+                     rec.get("effort", ""), rec.get("mode", "")]))
+PY
+)"
+
+# The team mod closes an empty pane a record names. Between /exit and the
+# relaunched Claude the pane looks empty, so it is marked pending meanwhile.
+pending_dir="$teamdir/pending"
+pending_file=""
+trap '[ -z "$pending_file" ] || rm -f "$pending_file"' EXIT
+
+while IFS=$'\t' read -r kind name pane sid role model effort mode; do
+  [ -n "$kind" ] || continue
+  case "$kind" in
+    missing) echo "missing $name: session $sid not in herdr" ;;
+    healthy) echo "healthy $name" ;;
+    relaunch)
+      mkdir -p "$pending_dir"
+      pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
+      : >"$pending_file"
+      herdr agent prompt "$pane" "/exit" >/dev/null 2>&1 || true
+      if ! herdr agent wait "$pane" --until unknown --timeout 30000 >/dev/null 2>&1; then
+        echo "could not stop $name ($pane): answer what its pane shows, then run /team:resurrect again"
+        rm -f "$pending_file"; pending_file=""
+        continue
+      fi
+      herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
+      herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
+        --resume "$sid" --agent "team-$role" --model "$model" --effort "$effort" \
+        --permission-mode "$mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' >/dev/null || exit 4
+      rm -f "$pending_file"; pending_file=""
+      rm -f "$teamdir/restored/$name"
+      echo "relaunched $name ($pane)"
+      ;;
+  esac
+done <<<"$plan"

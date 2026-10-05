@@ -30,6 +30,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+[ -n "${TEAM_SESSION_ID:-}" ] || {
+  echo "TEAM_SESSION_ID is unset: the team mod did not load in this session (Claude Code too old, or the team plugin disabled)" >&2
+  exit 1
+}
+min_version="2.1.287"
+found_version="$(claude --version 2>/dev/null | awk '{print $1}')"
+FOUND="$found_version" MIN="$min_version" python3 -c "
+import os, sys
+v = lambda s: tuple(int(x) for x in s.split('.'))
+try:
+    sys.exit(0 if v(os.environ['FOUND']) >= v(os.environ['MIN']) else 1)
+except ValueError:
+    sys.exit(1)
+" || { echo "Claude Code ${found_version:-unknown} is older than $min_version" >&2; exit 1; }
+
 # A previous team whose agents are still live needs its files: refuse and name
 # them. Otherwise the previous run and every loose scratchpad entry move to
 # .archive/, out of sight of the new run. Check both the current-layout team
@@ -188,24 +203,20 @@ PY
 )"
 orch="${team_id}-orch"
 
-# Rename the orchestrator's own agent to the namespaced name, so its pane shows
-# <team_id>-orch instead of the bare default. Best-effort: never abort init.
-if [ -n "$orch_pane" ]; then
-  herdr agent rename "$orch_pane" "$orch" >/dev/null 2>&1 \
-    || echo "warning: could not rename orchestrator agent to $orch" >&2
-fi
-
 TICKET="$ticket" TEAM_ID="$team_id" ORCH="$orch" python3 - "$teamdir/config.json" <<'PY'
 import os, json, sys
 json.dump({"team_id": os.environ["TEAM_ID"], "ticket": os.environ["TICKET"],
-           "orchestrator": os.environ["ORCH"]}, open(sys.argv[1], "w"))
+           "orchestrator": os.environ["ORCH"],
+           "orchestrator_session": os.environ["TEAM_SESSION_ID"]}, open(sys.argv[1], "w"))
 PY
 
-# Seed the safe permission allowlist, adding only what is missing.
+# Seed the safe permission allowlist, adding only what is missing. SendMessage
+# is there for brief_send: a message the team mod sends has no user request
+# behind it, so auto mode's classifier gives no verdict on it.
 python3 - <<'PY'
 import json, os
 path = os.path.join(".claude", "settings.local.json")
-base = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
+base = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)", "SendMessage"]
 os.makedirs(".claude", exist_ok=True)
 data = {}
 if os.path.exists(path):
@@ -231,5 +242,24 @@ if t not in tabs: tabs.append(t)
 json.dump(tabs, open(path, "w"))
 PY
 fi
+
+# Drop session index entries whose agent record is gone or names another
+# session, so a stale entry never claims a session for a finished run. A
+# record that cannot be read right now (another team writing it) is kept.
+INDEX="${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}" python3 - <<'PY'
+import glob, json, os
+for f in glob.glob(os.path.join(os.environ["INDEX"], "*.json")):
+    sid = os.path.splitext(os.path.basename(f))[0]
+    try:
+        e = json.load(open(f))
+        rec = json.load(open(os.path.join(e["scratch"], ".team", e["name"] + ".json")))
+        stale = rec.get("session") != sid
+    except FileNotFoundError:
+        stale = True
+    except (OSError, ValueError, KeyError, TypeError):
+        stale = False
+    if stale:
+        os.remove(f)
+PY
 
 echo "team_id=$team_id config=$teamdir/config.json"

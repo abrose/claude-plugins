@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Stop hook: if this session is a team agent, write its latest message to a
-# report file and forward a REPORT line to the orchestrator. Runs in every
-# session of every profile with the plugin enabled, so it stays silent and
-# cheap when it does not apply, and never blocks the stop.
+# report file and record the stop; the orchestrator's mod picks the report up.
+# Runs in every session of every profile with the plugin enabled, so it stays
+# silent and cheap when it does not apply, and never blocks the stop.
 set -uo pipefail
 
 payload="$(cat)"
 
-PLUGIN_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../bin" && pwd)" \
 PAYLOAD="$payload" python3 - <<'PY' || true
-import os, json, subprocess, datetime, sys, re, time
+import os, json, datetime, sys, re, time
 
 def log(msg):
     try:
@@ -46,25 +45,41 @@ def last_message_in(transcript):
     return message
 
 try:
-    sys.path.insert(0, os.path.join(os.environ["PLUGIN_BIN"], "..", "lib"))
-    from teamlib import report_line
     p = json.loads(os.environ["PAYLOAD"])
     cwd = p.get("cwd", ".")
     transcript = p.get("transcript_path", "")
-    scratch = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad/current"))
-    teamdir = os.path.join(scratch, ".team")
 
-    # A team agent knows its own name from TEAM_NAME, stamped into its pane
-    # environment by team-start. No name -> this is not a team agent.
-    name = os.environ.get("TEAM_NAME", "")
+    # A team agent knows its name from TEAM_NAME, stamped into its pane by
+    # team-start and kept through /clear. A restart loses the env; then the
+    # session index, which follows /clear, names it by session id.
+    def by_env():
+        name = os.environ.get("TEAM_NAME", "")
+        scratch = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad/current"))
+        return (name, os.path.join(scratch, ".team")) if name else None
+
+    def by_session():
+        sid = p.get("session_id", "")
+        index = os.environ.get("TEAM_INDEX_DIR") or os.path.expanduser("~/.claude/team/sessions")
+        if not re.match(r"^[A-Za-z0-9-]{1,64}$", sid):
+            return None
+        try:
+            entry = json.load(open(os.path.join(index, sid + ".json")))
+        except Exception:
+            return None
+        return entry.get("name", ""), os.path.join(entry.get("scratch", ""), ".team")
+
+    found = by_env() or by_session()
+    if not found:
+        sys.exit(0)
+    name, teamdir = found
+    scratch = os.path.dirname(teamdir)
     if not re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
         sys.exit(0)
-    recf = os.path.join(teamdir, name + ".json")
-    if not os.path.isfile(recf):
-        sys.exit(0)
     try:
-        rec = json.load(open(recf))
+        rec = json.load(open(os.path.join(teamdir, name + ".json")))
     except Exception:
+        sys.exit(0)
+    if not os.environ.get("TEAM_NAME") and rec.get("session") != p.get("session_id"):
         sys.exit(0)
 
     # Last assistant message. The payload carries it; the transcript may not
@@ -76,45 +91,33 @@ try:
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     reports = os.path.join(scratch, "reports")
     os.makedirs(reports, exist_ok=True)
-    body = "# Report: %s / %s\n- Brief: %s\n- Written: %s\n\n---\n\n%s\n" % (name, topic, brief, ts, message)
-    open(os.path.join(reports, "%s-%s.md" % (name, topic)), "w").write(body)
+    report = os.path.join(reports, "%s-%s.md" % (name, topic))
 
-    # Record the stop, so team-watch can tell a worker that stays quiet after
-    # it from one that started a new turn, even while herdr shows it working.
+    # The orchestrator's mod picks a REPORT up within a tick; a later stop
+    # without one (a peer message woke the worker) keeps it until a new brief.
+    def has_report(text):
+        return any(l.strip().startswith("REPORT ") for l in text.splitlines())
+
+    def fresh_report_on_disk():
+        try:
+            if not has_report(open(report).read()):
+                return False
+            brief_file = os.path.join(scratch, "brief-%s-%s.md" % (name, topic))
+            return not (os.path.exists(brief_file) and os.path.getmtime(report) < os.path.getmtime(brief_file))
+        except OSError:
+            return False
+
+    if has_report(message) or not fresh_report_on_disk():
+        body = "# Report: %s / %s\n- Brief: %s\n- Written: %s\n\n---\n\n%s\n" % (name, topic, brief, ts, message)
+        open(report, "w").write(body)
+
+    # Record the stop, so the orchestrator's mod can tell a worker that stays
+    # quiet after it from one that started a new turn, even while herdr shows
+    # it working.
     stops = os.path.join(teamdir, "stops")
     os.makedirs(stops, exist_ok=True)
     json.dump({"transcript": transcript, "at": time.time()},
               open(os.path.join(stops, name + ".json"), "w"))
-
-    # Forward the worker's REPORT line to the orchestrator. A stop without one
-    # is often a pause (the worker waits on its own subagents), so it stays
-    # quiet; team-watch flags a worker that stays quiet without a REPORT.
-    line = report_line(message)
-    if line is None:
-        sys.exit(0)
-    orch = "orchestrator"
-    cf = os.path.join(teamdir, "config.json")
-    if os.path.exists(cf):
-        try:
-            orch = json.load(open(cf)).get("orchestrator", orch) or orch
-        except Exception:
-            pass
-    if name == orch:
-        pass  # never prompt the orchestrator to itself
-    elif not re.match(r"^[a-z][a-z0-9_-]{0,31}$", orch):
-        log("bad orchestrator name, not forwarding: %r" % orch)
-    else:
-        # team-deliver may wait minutes for a human draft to clear, so it runs
-        # in its own session: the worker's stop never waits on it.
-        try:
-            os.makedirs(teamdir, exist_ok=True)
-            deliver = os.path.join(os.environ["PLUGIN_BIN"], "team-deliver")
-            subprocess.Popen([deliver, orch, line], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL,
-                             stderr=open(os.path.join(teamdir, "hook.log"), "a"),
-                             start_new_session=True)
-        except Exception as e:
-            log("forward failed: %s" % e)
 except Exception as e:
     log("hook error: %s" % e)
 PY

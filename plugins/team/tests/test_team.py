@@ -39,6 +39,7 @@ class Base(unittest.TestCase):
         os.makedirs(self.shim)
         os.symlink(os.path.join(HERE, "fake-herdr"), os.path.join(self.shim, "herdr"))
         os.symlink(os.path.join(HERE, "fake-git"), os.path.join(self.shim, "git"))
+        os.symlink(os.path.join(HERE, "fake-claude"), os.path.join(self.shim, "claude"))
         self.herdr_log = os.path.join(self.proj, "herdr.log")
         self.git_log = os.path.join(self.proj, "git.log")
         open(self.herdr_log, "w").close()
@@ -55,6 +56,8 @@ class Base(unittest.TestCase):
         e["FAKE_HERDR_SCENARIO"] = scenario
         e["TEAM_SCRATCH"] = SCRATCH
         e["CLAUDE_PLUGIN_ROOT"] = ROOT
+        e["TEAM_INDEX_DIR"] = os.path.join(self.proj, "_index")
+        e["TEAM_SESSION_ID"] = "orch-sid"
         e.update(extra)
         for k in [k for k, v in e.items() if v is None]:
             del e[k]
@@ -92,25 +95,56 @@ class Base(unittest.TestCase):
     def team_json(self, name):
         return json.loads(read_text(self.sp(".team", name + ".json")))
 
-    def write_record(self, name, role, topic="", brief="", cwd=None, pane="w1:p2"):
+    def index_entry(self, session):
+        return json.loads(read_text(os.path.join(self.proj, "_index", session + ".json")))
+
+    def write_record(self, name, role, topic="", brief="", cwd=None, pane="w1:p2", session=None):
         d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         rec = {"role": role, "topic": topic, "brief": brief, "pane": pane, "started": "t"}
         if cwd is not None:
             rec["cwd"] = cwd
+        if session is not None:
+            rec["session"] = session
         write_text(os.path.join(d, name + ".json"), json.dumps(rec))
 
 
 class TeamStart(Base):
+    UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+
+    def test_assigns_session_id_and_records_launch_flags(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        start = next(c for c in self.herdr_calls() if c.startswith("agent start "))
+        sid = re.search(r"--session-id (%s)" % self.UUID, start).group(1)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["session"], sid)
+        self.assertEqual((rec["model"], rec["effort"], rec["mode"]),
+                         ("claude-opus-5-5", "medium", "auto"))
+
+    def test_writes_session_index_entry(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        sid = self.team_json("scout")["session"]
+        entry = self.index_entry(sid)
+        self.assertEqual(entry["name"], "scout")
+        self.assertEqual(entry["scratch"], os.path.realpath(self.sp()))
+
     def bar_env(self, model, mode="auto", cwd=None):
         return {"FAKE_STATUS_MODEL": model, "FAKE_STATUS_MODE": mode,
                 "FAKE_STATUS_CWD": cwd or self.proj}
 
     def start_argv(self, name, agent, model, effort, mode="auto"):
-        return ("agent start %s --kind claude --pane w1:p2 --timeout 90000 "
-                "-- --agent %s --model %s --effort %s --permission-mode %s "
-                "--name %s --settings {\"crossSessionInbound\":\"accept\"}"
-                % (name, agent, model, effort, mode, name))
+        return re.compile(
+            r"agent start %s --kind claude --pane w1:p2 --timeout 90000 "
+            r"-- --agent %s --session-id %s --model %s --effort %s --permission-mode %s "
+            r"--name %s --settings \{\"crossSessionInbound\":\"accept\"\}$"
+            % (name, agent, self.UUID, model, effort, mode, name))
+
+    def assert_started(self, pattern):
+        self.assertTrue(any(pattern.match(c) for c in self.herdr_calls()), self.herdr_calls())
 
     def test_builds_exact_agent_start_argv_per_role(self):
         cases = {
@@ -125,7 +159,7 @@ class TeamStart(Base):
                                     "--cwd", self.proj,
                                     env_extra=self.bar_env(bar, cwd=self.proj))
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertIn(self.start_argv(role[:4], agent, model, effort), self.herdr_calls())
+                self.assert_started(self.start_argv(role[:4], agent, model, effort))
                 self.assertEqual(json.loads(p.stdout)["model"], model)
 
     def test_model_and_effort_override_role_defaults(self):
@@ -140,8 +174,7 @@ class TeamStart(Base):
                                     "--cwd", self.proj, "--model", flag, "--effort", "xhigh",
                                     env_extra=self.bar_env(bar))
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                self.assertIn(self.start_argv("maker", "team-implementer", model, "xhigh"),
-                              self.herdr_calls())
+                self.assert_started(self.start_argv("maker", "team-implementer", model, "xhigh"))
                 self.assertEqual(json.loads(p.stdout)["model"], model)
 
     def test_haiku_starts_in_accept_edits_mode(self):
@@ -150,8 +183,8 @@ class TeamStart(Base):
                             "--cwd", self.proj, "--model", "haiku-4-5", "--effort", "low",
                             env_extra=self.bar_env("Haiku 4.5", mode="accept edits on"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn(self.start_argv("clerk", "team-implementer", "claude-haiku-4-5-20251001",
-                                      "low", mode="acceptEdits"), self.herdr_calls())
+        self.assert_started(self.start_argv("clerk", "team-implementer", "claude-haiku-4-5-20251001",
+                                            "low", mode="acceptEdits"))
         out = json.loads(p.stdout)
         self.assertEqual(out["mode"], "accept-edits")
 
@@ -160,8 +193,8 @@ class TeamStart(Base):
                             "--cwd", self.proj, "--mode", "accept-edits",
                             env_extra=self.bar_env("Sonnet 5.5", mode="accept edits on"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn(self.start_argv("maker", "team-implementer", "claude-sonnet-5-5",
-                                      "medium", mode="acceptEdits"), self.herdr_calls())
+        self.assert_started(self.start_argv("maker", "team-implementer", "claude-sonnet-5-5",
+                                            "medium", mode="acceptEdits"))
 
     def test_haiku_with_auto_mode_is_bad_args(self):
         p = self.run_script("team-start", "clerk", "implementer", "--pane", "w1:p2",
@@ -232,7 +265,6 @@ class TeamStart(Base):
         rec = self.team_json("scout")
         self.assertEqual(rec["role"], "investigator")
         self.assertEqual(rec["pane"], "w1:p2")
-        self.assertNotIn("session", rec)
         self.assertEqual(rec["cwd"], os.path.realpath(self.proj))
         out = json.loads(p.stdout)
         self.assertEqual(out["model"], "claude-opus-5-5")
@@ -666,82 +698,44 @@ class TeamBriefCompose(Base):
             self.assertIn(marker, text)
 
 
-class TeamBriefSend(Base):
+class TeamBriefPrepare(Base):
+    KICKOFF = ("Read scratchpad/current/brief-scout-digest.md and execute it fully. "
+               "Report back as it describes. You are in execution mode; if your session "
+               "shows plan mode, say so immediately.")
+
     def prep(self, name="scout", topic="digest"):
         self.write_record(name, "investigator", topic=topic)
         os.makedirs(self.sp(), exist_ok=True)
         write_text(self.sp("brief-%s-%s.md" % (name, topic)), "x")
 
-    def test_settled_state_exits_zero_and_records(self):
+    def test_prepare_prints_kickoff_and_updates_record(self):
+        self.write_record("scout", "investigator")
+        os.makedirs(self.sp(), exist_ok=True)
+        write_text(self.sp("brief-scout-digest.md"), "brief")
+        p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), self.KICKOFF)
+        rec = self.team_json("scout")
+        self.assertEqual((rec["topic"], rec["brief"]), ("digest", "scratchpad/current/brief-scout-digest.md"))
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_send_is_gone(self):
         self.prep()
         p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.strip(), "idle")
-        rec = self.team_json("scout")
-        self.assertEqual(rec["topic"], "digest")
-        self.assertTrue(rec["brief"].endswith("brief-scout-digest.md"))
+        self.assertEqual(p.returncode, 2)
+        self.assertEqual(self.herdr_calls(), [])
 
-    def test_delivered_without_status_prints_unknown_and_exits_zero(self):
-        # The prompt landed; a missing status key must not report a failure.
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
-                            scenario="prompt_no_status")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.strip(), "unknown")
-
-    def test_stalled_exits_five_without_resend(self):
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
-                            scenario="prompt_stalled")
-        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
-        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
-        self.assertEqual(len(prompts), 1)
-
-    def test_blocked_exits_six(self):
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
-                            scenario="prompt_blocked")
-        self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
-
-    def test_blocked_prints_the_dialog_text_not_the_raw_error(self):
-        # SPEC.md: agent_blocked -> print the dialog text, exit 6. The pre-check
-        # error carries the dialog in its own "dialog" field.
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
-                            scenario="prompt_blocked")
-        self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
-        self.assertIn("Allow write? [y/n]", p.stderr)
-        self.assertNotIn("{", p.stderr)
-
-    def test_working_returns_at_once_matching_spec(self):
-        # herdr's real contract: plain --wait waits for a settled state
-        # (idle/done/blocked), never "working" - --until working is required
-        # to return as soon as the agent starts its turn, per SPEC.md.
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
-                            scenario="prompt_working")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertEqual(p.stdout.strip(), "working")
-        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
-        self.assertEqual(len(prompts), 1)
-        self.assertIn("--until working", prompts[0])
-        self.assertIn("--until blocked", prompts[0])
-
-    def test_mid_run_blocked_state_prints_dialog_and_exits_six(self):
-        # A dialog raised mid-turn is matched via --until blocked and comes
-        # back as a settled result, not an error; send must still read the
-        # dialog text and exit 6, the same outward contract as the pre-check.
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest",
-                            scenario="prompt_blocked_midrun")
-        self.assertEqual(p.returncode, 6, p.stdout + p.stderr)
-        self.assertIn("Allow Bash(rm -rf build)? [y/n]", p.stderr)
+    def test_missing_brief_is_bad_args(self):
+        self.write_record("scout", "investigator")
+        p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no brief", p.stderr)
 
     def test_mirrors_brief_and_decisions_into_worktree_scratch(self):
         # A worktree agent's record carries an absolute cwd outside self.proj.
-        # send must copy the brief and the decisions file into that worktree's
-        # own scratchpad, and reference the brief by a path relative to it, so
-        # the agent never reads outside its own working directory.
+        # prepare must copy the brief and the decisions file into that
+        # worktree's own scratchpad, and reference the brief by a path relative
+        # to it, so the agent never reads outside its own working directory.
         wt = tempfile.mkdtemp()
         try:
             self.write_record("scout", "investigator", topic="digest", cwd=wt)
@@ -751,37 +745,21 @@ class TeamBriefSend(Base):
             write_text(self.sp("decisions-APP-1.md"), "1. decision\n")
             write_text(self.sp("brief-scout-digest.md"), "brief body\n")
 
-            p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
+            p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
 
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(read_text(os.path.join(wt, "scratchpad", "current", "brief-scout-digest.md")), "brief body\n")
             self.assertEqual(read_text(os.path.join(wt, "scratchpad", "current", "decisions-APP-1.md")), "1. decision\n")
-            prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
-            self.assertEqual(len(prompts), 1)
-            self.assertIn("Read scratchpad/current/brief-scout-digest.md ", prompts[0])
-            self.assertNotIn(wt, prompts[0])
+            self.assertEqual(p.stdout.strip(), self.KICKOFF)
+            self.assertNotIn(wt, p.stdout)
         finally:
             shutil.rmtree(wt, ignore_errors=True)
 
     def test_no_mirroring_when_cwd_is_the_main_repo(self):
-        # A record with no cwd, or one matching this repo's own $PWD, is not a
-        # worktree agent: send must behave as before, referencing the brief by
-        # its path under the orchestrator's own scratchpad.
         self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
+        p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stderr)
-        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
-        self.assertIn("Read scratchpad/current/brief-scout-digest.md ", prompts[0])
-
-    def test_send_positions_prompt_before_wait_flag(self):
-        self.prep()
-        p = self.run_script("team-brief", "send", "scout", "--topic", "digest")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        prompts = [c for c in self.herdr_calls() if c.startswith("agent prompt ")]
-        self.assertEqual(len(prompts), 1)
-        call = prompts[0]
-        self.assertTrue(call.startswith("agent prompt scout Read "), call)
-        self.assertIn(" --wait ", call)
+        self.assertEqual(p.stdout.strip(), self.KICKOFF)
 
 
 class TeamSlice(Base):
@@ -853,14 +831,15 @@ class TeamSlice(Base):
 
 
 class TeamStatus(Base):
-    def test_joins_roster_and_reads_idle(self):
-        self.write_record("scout", "investigator", topic="digest")
+    def test_joins_roster_and_reads_idle_by_pane(self):
+        self.write_record("scout", "investigator", topic="digest", session="11111111aaaa")
+        self.write_record("maker", "implementer", topic="build", session="22222222bbbb")
         p = self.run_script("team-status", "--read-idle", scenario="status_mixed")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
         calls = self.herdr_calls()
-        self.assertTrue(any(c.startswith("agent read scout") for c in calls))
-        self.assertFalse(any(c.startswith("agent read maker") for c in calls))
+        self.assertTrue(any(c.startswith("agent read w1:p2") for c in calls))
+        self.assertFalse(any(c.startswith("agent read w1:p3") for c in calls))
         roster = self.sp(".team", "roster.md")
         self.assertTrue(os.path.exists(roster))
 
@@ -868,11 +847,12 @@ class TeamStatus(Base):
         d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "orchestrator": orch}))
+                   json.dumps({"team_id": "app-1", "orchestrator": orch,
+                               "orchestrator_session": "oooo0000dddd"}))
 
     def test_roster_lists_only_team_agents_and_orchestrator(self):
         self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.write_record("app-1-scout", "investigator", topic="digest", session="11111111aaaa")
         p = self.run_script("team-status", scenario="status_two_teams")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.splitlines(), [
@@ -880,9 +860,39 @@ class TeamStatus(Base):
             "app-1-scout (w2:p2, 11111111) idle investigator digest -",
         ])
 
+    def test_maps_records_by_session_not_name(self):
+        # w2:pB has no herdr name at all, as after a restart.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="c23a1be5eeee")
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("app-1-scout (w2:pB, c23a1be5) idle investigator", p.stdout)
+
+    def test_warns_about_a_team_started_before_session_ids(self):
+        # Such a team gets no REPORT delivery from the team mod: say so.
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("started before team 0.5.0", p.stderr)
+        self.assertIn("/team:init", p.stderr)
+
+    def test_no_warning_for_a_current_team(self):
+        self.cfg()
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.stderr, "")
+
+    def test_record_without_a_live_session_is_left_out(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="gone0000")
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["app-1-orch (w2:p1, oooo0000) working - - -"])
+
     def test_json_reports_herdr_agent_status(self):
         self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
+        self.write_record("app-1-scout", "investigator", topic="digest", session="11111111aaaa")
         p = self.run_script("team-status", "--json", scenario="status_two_teams")
         self.assertEqual(p.returncode, 0, p.stderr)
         states = {r["name"]: r["state"] for r in json.loads(p.stdout)}
@@ -890,7 +900,7 @@ class TeamStatus(Base):
 
     def test_empty_record_fields_keep_columns(self):
         self.cfg()
-        self.write_record("app-1-scout", "")
+        self.write_record("app-1-scout", "", session="11111111aaaa")
         p = self.run_script("team-status", "--json", scenario="status_two_teams")
         self.assertEqual(p.returncode, 0, p.stderr)
         scout = [r for r in json.loads(p.stdout) if r["name"] == "app-1-scout"][0]
@@ -919,20 +929,6 @@ class DefaultScratch(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.sp(".team", "roster.md")))
 
-    def test_watch_writes_state_under_current(self):
-        self.cfg()
-        p = self.run_script("team-watch", "--once", scenario="watch_idle", env_extra=self.UNSET)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(os.path.exists(self.sp(".team", "watch-state.json")))
-
-    def test_overview_reads_plan_under_current(self):
-        self.cfg()
-        write_text(self.sp("progress-APP-1.md"), "# APP-1\n")
-        p = self.run_script("team-overview", "--once",
-                            env_extra={**self.UNSET, "COLUMNS": "60", "LINES": "40"})
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.splitlines()[0], "APP-1")
-
     def test_stop_hook_writes_report_under_current(self):
         self.write_record("scout", "investigator", topic="digest")
         tr = os.path.join(self.proj, "t.jsonl")
@@ -944,336 +940,6 @@ class DefaultScratch(Base):
                            capture_output=True, text=True, env=env, cwd=self.proj)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.sp("reports", "scout-digest.md")))
-
-
-class TeamOverview(Base):
-    NOW = 1800000000
-    PLAN = ("# APP-1 round 2\n\n"
-            "## DONE\n- [x] design (inv)\n\n"
-            "## RUNNING\n- [>] fix round 2 (impl)\n\n"
-            "## NEXT\n- [ ] review round 2 (rev)\n- [ ] you: manual test\n")
-    AGENTS = ["AGENTS", " impl  w2:p3  working  2m", " rev   w2:p4  idle     -"]
-
-    def cfg(self):
-        d = self.sp(".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
-
-    def plan(self, text):
-        write_text(self.sp("progress-APP-1.md"), text)
-
-    def team(self):
-        # impl reported 2 minutes ago; rev has no report.
-        self.cfg()
-        self.write_record("app-1-impl", "implementer", topic="fix")
-        self.write_record("app-1-rev", "tester", topic="review")
-        reports = self.sp("reports")
-        os.makedirs(reports)
-        report = os.path.join(reports, "app-1-impl-fix.md")
-        write_text(report, "done")
-        os.utime(report, (self.NOW - 120, self.NOW - 120))
-
-    def overview(self, columns=60, lines=40, scenario="overview"):
-        return self.run_script("team-overview", "--once", scenario=scenario,
-                               env_extra={"COLUMNS": str(columns), "LINES": str(lines),
-                                          "TEAM_NOW": str(self.NOW)})
-
-    def test_renders_plan_and_live_agents(self):
-        # The orchestrator, another team's agent and a nameless pane are in the
-        # herdr list; only this team's role agents appear, without the team id.
-        self.team()
-        self.plan(self.PLAN)
-        p = self.overview()
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stderr, "")
-        self.assertEqual(p.stdout.splitlines(), [
-            "APP-1 round 2", "=============",
-            "DONE", " [x] design (inv)",
-            "RUNNING", " [>] fix round 2 (impl)",
-            "NEXT", " [ ] review round 2 (rev)", " [ ] you: manual test",
-        ] + self.AGENTS)
-
-    def test_without_plan_file_says_where_it_goes_and_still_lists_agents(self):
-        self.team()
-        p = self.overview()
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.splitlines(),
-                         ["no plan yet: scratchpad/current/progress-APP-1.md"] + self.AGENTS)
-
-    def test_without_team_config_asks_for_init(self):
-        p = self.overview()
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.splitlines(), ["no team: run /team:init"])
-
-    def test_herdr_failure_keeps_the_plan(self):
-        self.team()
-        self.plan(self.PLAN)
-        p = self.overview(scenario="list_fails")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stderr, "")
-        lines = p.stdout.splitlines()
-        self.assertEqual(lines[0], "APP-1 round 2")
-        self.assertEqual(lines[-2:], ["AGENTS", " herdr unavailable"])
-
-    def test_no_role_agents_yet(self):
-        self.cfg()
-        self.plan(self.PLAN)
-        p = self.overview()
-        self.assertEqual(p.stdout.splitlines()[-2:], ["AGENTS", " (none)"])
-
-    def six_done(self):
-        return self.PLAN.replace("- [x] design (inv)\n",
-                                 "".join("- [x] d%d\n" % i for i in range(1, 7)))
-
-    def test_short_pane_keeps_the_newest_done_items(self):
-        # Fixed part: title 2 + DONE heading 1 + RUNNING 2 + NEXT 3 + AGENTS 3 = 11.
-        self.team()
-        self.plan(self.six_done())
-        p = self.overview(lines=13)
-        self.assertEqual(p.stdout.splitlines()[:7], [
-            "APP-1 round 2", "=============",
-            "DONE (+4 earlier)", " [x] d5", " [x] d6",
-            "RUNNING", " [>] fix round 2 (impl)",
-        ])
-
-    def test_tiny_pane_keeps_only_the_done_heading(self):
-        self.team()
-        self.plan(self.six_done())
-        p = self.overview(lines=5)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.splitlines(), [
-            "APP-1 round 2", "=============", "DONE (+6 earlier)",
-            "RUNNING", " [>] fix round 2 (impl)",
-            "NEXT", " [ ] review round 2 (rev)", " [ ] you: manual test",
-        ] + self.AGENTS)
-
-    def test_narrow_pane_cuts_long_lines(self):
-        self.team()
-        self.plan(self.PLAN)
-        p = self.overview(columns=20)
-        lines = p.stdout.splitlines()
-        self.assertIn(" [>] fix round 2 (i…", lines)
-        self.assertIn(" impl  w2:p3  worki…", lines)
-        self.assertTrue(all(len(l) <= 20 for l in lines), lines)
-
-    def test_lenient_markdown_still_renders(self):
-        self.cfg()
-        self.plan("#  APP-1\n## Done\n* [X] design\nnotes here\n## next\n- [ ] ship\n")
-        p = self.overview()
-        self.assertEqual(p.stdout.splitlines(), [
-            "APP-1", "=====", "DONE", " [X] design", "RUNNING", "NEXT", " [ ] ship",
-            "AGENTS", " (none)",
-        ])
-
-    def test_plan_without_title_has_no_underline(self):
-        self.cfg()
-        self.plan("## NEXT\n- [ ] ship\n")
-        p = self.overview()
-        self.assertEqual(p.stdout.splitlines(), [
-            "DONE", "RUNNING", "NEXT", " [ ] ship", "AGENTS", " (none)",
-        ])
-
-    def test_spawn_splits_right_of_the_orchestrator_and_runs_the_loop_there(self):
-        self.cfg()
-        p = self.run_script("team-overview", "--spawn")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.strip(), "w1:p9")
-        calls = self.herdr_calls()
-        split = [c for c in calls if c.startswith("pane split")]
-        self.assertEqual(len(split), 1, calls)
-        self.assertIn("--pane w1:p1 --direction right --ratio 0.72", split[0])
-        self.assertTrue(split[0].endswith("--no-focus"), split)
-        self.assertTrue(any(c.startswith("pane run w1:p9 ")
-                            and c.endswith("/bin/team-overview --interval 5") for c in calls), calls)
-        # --spawn only launches; it renders nothing itself.
-        self.assertFalse(any(c.startswith("agent list") for c in calls), calls)
-
-    def test_spawn_passes_an_absolute_team_scratch(self):
-        self.cfg()
-        p = self.run_script("team-overview", "--spawn")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        split = [c for c in self.herdr_calls() if c.startswith("pane split")]
-        self.assertIn("--env TEAM_SCRATCH=%s " % os.path.realpath(self.sp()), split[0] + " ")
-
-    def test_spawn_records_the_overview_pane_for_release(self):
-        self.cfg()
-        p = self.run_script("team-overview", "--spawn")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(self.team_json("overview"), {"pane": "w1:p9"})
-
-    def test_loop_redraws_only_when_the_frame_changes(self):
-        self.team()
-        self.plan(self.PLAN)
-        env = self.env(scenario="overview", COLUMNS="40", LINES="40", TEAM_NOW=str(self.NOW))
-        loop = subprocess.Popen([os.path.join(BIN, "team-overview"), "--interval", "0.1"],
-                                cwd=self.proj, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, start_new_session=True)
-        time.sleep(0.6)
-        self.plan(self.PLAN + "- [ ] ship\n")
-        time.sleep(0.6)
-        os.killpg(loop.pid, signal.SIGTERM)
-        out, err = loop.communicate(timeout=5)
-        self.assertEqual(out.count("\x1b[2J"), 2, out)
-        self.assertIn(" [ ] ship", out)
-        self.assertEqual(err, "")
-
-    def test_herdr_missing_from_path_shows_unavailable(self):
-        self.team()
-        self.plan(self.PLAN)
-        env = self.env(scenario="overview", COLUMNS="60", LINES="40", TEAM_NOW=str(self.NOW))
-        path = os.pathsep.join(p for p in env["PATH"].split(os.pathsep) if p != self.shim)
-        if shutil.which("herdr", path=path):
-            # This machine has a real herdr on PATH. Isolate a shim with only
-            # the tools team-overview needs to start (python3, bash, and the
-            # coreutils its argument parsing and path setup call), so herdr
-            # stays the only thing missing.
-            no_herdr = os.path.join(self.proj, "_no_herdr_shim")
-            os.makedirs(no_herdr, exist_ok=True)
-            for tool in ("python3", "bash", "dirname", "basename"):
-                os.symlink(shutil.which(tool), os.path.join(no_herdr, tool))
-            path = no_herdr
-        env["PATH"] = path
-        p = subprocess.run([os.path.join(BIN, "team-overview"), "--once"],
-                           capture_output=True, text=True, env=env, cwd=self.proj)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stderr, "")
-        self.assertEqual(p.stdout.splitlines()[-2:], ["AGENTS", " herdr unavailable"])
-
-    def test_non_utf8_plan_still_renders(self):
-        self.team()
-        path = self.sp("progress-APP-1.md")
-        with open(path, "wb") as f:
-            f.write(self.PLAN.encode("utf-8") + b"- [ ] bad \xff byte\n")
-        p = self.overview()
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stderr, "")
-        lines = p.stdout.splitlines()
-        self.assertTrue(any(l.startswith(" [ ] bad ") for l in lines), lines)
-
-    def test_herdr_list_not_json_shows_unavailable(self):
-        self.team()
-        self.plan(self.PLAN)
-        p = self.overview(scenario="bad_list")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stderr, "")
-        self.assertEqual(p.stdout.splitlines()[-2:], ["AGENTS", " herdr unavailable"])
-
-    def test_bad_interval_is_bad_args(self):
-        p = self.run_script("team-overview", "--interval", "abc")
-        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("bad --interval: abc", p.stderr)
-
-    def test_wide_characters_are_measured_in_columns(self):
-        sys.path.insert(0, os.path.join(ROOT, "lib"))
-        try:
-            from overview import display_width
-        finally:
-            sys.path.pop(0)
-        self.cfg()
-        self.plan("# APP-1 修复\n\n"
-                 "## RUNNING\n- [>] \U0001f680 修复 the login flow for everyone (impl)\n")
-        p = self.overview(columns=20)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        lines = p.stdout.splitlines()
-        self.assertEqual(lines[1], "=" * 10)
-        self.assertTrue(all(display_width(l) <= 20 for l in lines), lines)
-
-
-class DisplayWidth(unittest.TestCase):
-    def test_widths(self):
-        sys.path.insert(0, os.path.join(ROOT, "lib"))
-        try:
-            from overview import cut, display_width
-        finally:
-            sys.path.pop(0)
-        self.assertEqual(display_width("abc"), 3)
-        self.assertEqual(display_width("修复"), 4)
-        self.assertEqual(display_width("é"), 1)
-        cut_result = cut("修复修复修复", 5)
-        self.assertLessEqual(display_width(cut_result), 5)
-        self.assertTrue(cut_result.endswith("…"))
-
-
-class InputDraft(unittest.TestCase):
-    # Screen lines recorded from a real Claude Code pane via `herdr agent read --format ansi`.
-    RULE = "\x1b[0m\x1b[38;2;136;136;136m" + "─" * 40 + "\x1b[0m"
-    PROMPT = "\x1b[0m\x1b[38;2;153;153;153m❯\xa0\x1b[0m"
-
-    def draft(self, screen):
-        sys.path.insert(0, os.path.join(ROOT, "lib"))
-        try:
-            from teamlib import input_draft
-        finally:
-            sys.path.pop(0)
-        return input_draft(screen)
-
-    def box(self, line):
-        return "\n".join(["output", self.RULE, line, self.RULE, "status"])
-
-    def test_typed_text_is_a_draft(self):
-        self.assertEqual(self.draft(self.box(self.PROMPT + "hello draft")), "hello draft")
-
-    def test_dim_hint_is_not_a_draft(self):
-        hint = "\x1b[2mPress up to edit queued messages\x1b[0m"
-        self.assertEqual(self.draft(self.box(self.PROMPT + hint)), "")
-
-    def test_truecolor_text_is_not_mistaken_for_dim(self):
-        # The 2 in 38;2;r;g;b selects truecolor; it is not the dim attribute.
-        self.assertEqual(self.draft(self.box("\x1b[38;2;153;153;153m❯\xa0hello")), "hello")
-
-    def test_no_input_box(self):
-        self.assertIsNone(self.draft("Allow Bash(rm -rf build)? [y/n]"))
-
-
-class TeamDeliver(Base):
-    # Short timings so a waiting delivery finishes in well under a second.
-    FAST = {"TEAM_DELIVER_INTERVAL": "0.05", "TEAM_DELIVER_CAP": "0.3"}
-
-    def deliver(self, scenario):
-        return self.run_script("team-deliver", "orch", "REPORT scout digest: done",
-                               scenario=scenario, env_extra=self.FAST)
-
-    def screen_reads_before_prompt(self):
-        calls = self.herdr_calls()
-        prompt_at = next(i for i, c in enumerate(calls) if c.startswith("agent prompt "))
-        return [c for c in calls[:prompt_at] if c.startswith("agent read orch")]
-
-    def test_empty_input_box_sends_at_once(self):
-        p = self.deliver("box_empty")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
-        self.assertEqual(len(self.screen_reads_before_prompt()), 1, self.herdr_calls())
-
-    def test_waits_while_the_human_has_a_draft(self):
-        # The reported bug: a prompt submitted while the human is half-way
-        # through typing in the orchestrator gets their draft prepended to it.
-        p = self.deliver("draft_then_clear")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
-        self.assertEqual(len(self.screen_reads_before_prompt()), 3, self.herdr_calls())
-        self.assertEqual(p.stderr, "")
-
-    def test_sends_anyway_after_the_cap_and_says_so(self):
-        p = self.deliver("draft_stuck")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
-        self.assertIn("orch still had a draft after 0.3s, sent anyway", p.stderr)
-
-    def test_dim_hint_in_input_box_is_not_a_draft(self):
-        # Claude Code shows this hint, dimmed, while a message is queued.
-        p = self.deliver("box_queued_hint")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
-        self.assertEqual(len(self.screen_reads_before_prompt()), 1, self.herdr_calls())
-        self.assertEqual(p.stderr, "")
-
-    def test_screen_without_input_box_sends_at_once(self):
-        # A dialog or a non-Claude agent: nothing to protect, so no wait.
-        p = self.deliver("ok")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("agent prompt orch REPORT scout digest: done", self.herdr_calls())
-        self.assertEqual(len(self.screen_reads_before_prompt()), 1, self.herdr_calls())
 
 
 class StopHook(Base):
@@ -1296,11 +962,45 @@ class StopHook(Base):
     def report_path(self, name, topic):
         return self.sp("reports", "%s-%s.md" % (name, topic))
 
-    def test_identifies_by_team_name_env_and_pings(self):
-        # The hook learns which agent it is from TEAM_NAME in its environment,
-        # not from the session id (herdr's agent_session and Claude Code's
-        # session_id are different identifiers, so a session match never fires).
-        # A second record is present to prove it picks the record by name.
+    def write_index(self, session, name):
+        d = os.path.join(self.proj, "_index")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, session + ".json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": name}))
+
+    def test_finds_agent_by_session_id_without_team_env(self):
+        self.write_record("scout", "investigator", topic="digest")
+        rec = self.team_json("scout"); rec["session"] = "sid-1"
+        write_text(self.sp(".team", "scout.json"), json.dumps(rec))
+        self.write_index("sid-1", "scout")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"session_id": "sid-1", "transcript_path": tr, "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
+
+    def test_index_entry_for_another_session_is_ignored(self):
+        self.write_record("scout", "investigator", topic="digest")
+        rec = self.team_json("scout"); rec["session"] = "sid-2"
+        write_text(self.sp(".team", "scout.json"), json.dumps(rec))
+        self.write_index("sid-1", "scout")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"session_id": "sid-1", "transcript_path": tr, "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.report_path("scout", "digest")))
+
+    def test_never_forwards_to_the_orchestrator(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        time.sleep(0.3)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+
+    def test_identifies_by_team_name_env(self):
+        # TEAM_NAME wins over the session id while the env is there. A second
+        # record is present to prove it picks the record by name.
         self.write_record("scout", "investigator", topic="digest")
         self.write_record("maker", "implementer", topic="build")
         tr = self.transcript("REPORT scout digest: done, 2 files")
@@ -1309,9 +1009,9 @@ class StopHook(Base):
                            "cwd": self.proj}, TEAM_NAME="scout")
 
         self.assertEqual(p.returncode, 0, p.stderr)
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
-                            for c in calls), calls)
+        self.assertIn("REPORT scout digest: done, 2 files",
+                      read_text(self.report_path("scout", "digest")))
+        self.assertFalse(os.path.exists(self.report_path("maker", "build")))
 
     def test_reports_after_agent_moves_its_cwd(self):
         # An agent may cd into scratchpad/ or a worktree. team-start stamps an
@@ -1325,9 +1025,6 @@ class StopHook(Base):
 
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
-                            for c in calls), calls)
 
     def test_no_team_name_is_silent(self):
         self.write_record("scout", "investigator", topic="digest")
@@ -1368,16 +1065,7 @@ class StopHook(Base):
         self.assertIn("# Report: scout / digest", body)
         self.assertIn("final answer", body)
 
-    def test_forwards_report_line(self):
-        self.write_record("scout", "investigator", topic="digest")
-        tr = self.transcript("REPORT scout digest: done, 2 files")
-        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        self.assertTrue(any(c.startswith("agent prompt orchestrator REPORT scout digest: done")
-                            for c in calls), calls)
-
-    def test_forwards_last_message_the_transcript_does_not_hold_yet(self):
+    def test_reports_last_message_the_transcript_does_not_hold_yet(self):
         # Claude Code may flush the final message to the transcript after the
         # Stop hook runs. The payload's last_assistant_message already holds it.
         self.write_record("scout", "investigator", topic="digest")
@@ -1387,74 +1075,39 @@ class StopHook(Base):
                           TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("REPORT scout digest: done, 1 file", read_text(self.report_path("scout", "digest")))
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        self.assertIn("agent prompt orchestrator REPORT scout digest: done, 1 file", calls)
 
-    def test_holds_report_until_orchestrator_draft_clears(self):
+    def test_later_stop_without_report_keeps_the_fresh_report(self):
+        # The team mod picks reports up every 15 s; a second stop in between
+        # (a peer message woke the worker) must not erase the REPORT.
         self.write_record("scout", "investigator", topic="digest")
-        tr = self.transcript("REPORT scout digest: done")
-        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout",
-                          FAKE_HERDR_SCENARIO="draft_then_clear", TEAM_DELIVER_INTERVAL="0.05")
+        p = self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                           "last_assistant_message": "REPORT scout digest: done"}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        reads = [c for c in calls if c.startswith("agent read orchestrator")]
-        self.assertEqual(len(reads), 3, calls)
-        self.assertEqual(calls[-1], "agent prompt orchestrator REPORT scout digest: done")
+        p = self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                           "last_assistant_message": "noted, nothing to add"}, TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
 
-    def test_stop_does_not_wait_for_the_draft(self):
-        # The worker's stop returns while delivery is still waiting.
+    def test_a_new_brief_lets_the_next_stop_replace_the_old_report(self):
         self.write_record("scout", "investigator", topic="digest")
-        tr = self.transcript("REPORT scout digest: done")
-        started = time.monotonic()
-        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout",
-                          FAKE_HERDR_SCENARIO="draft_stuck", TEAM_DELIVER_INTERVAL="0.05",
-                          TEAM_DELIVER_CAP="1")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertLess(time.monotonic() - started, 0.8)
-        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        self.assertIn("agent prompt orchestrator REPORT scout digest: done", calls)
-        log = read_text(self.sp(".team", "hook.log"))
-        self.assertIn("orchestrator still had a draft after 1s, sent anyway", log)
+        self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                       "last_assistant_message": "REPORT scout digest: done"}, TEAM_NAME="scout")
+        brief = self.sp("brief-scout-digest.md")
+        write_text(brief, "# Brief\n")
+        later = os.path.getmtime(self.report_path("scout", "digest")) + 5
+        os.utime(brief, (later, later))
+        self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                       "last_assistant_message": "working on the new brief"}, TEAM_NAME="scout")
+        self.assertIn("working on the new brief", read_text(self.report_path("scout", "digest")))
 
-    def test_forwards_report_line_after_status_bar(self):
-        # The reported bug: a status-bar first line (workers inherit the rule)
-        # meant the message never started with "REPORT ", so the ping was skipped
-        # while the report file still landed. The hook must find the REPORT line
-        # anywhere in the message, not only at offset zero.
-        self.write_record("scout", "investigator", topic="digest")
-        tr = self.transcript("| status bar |\n\nREPORT scout digest: done, 2 files")
-        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt "))
-        prompts = [c for c in calls if c.startswith("agent prompt ")]
-        self.assertTrue(any("REPORT scout digest: done, 2 files" in c for c in prompts), prompts)
-        self.assertFalse(any("status bar" in c for c in prompts), prompts)
-
-    def test_stop_without_report_line_writes_report_but_stays_quiet(self):
+    def test_stop_without_report_line_writes_report(self):
         # A stop without a REPORT line is often a pause (the worker waits on its
-        # own subagents), not an end. team-watch flags a worker that stays idle
-        # without a REPORT, so the hook itself never wakes the orchestrator here.
+        # own subagents); the report file still holds the latest message.
         self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("two subagents still running, waiting")
         p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="scout")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("waiting", read_text(self.report_path("scout", "digest")))
-        time.sleep(0.3)   # room for a wrong background ping to land
-        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
-
-    def test_no_self_ping_when_name_is_orchestrator(self):
-        # The orchestrator has no TEAM_NAME today, but if it ever ran the hook as
-        # a named agent, it must not prompt itself.
-        d = self.sp(".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
-        self.write_record("app-1-orch", "investigator", topic="digest")
-        tr = self.transcript("REPORT app-1-orch digest: done")
-        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, TEAM_NAME="app-1-orch")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
 
     def test_unreadable_transcript_logs_and_exits_zero(self):
         self.write_record("scout", "investigator", topic="digest")
@@ -1464,6 +1117,125 @@ class StopHook(Base):
         log = self.sp(".team", "hook.log")
         self.assertTrue(os.path.exists(log))
         self.assertIn("transcript unreadable", read_text(log))
+
+
+class SessionStartHook(Base):
+    HOOK = os.path.join(ROOT, "hooks", "handlers", "session-start.sh")
+
+    def run_hook(self, payload, **env_extra):
+        return subprocess.run(["bash", self.HOOK], input=json.dumps(payload),
+                              capture_output=True, text=True, env=self.env(**env_extra), cwd=self.proj)
+
+    def setup_worker(self, session):
+        self.write_record("scout", "investigator", topic="digest")
+        rec = self.team_json("scout"); rec["session"] = session
+        write_text(self.sp(".team", "scout.json"), json.dumps(rec))
+        d = os.path.join(self.proj, "_index"); os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, session + ".json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": "scout"}))
+
+    def test_clear_moves_identity_to_the_new_session(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["session"], "new-2")
+        self.assertEqual(self.index_entry("new-2")["name"], "scout")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "_index", "old-1.json")))
+
+    def test_clear_without_team_name_changes_nothing(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["session"], "old-1")
+
+    def test_resume_without_team_env_marks_restored_worker(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "old-1", "source": "resume", "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".team", "restored", "scout")))
+
+    def test_resume_with_team_env_is_not_marked(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "old-1", "source": "resume", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".team", "restored", "scout")))
+
+    def test_unrelated_session_is_silent(self):
+        p = self.run_hook({"session_id": "x", "source": "startup", "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+
+class TeamResurrect(Base):
+    def setup_team(self):
+        d = self.sp(".team"); os.makedirs(os.path.join(d, "restored"))
+        for name, sid, role in (("scout", "sid-scout", "investigator"), ("maker", "sid-maker", "implementer"),
+                                ("ghost", "sid-ghost", "tester")):
+            write_text(os.path.join(d, name + ".json"), json.dumps(
+                {"role": role, "topic": "", "brief": "", "pane": "w1:p2", "session": sid,
+                 "model": "claude-sonnet-5-5", "effort": "low", "mode": "auto", "cwd": self.proj}))
+        open(os.path.join(d, "restored", "scout"), "w").close()
+        open(os.path.join(d, "restored", "ghost"), "w").close()
+
+    def test_relaunches_marked_workers_with_saved_flags(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertIn("agent prompt w1:p5 /exit", calls)
+        self.assertIn("agent wait w1:p5 --until unknown --timeout 30000", calls)
+        self.assertIn("pane run w1:p5 export TEAM_NAME=scout TEAM_SCRATCH=%s" % os.path.realpath(self.sp()), calls)
+        self.assertIn(
+            'agent start scout --kind claude --pane w1:p5 --timeout 90000 -- --resume sid-scout '
+            '--agent team-investigator --model claude-sonnet-5-5 --effort low --permission-mode auto '
+            '--name scout --settings {"crossSessionInbound":"accept"}', calls)
+        self.assertFalse(os.path.exists(self.sp(".team", "restored", "scout")))
+        self.assertIn("relaunched scout (w1:p5)", p.stdout)
+
+    def test_unmarked_worker_is_healthy_and_untouched(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertIn("healthy maker", p.stdout)
+        self.assertFalse(any("w1:p6" in c and c.startswith(("agent prompt", "agent start", "pane run"))
+                             for c in self.herdr_calls()))
+
+    def test_worker_missing_from_herdr_is_reported(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertIn("missing ghost: session sid-ghost not in herdr", p.stdout)
+
+    def test_herdr_down_is_a_herdr_error(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="list_fails")
+        self.assertEqual(p.returncode, 4)
+
+    def test_pane_is_pending_while_its_agent_restarts(self):
+        # The team mod closes an empty pane a record names; a pane between
+        # /exit and the relaunched Claude looks empty, so it must be pending.
+        self.setup_team()
+        marker_log = os.path.join(self.proj, "marker.log")
+        p = self.run_script("team-resurrect", scenario="resurrect", env_extra={
+            "FAKE_MARKER_CHECK_GROUP": "agent", "FAKE_MARKER_CHECK_SUB": "start",
+            "FAKE_MARKER_CHECK_FILE": self.sp(".team", "pending", "w1_p5"),
+            "FAKE_MARKER_CHECK_LOG": marker_log})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(marker_log).split(), ["present"])
+        self.assertFalse(os.path.exists(self.sp(".team", "pending", "w1_p5")))
+
+    def test_claude_that_does_not_exit_is_skipped(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect",
+                            env_extra={"FAKE_AGENT_WAIT_FAILS": "1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("could not stop scout (w1:p5)", p.stdout)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith(("pane run w1:p5", "agent start scout")) for c in calls), calls)
+        self.assertTrue(os.path.exists(self.sp(".team", "restored", "scout")))
+        self.assertIn("healthy maker", p.stdout)
 
 
 class TeamId(Base):
@@ -1713,6 +1485,13 @@ class TeamInit(Base):
         for a in self.ALLOW:
             self.assertIn(a, s["permissions"]["allow"])
 
+    def test_allows_send_message_so_brief_send_skips_the_auto_mode_classifier(self):
+        # A message the team mod sends has no user request behind it, so auto
+        # mode's classifier gives no verdict; an explicit allow rule decides it.
+        self.run_script("team-init", "APP-1")
+        s = json.loads(read_text(os.path.join(self.proj, ".claude", "settings.local.json")))
+        self.assertIn("SendMessage", s["permissions"]["allow"])
+
     def test_records_orchestrator_tab(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
                             scenario="pane_in_tab")
@@ -1720,12 +1499,58 @@ class TeamInit(Base):
         tabs = json.loads(read_text(self.sp(".team", "tabs.json")))
         self.assertIn("w1:t1", tabs)
 
-    def test_renames_orchestrator_agent_to_namespaced_name(self):
+    def test_does_not_rename_the_orchestrator(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
                             scenario="pane_in_tab")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(any(c.startswith("agent rename w1:p1 app-1-orch") for c in self.herdr_calls()),
-                        self.herdr_calls())
+        self.assertFalse(any(c.startswith("agent rename") for c in self.herdr_calls()))
+
+    def test_records_orchestrator_session(self):
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(self.sp(".team", "config.json")))
+        self.assertEqual(cfg["orchestrator_session"], "orch-sid")
+
+    def test_refuses_without_session_id(self):
+        p = self.run_script("team-init", "APP-1", env_extra={"TEAM_SESSION_ID": None})
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("TEAM_SESSION_ID is unset", p.stderr)
+
+    def test_refuses_old_claude_code(self):
+        p = self.run_script("team-init", "APP-1", env_extra={"FAKE_CLAUDE_VERSION": "2.1.286"})
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("Claude Code 2.1.286 is older than 2.1.287", p.stderr)
+
+    def test_keeps_an_index_entry_whose_record_it_cannot_read_right_now(self):
+        # Another team's record caught mid-write is not a dead agent.
+        other = os.path.join(self.proj, "other", ".team")
+        os.makedirs(other)
+        write_text(os.path.join(other, "w.json"), '{"session": "s')
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "live.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "other"), "name": "w"}))
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(idx, "live.json")))
+
+    def test_prunes_index_entry_of_another_session(self):
+        other = os.path.join(self.proj, "other", ".team")
+        os.makedirs(other)
+        write_text(os.path.join(other, "w.json"), json.dumps({"session": "newer"}))
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "older.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "other"), "name": "w"}))
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(idx, "older.json")))
+
+    def test_prunes_index_entries_without_a_matching_record(self):
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "gone.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "nowhere"), "name": "x"}))
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(idx, "gone.json")))
 
     def test_missing_orchestrator_pane_value_is_bad_args(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane")
@@ -1739,431 +1564,6 @@ class TeamInit(Base):
         cfg = json.loads(read_text(self.sp(".team", "config.json")))
         self.assertEqual(cfg["team_id"], "app-1-2")
         self.assertEqual(cfg["orchestrator"], "app-1-2-orch")
-
-    def test_renames_orchestrator_to_disambiguated_name(self):
-        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
-                            scenario="names_app1_taken")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(any(c.startswith("agent rename w1:p1 app-1-2-orch") for c in self.herdr_calls()),
-                        self.herdr_calls())
-
-
-class TeamWatch(Base):
-    def cfg(self, orch="app-1-orch", team_id="app-1"):
-        d = self.sp(".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": team_id, "orchestrator": orch}))
-        return d
-
-    def test_first_pass_records_state_and_pushes_nothing(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        p = self.run_script("team-watch", "--once", scenario="watch_change")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
-        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
-        self.assertEqual(state["agents"]["app-1-scout"], "working")
-
-    def test_second_pass_pushes_watch_line_on_change(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_change")   # baseline: working
-        self.run_script("team-watch", "--once", scenario="watch_change")   # now: blocked
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt app-1-orch WATCH"))
-        pushes = [c for c in calls if c.startswith("agent prompt app-1-orch WATCH")]
-        self.assertTrue(any("app-1-scout: working -> blocked" in c for c in pushes), calls)
-
-    def test_working_to_idle_is_logged_but_not_pushed(self):
-        # A worker that waits on its own subagents flips between working and
-        # idle. The REPORT line and the idle-without-report flag cover what the
-        # orchestrator needs, so the flip only shows in the watcher's own pane.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_pause")        # baseline: working
-        p = self.run_script("team-watch", "--once", scenario="watch_pause")    # now: idle
-        self.assertIn("app-1-scout: working -> idle", p.stdout)
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()),
-                         self.herdr_calls())
-
-    def test_watch_line_waits_for_the_orchestrator_input_box(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_change")   # baseline: working
-        self.run_script("team-watch", "--once", scenario="watch_change")   # now: blocked
-        calls = self.wait_for_calls(lambda c: c.startswith("agent prompt app-1-orch WATCH"))
-        push_at = next(i for i, c in enumerate(calls) if c.startswith("agent prompt app-1-orch"))
-        self.assertTrue(any(c.startswith("agent read app-1-orch") for c in calls[:push_at]), calls)
-
-    def test_ignores_agents_not_in_records(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        # app-2-maker is live but has no record here; must be ignored.
-        self.run_script("team-watch", "--once", scenario="watch_two_teams")
-        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
-        self.assertNotIn("app-2-maker", state["agents"])
-
-    def test_blocked_line_includes_dialog(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_change")   # working
-        self.run_script("team-watch", "--once", scenario="watch_change")   # blocked
-        calls = self.wait_for_calls(lambda c: "WATCH" in c)
-        pushes = [c for c in calls if "WATCH" in c]
-        self.assertTrue(any("blocked:" in c for c in pushes), pushes)
-        self.assertTrue(any("agent read app-1-scout" in c for c in self.herdr_calls()))
-
-    def test_idle_without_report_is_flagged_once(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
-        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
-        self.wait_for_calls(lambda c: "no report" in c)
-        time.sleep(0.3)   # room for a wrong second push to land
-        flags = [c for c in self.herdr_calls() if "no report" in c]
-        self.assertEqual(len(flags), 1)
-
-    def test_short_idle_without_report_is_not_flagged(self):
-        # A worker that waits on its own subagents sits idle between their
-        # results. That pause is not worth the orchestrator's attention.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_idle")
-        self.run_script("team-watch", "--once", scenario="watch_idle")
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_idle_without_report_is_flagged_once_the_grace_period_ends(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_idle")
-        time.sleep(1.1)
-        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_idle")
-        calls = self.wait_for_calls(lambda c: "no report" in c)
-        flags = [c for c in calls if "no report" in c]
-        self.assertEqual(len(flags), 1, calls)
-        self.assertIn("scratchpad/current/reports/app-1-scout-digest.md", flags[0])
-
-    def test_report_file_without_report_line_still_counts_as_no_report(self):
-        # The Stop hook rewrites the report file on every stop, so the file
-        # alone proves nothing. Only a REPORT line in it means the worker reported.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.write_report("app-1-scout", "digest", "still waiting on two subagents")
-        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
-        calls = self.wait_for_calls(lambda c: "no report" in c)
-        self.assertTrue(any("no report" in c for c in calls), calls)
-
-    def turn(self, role, text):
-        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
-        return json.dumps({"type": role, "timestamp": stamp,
-                           "message": {"role": role, "content": [{"type": "text", "text": text}]}})
-
-    def stop_without_report(self, name):
-        """A real Stop hook run for a worker whose last message has no REPORT."""
-        tr = os.path.join(self.proj, "transcript-%s.jsonl" % name)
-        write_text(tr, self.turn("assistant", "two subagents still running, waiting") + "\n"
-                   + json.dumps({"type": "system", "subtype": "stop_hook_summary"}) + "\n")
-        env = self.env(TEAM_NAME=name)
-        subprocess.run(["bash", StopHook.HOOK], input=json.dumps({"transcript_path": tr, "cwd": self.proj}),
-                       capture_output=True, text=True, env=env, cwd=self.proj, check=True)
-        return tr
-
-    def test_quiet_worker_that_herdr_calls_working_is_flagged(self):
-        # A worker that waits on background subagents stays "working" in herdr
-        # even at an empty prompt. No turn since its last stop means it is quiet.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.stop_without_report("app-1-scout")
-        time.sleep(1.1)
-        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_working")
-        calls = self.wait_for_calls(lambda c: "no report" in c)
-        flags = [c for c in calls if "no report" in c]
-        self.assertEqual(len(flags), 1, calls)
-        self.assertIn("scratchpad/current/reports/app-1-scout-digest.md", flags[0])
-
-    def test_working_worker_with_a_turn_after_its_stop_is_not_flagged(self):
-        # A teammate result or a new prompt starts a turn: the worker is busy again.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        tr = self.stop_without_report("app-1-scout")
-        time.sleep(1.1)
-        with open(tr, "a") as f:
-            f.write(self.turn("user", "teammate A finished") + "\n")
-        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_working")
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_working_worker_on_a_new_brief_is_not_flagged_by_its_previous_stop(self):
-        # A /clear before a new brief starts a new transcript, so the previous
-        # task's stop record points at a transcript that no longer grows.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="replay")
-        self.stop_without_report("app-1-scout")
-        time.sleep(1.1)
-        write_text(self.sp("brief-app-1-scout-replay.md"), "# Brief: replay\n")
-        self.run_script("team-watch", "--once", "--no-report-after", "1", scenario="watch_working")
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_working_worker_within_the_grace_period_is_not_flagged(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.stop_without_report("app-1-scout")
-        self.run_script("team-watch", "--once", scenario="watch_working")
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_working_worker_that_never_stopped_is_not_flagged(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_working")
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_idle_with_report_line_is_not_flagged(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.write_report("app-1-scout", "digest")
-        self.run_script("team-watch", "--once", "--no-report-after", "0", scenario="watch_idle")
-        time.sleep(0.3)   # room for a wrong push to land
-        self.assertFalse(any("no report" in c for c in self.herdr_calls()), self.herdr_calls())
-
-    def prep_tabs(self, tabs, own_pane="w1:p9"):
-        d = self.sp(".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "tabs.json"), json.dumps(tabs))
-        write_text(os.path.join(d, "watch-state.json"),
-                   json.dumps({"agents": {}, "_flagged": {}, "own_pane": own_pane}))
-
-    def test_closes_named_empty_pane_in_team_tab(self):
-        # p3 is empty, but only closes because a team record (an agent that
-        # exited) names it; see test_leaves_unnamed_empty_pane_in_team_tab for
-        # the pane no record names.
-        self.cfg()
-        self.prep_tabs(["w1:t2"])
-        self.write_record("app-1-scout", "investigator", pane="w1:p3")
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertTrue(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()), self.herdr_calls())
-        # p2 hosts an agent (idle status) -> not closed
-        self.assertFalse(any(c.startswith("pane close w1:p2") for c in self.herdr_calls()))
-
-    def test_overview_file_is_not_an_agent_record(self):
-        self.cfg()
-        self.prep_tabs(["w1:t2"])
-        write_text(self.sp(".team", "overview.json"), json.dumps({"pane": "w1:p3"}))
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_leaves_unnamed_empty_pane_in_team_tab(self):
-        # A pane no team record names, such as one a human opened by hand in
-        # a managed worker tab, is never closed.
-        self.cfg()
-        self.prep_tabs(["w1:t2"])
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
-
-    def test_does_not_close_panes_in_foreign_tabs(self):
-        self.cfg()
-        self.prep_tabs(["w1:t9"])  # team owns t9, not t2
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
-
-    def test_leaves_human_pane_in_orchestrator_tab(self):
-        # A pane the human opens in the orchestrator's own tab (the tab holding
-        # the watcher's own pane) is the human's workspace and must never close.
-        self.cfg()
-        self.prep_tabs(["w1:t2"], own_pane="w1:p2")   # own pane in w1:t2 -> orch tab
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()),
-                         self.herdr_calls())
-
-    def test_does_not_flag_orchestrator_tab_over_budget(self):
-        # The human may open extra panes in the orchestrator tab; the watcher
-        # must not nag it as over budget or close anything there.
-        self.cfg()
-        self.prep_tabs(["w1:t2"], own_pane="w1:p2")   # orchestrator tab
-        self.run_script("team-watch", "--once", scenario="panes_overbudget")
-        calls = self.herdr_calls()
-        self.assertFalse(any("over budget" in c for c in calls), calls)
-        self.assertFalse(any(c.startswith("pane close") for c in calls), calls)
-
-    def test_flags_over_budget_worker_tab(self):
-        self.cfg()
-        self.prep_tabs(["w1:t2"])
-        self.run_script("team-watch", "--once", scenario="panes_overbudget")
-        calls = self.wait_for_calls(lambda c: "over budget" in c)
-        self.assertTrue(any("over budget" in c for c in calls), calls)
-
-    def test_layout_flag_pushed_once_across_repeated_passes(self):
-        self.cfg()
-        self.prep_tabs(["w1:t2"])
-        self.run_script("team-watch", "--once", scenario="panes_overbudget")
-        self.run_script("team-watch", "--once", scenario="panes_overbudget")
-        self.wait_for_calls(lambda c: "over budget" in c)
-        time.sleep(0.3)   # room for a wrong second push to land
-        flags = [c for c in self.herdr_calls() if "over budget" in c]
-        self.assertEqual(len(flags), 1)
-
-    def test_captures_own_pane_when_missing(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once")
-        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
-        self.assertEqual(state.get("own_pane"), "w1:p1")
-
-    def test_never_closes_own_pane(self):
-        # Named by a record too, so it is the own-pane rule doing the work
-        # here, not the naming rule.
-        self.cfg()
-        self.prep_tabs(["w1:t2"], own_pane="w1:p3")
-        self.write_record("app-1-scout", "investigator", pane="w1:p3")
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertFalse(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()))
-
-    def test_pending_pane_not_closed(self):
-        # Named by a record too, so it is the pending guard doing the work
-        # here, not the naming rule.
-        self.cfg()
-        self.prep_tabs(["w1:t2"])   # own_pane defaults to w1:p9
-        self.write_record("app-1-scout", "investigator", pane="w1:p3")
-        pend = self.sp(".team", "pending")
-        os.makedirs(pend, exist_ok=True)
-        open(os.path.join(pend, "w1_p3"), "w").close()   # mark w1:p3 pending
-        self.run_script("team-watch", "--once", scenario="panes_empty")
-        self.assertFalse(any(c.startswith("pane close w1:p3") for c in self.herdr_calls()))
-
-    def test_unknown_own_pane_closes_nothing(self):
-        self.cfg()
-        d = self.sp(".team")
-        os.makedirs(d, exist_ok=True)
-        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
-        write_text(os.path.join(d, "watch-state.json"), json.dumps({"agents": {}, "_flagged": {}}))
-        self.run_script("team-watch", "--once", scenario="own_pane_blind")
-        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()))
-
-    def test_survives_missing_team_dir(self):
-        # No /team:init here: scratchpad/.team does not exist. A pass must create
-        # what it needs and not crash, and must not leak a redirect error.
-        p = self.run_script("team-watch", "--once", scenario="watch_idle")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("No such file", p.stderr)
-        state = self.sp(".team", "watch-state.json")
-        self.assertTrue(os.path.exists(state))
-
-    def test_loop_survives_failing_pass(self):
-        # A pass that raises (here: a malformed agent list) must not kill the
-        # loop. The loop logs the error and keeps polling.
-        self.cfg()
-        env = self.env(scenario="bad_list")
-        try:
-            r = subprocess.run([os.path.join(BIN, "team-watch"), "--interval", "1"],
-                               capture_output=True, text=True, env=env, cwd=self.proj, timeout=3)
-            survived, out = False, r.stdout
-        except subprocess.TimeoutExpired as e:
-            survived = True
-            out = e.stdout.decode() if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or "")
-        self.assertTrue(survived, "watcher loop exited instead of surviving a failing pass")
-        self.assertIn("pass error", out)
-
-    def test_own_pane_flag_overrides_detection(self):
-        # The launcher passes the true pane id; the flag wins over `pane current`
-        # (which returns the FOCUSED pane, wrong for a --no-focus watcher pane).
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", "--own-pane", "w1:zz")
-        state = json.loads(read_text(self.sp(".team", "watch-state.json")))
-        self.assertEqual(state.get("own_pane"), "w1:zz")
-        self.assertFalse(any(c.startswith("pane current") for c in self.herdr_calls()))
-
-    def test_spawn_splits_pane_and_runs_watcher_with_own_pane(self):
-        # --spawn splits a pane off the orchestrator pane and runs the watcher
-        # there by absolute path, passing the new pane id as --own-pane.
-        self.cfg()
-        p = self.run_script("team-watch", "--spawn")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        calls = self.herdr_calls()
-        self.assertTrue(any(c.startswith("pane split") for c in calls), calls)
-        runs = [c for c in calls if c.startswith("pane run")]
-        self.assertTrue(runs, calls)
-        self.assertTrue(any("team-watch" in c and "--own-pane w1:p9" in c for c in runs), runs)
-        # --spawn only launches; it must not run a poll pass itself.
-        self.assertFalse(any(c.startswith("agent list") for c in calls), calls)
-
-    def test_prints_state_change_to_own_stdout(self):
-        # The watcher pane must show activity, not sit blank. Each state change
-        # is logged to stdout as well as pushed to the orchestrator.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest")
-        self.run_script("team-watch", "--once", scenario="watch_change")   # baseline working
-        p = self.run_script("team-watch", "--once", scenario="watch_change")  # now blocked
-        self.assertIn("working -> blocked", p.stdout)
-
-    def test_spawn_makes_watcher_pane_small(self):
-        # A watcher only needs a few lines; the orchestrator keeps most of the
-        # tab. The split passes a ratio so the new pane is small.
-        self.cfg()
-        p = self.run_script("team-watch", "--spawn")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        split = [c for c in self.herdr_calls() if c.startswith("pane split")]
-        self.assertTrue(split, self.herdr_calls())
-        self.assertTrue(any("--ratio" in c for c in split), split)
-
-    def test_spawn_passes_an_absolute_team_scratch(self):
-        self.cfg()
-        p = self.run_script("team-watch", "--spawn")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        split = [c for c in self.herdr_calls() if c.startswith("pane split")]
-        self.assertIn("--env TEAM_SCRATCH=%s " % os.path.realpath(self.sp()), split[0] + " ")
-
-    def write_report(self, name, topic, message=None):
-        d = self.sp("reports")
-        os.makedirs(d, exist_ok=True)
-        if message is None:
-            message = "| status bar |\n\nREPORT %s %s: done" % (name, topic)
-        write_text(os.path.join(d, "%s-%s.md" % (name, topic)),
-                   "# Report: %s / %s\n\n---\n\n%s\n" % (name, topic, message))
-
-    def test_idle_briefed_tab_flags_release(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest",
-                          brief="scratchpad/current/brief-app-1-scout-digest.md")
-        self.write_report("app-1-scout", "digest")
-        self.prep_tabs(["w1:t2"])   # own_pane w1:p9, not in the idle tab
-        self.run_script("team-watch", "--once", scenario="panes_idle_only")
-        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
-        self.assertTrue(any("consider release" in c for c in pushes), pushes)
-
-    def test_idle_tab_without_fresh_report_not_flagged_release(self):
-        # An idle agent whose report never arrived must not be released unread.
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest",
-                          brief="scratchpad/current/brief-app-1-scout-digest.md")
-        self.prep_tabs(["w1:t2"])
-        self.run_script("team-watch", "--once", scenario="panes_idle_only")
-        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
-        self.assertFalse(any("consider release" in c for c in pushes), pushes)
-
-    def test_idle_tab_with_report_file_but_no_report_line_not_flagged_release(self):
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest",
-                          brief="scratchpad/current/brief-app-1-scout-digest.md")
-        self.write_report("app-1-scout", "digest", "still waiting on two subagents")
-        self.prep_tabs(["w1:t2"])
-        self.run_script("team-watch", "--once", scenario="panes_idle_only")
-        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
-        self.assertFalse(any("consider release" in c for c in pushes), pushes)
-
-    def test_idle_unbriefed_tab_not_flagged_release(self):
-        # A freshly spawned, never-briefed agent looks idle too; it must NOT be
-        # flagged as a release candidate (no brief recorded yet).
-        self.cfg()
-        self.write_record("app-1-scout", "investigator", topic="digest", brief="")
-        self.prep_tabs(["w1:t2"])
-        self.run_script("team-watch", "--once", scenario="panes_idle_only")
-        pushes = [c for c in self.herdr_calls() if "WATCH" in c]
-        self.assertFalse(any("consider release" in c for c in pushes), pushes)
 
 
 if __name__ == "__main__":

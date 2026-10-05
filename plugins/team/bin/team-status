@@ -21,22 +21,40 @@ lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 
 mkdir -p "$teamdir"
 PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" AS_JSON="$as_json" READ_IDLE="$read_idle" python3 - <<'PY'
-import os, json, time, subprocess
-from teamlib import agent_state, records, report_age, team_agents
+import os, json, time, subprocess, sys
+from teamlib import agent_state, records, report_age
 scratch, teamdir = os.environ["SCRATCH"], os.environ["TEAMDIR"]
 now = int(os.environ.get("TEAM_NOW", int(time.time())))
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
 recs = records(teamdir)
 
-def last_screen_line(name):
-    out = subprocess.run(["herdr", "agent", "read", name, "--source", "recent-unwrapped", "--lines", "8"],
+def last_screen_line(pane):
+    out = subprocess.run(["herdr", "agent", "read", pane, "--source", "recent-unwrapped", "--lines", "8"],
                          capture_output=True, text=True).stdout
     lines = [l for l in out.splitlines() if l.strip()]
     return lines[-1] if lines else ""
 
+# Agents are matched to records by Claude session id: herdr names do not
+# survive a restart, session ids do.
+cfg = {}
+try:
+    cfg = json.load(open(os.path.join(teamdir, "config.json")))
+except (OSError, ValueError):
+    pass
+if cfg and not cfg.get("orchestrator_session"):
+    print("warning: this team was started before team 0.5.0: the team mod does not "
+          "deliver its REPORT lines. Finish it by reading reports/ by hand, or start "
+          "a new run with /team:init.", file=sys.stderr)
+by_session = {a.get("agent_session", {}).get("value"): a for a in agents}
+members = []
+if cfg.get("orchestrator_session") in by_session:
+    members.append((cfg.get("orchestrator", "orchestrator"), by_session[cfg["orchestrator_session"]]))
+for rname, rec in sorted(recs.items()):
+    if rec.get("session") in by_session:
+        members.append((rname, by_session[rec["session"]]))
+
 out, text = [], []
-for a in team_agents(agents, teamdir):
-    name = a["name"]
+for name, a in members:
     state = agent_state(a)
     rec = recs.get(name, {})
     role, topic = rec.get("role", ""), rec.get("topic", "")
@@ -48,7 +66,7 @@ for a in team_agents(agents, teamdir):
     row = "%s (%s, %s) %s %s %s %s" % (name, rec_out["pane"], rec_out["session"], state,
                                        role or "-", topic or "-", age)
     if os.environ.get("READ_IDLE") and state in ("idle", "done") and stale:
-        note = last_screen_line(name)
+        note = last_screen_line(a.get("pane_id", ""))
         if note:
             row += "  | " + note
     text.append(row)

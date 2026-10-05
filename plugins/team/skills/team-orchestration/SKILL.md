@@ -38,7 +38,8 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
    Every decision is numbered, including one-word answers. Amendments get a
    suffix (3a).
 5. Agents report by name: `REPORT <name> <topic>: <summary>`. A worker writes that
-   line as plain text and stops; the Stop hook delivers it to the orchestrator. The
+   line as plain text and stops; the Stop hook writes the report file and the
+   team mod in the orchestrator session delivers the line within 15 s. The
    deliverable is always a file. The report is a summary of at most ten lines. The
    orchestrator reads the file before discussing.
 6. Reports are discussed one at a time in arrival order. If a later report
@@ -46,8 +47,8 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
 7. Every mention of an agent to the human carries `name (pane, session)`. With
    more than two agents alive, every status message starts with the roster.
 8. Idle is not done. A worker that goes idle without a REPORT is often waiting
-   on its own subagents: leave it alone. When the watcher flags
-   `idle, no report`, `agent read` that worker. A `done` wait without a REPORT
+   on its own subagents: leave it alone. When the team mod flags
+   `idle, no report`, `agent read` that worker's pane. A `done` wait without a REPORT
    means read the screen.
 9. Only source-backed facts in every artifact. Unknowns become numbered open
    questions, never guesses. Verify one load-bearing claim of every report
@@ -61,18 +62,20 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
     decisions file carry all the context a task needs. When the old context
     holds knowledge the next task needs, `/compact` instead, so that knowledge
     survives in condensed form. Confirm the reset landed (the agent reports a
-    cleared or compacted context) before you send the next brief.
+    cleared or compacted context) before you send the next brief. A `/clear`
+    gives the agent a new session id; the hooks follow it, and `brief_send`
+    refuses an agent that was not cleared since its last brief.
 12. When the human is away, the orchestrator writes every own call to
     `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
-14. A watcher runs per team in the orchestrator tab. It flags an agent that
+14. The team mod runs in your own session. Every 15 s it flags an agent that
     turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
-    layout within budget. Other state changes show only in its own pane.
+    layout within budget. Other state changes show only in the `Team` pane.
     Never sit blind: act on `WATCH` lines.
-15. Pane budgets: the orchestrator tab holds at most 3 panes (you, the
-    overview, and the watcher); a worker tab holds at most 6, tiled as a
+15. Pane budgets: the orchestrator tab is yours (the `Team` overview is a pane
+    inside your session, not a herdr pane); a worker tab holds at most 6, tiled as a
     2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
     empty pane closes automatically only when a team record names it (an
     agent that exited); a pane no record names, such as one a human opened by
@@ -88,7 +91,7 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
     role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
-    before every `team-brief send`, and whenever you ask the human to act (a
+    before every `brief_send`, and whenever you ask the human to act (a
     `- [ ] you: <action>` item, moved to DONE when the human confirms).
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
@@ -108,8 +111,10 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
 ## Tools
 
 The orchestrator drives agents through the plugin scripts on `PATH`:
-`team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`, `team-watch`,
-`team-overview`, `team-status`. They wrap the Herdr CLI; never restate a Herdr
+`team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`,
+`team-status`, `team-resurrect`, and the team mod's `brief_send` tool
+(`mcp__team__brief_send`), which sends a kick-off by session id. After a
+restart, run `/team:resurrect`. The scripts wrap the Herdr CLI; never restate a Herdr
 command in prose. For the Herdr CLI reference, run `herdr --skill`: that is
 Herdr's own guide, not a plugin skill. There is no `team:herdr` skill; do not
 try to invoke one.

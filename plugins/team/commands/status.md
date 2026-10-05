@@ -9,8 +9,8 @@ Load the `team-orchestration` skill first. Then:
 2. Print the roster block, then a two-line status per agent.
 3. Flag anything that needs the human: a 401, a permission dialog, or a context
    above 70 percent.
-4. Read the latest `WATCH` lines the watcher pushed. Include any blocked
+4. Read the latest `WATCH` lines the team mod sent. Include any blocked
    agent with its dialog text, any over-budget tab, and any idle-tab release
-   suggestion in the flags block.
+   suggestion in the flags block. Pass on any warning `team-status` prints.
 
 Remember: idle is not done. An idle agent without a REPORT still owes one.

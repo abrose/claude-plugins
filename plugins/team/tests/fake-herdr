@@ -129,6 +129,9 @@ case "$group $sub" in
   "agent send-keys")
     emit '{"result":{"ok":true}}' ;;
   "agent wait")
+    if [ -n "${FAKE_AGENT_WAIT_FAILS:-}" ]; then
+      fail '{"error":{"code":"timeout"}}'
+    fi
     emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "agent prompt")
     case "$scenario" in
@@ -193,6 +196,11 @@ case "$group $sub" in
         ]}}' ;;
       list_fails)
         fail '{"error":{"code":"server_unavailable"}}' ;;
+      resurrect)
+        emit '{"result":{"agents":[
+          {"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-scout"}},
+          {"pane_id":"w1:p6","agent_status":"idle","agent_session":{"value":"sid-maker"}}
+        ]}}' ;;
       *)
         emit '{"result":{"agents":[]}}' ;;
     esac ;;

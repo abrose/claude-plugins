@@ -3,8 +3,11 @@
 **Orchestrator-plus-team-agents workflow for Claude Code with Herdr.** One
 session you talk to, role agents in panes, briefs as files, a numbered decisions
 file, reports by hook. This plugin is the kernel: a project-agnostic process,
-role definitions, templates, commands, and glue scripts around the Herdr CLI.
-Everything about a specific repository lives in that repository's overlay.
+role definitions, templates, commands, a Claude Code mod, and glue scripts
+around the Herdr CLI. Everything about a specific repository lives in that
+repository's overlay.
+
+Requires Claude Code 2.1.287 or newer (the team mod runs on its function hooks).
 
 ## How it works
 
@@ -12,14 +15,18 @@ Everything about a specific repository lives in that repository's overlay.
   decides with you. It never does operational work itself - no investigating,
   testing, browsing, or editing. Every such task goes to an agent.
 - Each **role agent** runs in its own Herdr pane, started with `team-start`.
+  Every agent is addressed by its Claude **session id**, never by its herdr
+  name: herdr does not restore names after a restart, session ids survive it.
 - A **brief** is a file in `scratchpad/current/`, composed by `team-brief` from
-  templates plus your project overlay. The kick-off prompt is one line pointing
-  at the brief.
+  templates plus your project overlay. The orchestrator sends the one-line
+  kick-off with the `brief_send` tool.
 - The **decisions file** (`scratchpad/current/decisions-<ticket>.md`) is the single
   binding source. Every brief reads it first.
 - When an agent stops, a **Stop hook** writes its last message to
-  `scratchpad/current/reports/<name>-<topic>.md` and forwards a `REPORT` line to the
-  orchestrator pane.
+  `scratchpad/current/reports/<name>-<topic>.md`.
+- The **team mod** runs inside the orchestrator session. Every 15 s it picks up
+  new `REPORT` lines, checks the agents, and sends what it found as one prompt.
+  It draws the `Team` pane beside the transcript.
 
 The full protocol is the `team-orchestration` skill. Operational lessons are in
 its `references/lessons.md` (not auto-loaded).
@@ -43,24 +50,24 @@ Or install from the marketplace once published:
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket>` | Archive the previous run, write the decisions file and the plan file, start the overview and the watcher, write the first roster. Agents are started on demand, not chosen up front. |
-| `/team:brief <name> <topic>` | Compose a brief, fill its task section, send the kick-off, report the status line. |
+| `/team:init <ticket>` | Archive the previous run, write the decisions file and the plan file, write the first roster. The team mod then opens the overview. Agents are started on demand, not chosen up front. |
+| `/team:brief <name> <topic>` | Compose a brief, fill its task section, send the kick-off with `brief_send`, report the status line. |
 | `/team:status` | Read the roster, read idle agents that owe a report, flag anything that needs you. |
 | `/team:release [name ...|all]` | Clear and close finished agents; refuse a working one. |
+| `/team:resurrect` | After a restart, relaunch workers that came back without their team flags, resuming their sessions. |
+| `/team-overview` | Hide or show the `Team` pane (a mod command; the choice is kept per team). |
 
 ## Scripts (`bin/`, on `PATH` when enabled)
 
 | Script | Does |
 |---|---|
 | `team-id slug\|hash\|for` | Compute a team id: slug a ticket, or a random hash. |
-| `team-init <ticket>` | Archive the previous run to `scratchpad/.archive/` (refuses while its agents are live), write the team id and config, seed the safe permission allowlist, record the orchestrator's tab. |
-| `team-start <name> <role>` | Start a role agent in a pane, verify its status bar, record it under `.team/`. `--new-tab` opens a worker tab with the agent in its root pane. |
-| `team-brief compose\|send` | Compose a brief from templates + overlay, or send its kick-off prompt. |
+| `team-init <ticket>` | Check the Claude Code version, archive the previous run to `scratchpad/.archive/` (refuses while its agents are live), write the team id and config with this session as `orchestrator_session`, seed the safe permission allowlist, record the orchestrator's tab, prune stale session index entries. |
+| `team-start <name> <role>` | Start a role agent in a pane with a session id it assigns (`--session-id`), verify its status bar, record it under `.team/` with its launch flags, and write its session index entry. `--new-tab` opens a worker tab with the agent in its root pane. |
+| `team-brief compose\|prepare` | Compose a brief from templates + overlay, or prepare its kick-off prompt (update the record, mirror into a worktree, print the prompt). |
 | `team-slice <branch> <parent>` | Create a worktree (with the repo's own `worktree_cmd` from the overlay; refuses without one) and a Herdr tab for one slice. |
-| `team-watch` | Poll each team's agents, push `WATCH` lines on state change, and keep the layout within budget. |
-| `team-overview [--spawn]` | Show the plan file (`progress-<ticket>.md`: DONE, RUNNING, NEXT) and the live agents in a pane right of the orchestrator; redraws when either changes. |
-| `team-deliver <agent> <text>` | Submit a prompt, but wait while the agent's input box holds a human draft (sends anyway after 5 min). Used for `REPORT` and `WATCH` lines. |
-| `team-status` | Merge `herdr agent list` with `.team/` records into a roster. |
+| `team-status` | Match `herdr agent list` to `.team/` records by session id into a roster. |
+| `team-resurrect` | Relaunch workers a herdr restore marked as restored, with their saved flags. |
 
 ## Roles
 
@@ -83,46 +90,53 @@ with `--model haiku-4-5`.
 
 `/team:init <ticket>` assigns the run a short team id (a slug of the ticket,
 or a random hash when there is no ticket) and writes it to
-`.team/config.json`. Every agent name becomes `<team_id>-<label>`, including
-the orchestrator itself (`<team_id>-orch`). Init checks the live `herdr agent
-list` and, if that name namespace is already taken (for example by a prior run
-for the same ticket), disambiguates the team id (`app-1`, then `app-1-2`, then
-a random hash), so two teams never share names and cross-poison each other.
-`team-start` likewise refuses a `<team_id>-<label>` that a live agent already
-holds. A team's watcher and layout hygiene only ever act on the agents and
-tabs recorded under its own `.team/` directory.
+`.team/config.json`. Every agent name becomes `<team_id>-<label>`. Init checks
+the live `herdr agent list` and, if that name namespace is already taken (for
+example by a prior run for the same ticket), disambiguates the team id
+(`app-1`, then `app-1-2`, then a random hash). `team-start` likewise refuses a
+`<team_id>-<label>` that a live agent already holds. A team's mod only ever
+acts on the agents and tabs recorded under its own `.team/` directory.
 
-## Watcher
+## The team mod
 
-`/team:init` starts the watcher with `team-watch --spawn`, which splits a small
-pane off the orchestrator pane (the orchestrator keeps most of the tab) and runs
-the watcher there by absolute path, passing that pane's id as `--own-pane`. The
-watcher never has to guess its own pane from the focused one, so it never closes
-its own pane. Its pane logs each event plus a once-a-minute heartbeat, so you
-can see it working. It polls
-`herdr agent list` and `herdr pane list`, and on every pass:
+`hooks/mod/` is a Claude Code mod in the same plugin. It loads in every
+session with the plugin enabled and activates only in the session that
+`.team/config.json` names as `orchestrator_session`. On `session.start` it sets
+`TEAM_SESSION_ID`, which `team-init` reads. Every 15 s it:
 
-- logs a `<name>: <old> -> <new>` line in its own pane for every team agent
-  whose state changed, and pushes it as a `WATCH` line to the orchestrator
-  only for a transition into `blocked` (with the dialog's first line);
-- flags an agent that has been quiet for 2 minutes (`--no-report-after`)
-  without a report, once per quiet spell. Quiet means `idle` or `done` in
-  herdr, or no new turn in its transcript since its last stop (herdr shows a
-  worker that waits on background subagents as `working`). A report counts
-  only when the report file holds a `REPORT` line and is newer than the
-  brief; a shorter pause is usually a worker waiting on its own subagents;
-- closes an empty pane in a team-managed tab only when a team record (an
-  agent that exited) names that pane (never its own pane); a pane no record
-  names, such as one a human opened by hand, is left alone; `team-start`
-  closes the pane it created itself when a start fails, so no orphan is left;
-- flags a tab that is over its pane budget, and a worker tab whose agents are
-  all idle or done, and at least one was briefed, as a release candidate. A
-  freshly spawned, un-briefed agent looks idle but is not flagged. A tab where
-  a briefed agent has no fresh report is not flagged either: the
-  `idle, no report` line covers it, and a release would lose the unread report.
+- maps each record's `session` to a herdr agent and writes a moved pane id
+  back to the record, so pane ids heal after a restart;
+- picks up report files newer than its marks in `.team/delivered.json` and
+  sends their `REPORT` lines (the first activation only sets the marks);
+- sends a `WATCH` line for a transition into `blocked` (with the dialog's
+  first line), and for an agent that has been quiet for 2 minutes without a
+  report, once per quiet spell. Quiet means `idle` or `done` in herdr, or no
+  new turn in its transcript since its last stop. A report counts only when the
+  report file holds a `REPORT` line and is newer than the brief;
+- closes an empty pane in a team-managed worker tab only when a team record
+  names that pane and `team-start` has not marked it pending; never touches the
+  orchestrator's own tab;
+- flags a tab over its pane budget, and a worker tab whose agents are all idle
+  or done with fresh reports, as a release candidate;
+- sends one `WATCH herdr unreachable: <reason>` while herdr is down.
 
-`/team:status` surfaces the latest `WATCH` lines; `/team:release all` stops
-the watcher and removes its state files.
+All lines of one tick go out as one prompt (`REPORT` lines first), which waits
+until the orchestrator is idle and never touches a draft you are typing.
+
+The `brief_send` tool (`mcp__team__brief_send`) sends a kick-off by session id.
+Auto mode reviews that send as a `SendMessage` with no user request behind it,
+so its classifier gives no verdict; `team-init` therefore adds `SendMessage` to
+`permissions.allow` in `.claude/settings.local.json`, which decides it without
+the classifier. Remove that entry if you want to approve each send yourself.
+When the agent got a brief in its current session and was not cleared since,
+it waits up to 6 s for a `/clear` to land, then refuses.
+
+### Upgrading from 0.4.x
+
+A team started before 0.5.0 has no `orchestrator_session` in its config, so
+the mod stays inactive for it and nothing delivers its REPORT lines;
+`team-status` warns about it. Finish such a run by reading `reports/` by hand,
+or start a new run with `/team:init`.
 
 ## Overlay contract
 
@@ -146,32 +160,43 @@ archives the previous run and loose scratchpad entries to `scratchpad/.archive/`
 `decisions-<ticket>.md`, `progress-<ticket>.md`, `orchestration-decisions.md`,
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.team/<name>.json`,
 `.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
-`.team/overview.json`, `.team/roster.md`.
+`.team/layout-flags.json`, `.team/delivered.json`, `.team/stops/`,
+`.team/restored/`, `.team/roster.md`.
+
+One file lives outside the run dir: the session index,
+`${TEAM_INDEX_DIR:-~/.claude/team/sessions}/<session>.json`
+(`{ "scratch", "name" }` per agent).
 
 ## Hook identity
 
-The Stop hook learns which agent it is from `TEAM_NAME` in its own environment.
-`team-start` stamps `TEAM_NAME=<name>` and an absolute `TEAM_SCRATCH` onto the
-agent's pane at start: with `--env` when it creates the pane (a split, a spilled
-tab, or `--new-tab`), or with a `herdr pane run` export into a caller-provided
-`--pane`. The hook reads `TEAM_NAME`, loads `$TEAM_SCRATCH/.team/<name>.json`,
-and exits silently when the variable is absent (any non-team session) or names
-no record. `TEAM_SCRATCH` is absolute so the hook finds the team dir after the
-agent changes its cwd (into `scratchpad/current/`, or a worktree).
+The Stop hook finds its agent in this order:
 
-Herdr's `agent_session.value` and Claude Code's `session_id` are **not** the
-same identifier, so a session-id match never fires; the pane environment is the
-reliable channel.
+1. `TEAM_NAME` and an absolute `TEAM_SCRATCH` in its own environment.
+   `team-start` stamps both onto the agent's pane; they survive `/clear` but
+   not a restart.
+2. Else the payload's `session_id` through the session index, then the record,
+   whose `session` must match.
+
+Neither: the hook exits silently (any non-team session). A `SessionStart` hook
+keeps the identity current: on `/clear` (a new session id in the same process)
+it moves the record's `session` and the index entry to the new id; on a resume
+without `TEAM_NAME` (a herdr restore) it marks the worker in `.team/restored/`
+for `/team:resurrect`. The orchestrator's mod follows its own `/clear` the same
+way, through `session.end`.
 
 ## Tests
 
 ```
 python3 -m unittest discover -s plugins/team/tests
+claude plugin test plugins/team
 ```
 
-The tests put a shim directory on `PATH` that exposes `tests/fake-herdr` as
-`herdr` and `tests/fake-git` as `git`. Both record every invocation and answer
-with canned JSON, so the scripts run against a real (fake) CLI, never a mock.
+The bash tests put a shim directory on `PATH` that exposes `tests/fake-herdr`
+as `herdr`, `tests/fake-git` as `git` and `tests/fake-claude` as `claude`. They
+record every invocation and answer with canned output, so the scripts run
+against a real (fake) CLI, never a mock. The mod tests (`tests/mod/`) answer
+each engine call the mod makes from an in-memory world (`tests/mod/world.ts`):
+files, herdr output, store, env, clock.
 
 ## License
 

@@ -25,7 +25,8 @@ Companion: the workflow log `team-orchestration-workflow.md` (2026-09-10 to
   - model, permission mode and effort are start flags on the pane's `claude`
     process (`--model`, `--permission-mode`, `--effort`), passed by
     `team-start`; the agent file's `model` only matches the role default;
-  - the kick-off prompt is sent by `team-brief send`, not by the agent file.
+  - the kick-off prompt is sent by the team mod's `brief_send` tool, not by the
+    agent file.
 - `bin/` of an enabled plugin is on the Bash tool's `PATH`. The orchestrator
   calls `team-start`, `team-brief`, `team-slice`, `team-status` bare.
 - Bundled files are referenced with `${CLAUDE_PLUGIN_ROOT}` (hooks, skills).
@@ -90,27 +91,33 @@ claude-plugins/                          # marketplace repo (exists)
         │   ├── init.md                  # /team:init
         │   ├── brief.md                 # /team:brief
         │   ├── status.md                # /team:status
-        │   └── release.md               # /team:release
+        │   ├── release.md               # /team:release
+        │   └── resurrect.md             # /team:resurrect
         ├── hooks/
-        │   ├── hooks.json
-        │   └── handlers/stop-report.sh
+        │   ├── hooks.json               # command hooks + the mod module
+        │   ├── handlers/stop-report.sh
+        │   ├── handlers/session-start.sh
+        │   └── mod/                     # the team mod (Claude Code function hooks)
+        │       ├── team.tsx             # register: every hook, and the Io built over $
+        │       ├── io.ts, paths.ts, activation.ts, herdr.ts, tick.ts, facts.ts, brief.ts
+        │       └── plan.ts, pane.tsx, watch.ts, layout.ts, reports.ts   # pure
+        ├── types/index.d.ts             # the mod's state contract
         ├── bin/
         │   ├── team-id
         │   ├── team-init
         │   ├── team-start
         │   ├── team-brief
         │   ├── team-slice
-        │   ├── team-watch
-        │   ├── team-overview
-        │   ├── team-deliver
-        │   └── team-status
+        │   ├── team-status
+        │   └── team-resurrect
         ├── lib/
-        │   ├── teamlib.py               # team membership and agent state, shared by bin/
-        │   └── overview.py              # pure renderer for the overview pane
+        │   └── teamlib.py               # records and agent state, shared by bin/
         └── tests/
             ├── test_team.py             # stdlib unittest, subprocess the scripts
             ├── fake-herdr               # PATH shim that records calls, returns canned JSON
-            └── fake-git                 # PATH shim that records git calls
+            ├── fake-git                 # PATH shim that records git calls
+            ├── fake-claude              # PATH shim that answers claude --version
+            └── mod/                     # claude plugin test: world.ts + *.test.ts
 ```
 
 Scripts are bash with `set -euo pipefail`, and `python3` for JSON. No other
@@ -150,7 +157,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
    Every decision is numbered, including one-word answers. Amendments get a
    suffix (3a).
 5. Agents report by name: `REPORT <name> <topic>: <summary>`. A worker writes that
-   line as plain text and stops; the Stop hook delivers it to the orchestrator. The
+   line as plain text and stops; the Stop hook writes the report file and the
+   team mod in the orchestrator session delivers the line within 15 s. The
    deliverable is always a file. The report is a summary of at most ten lines. The
    orchestrator reads the file before discussing.
 6. Reports are discussed one at a time in arrival order. If a later report
@@ -158,8 +166,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 7. Every mention of an agent to the human carries `name (pane, session)`. With
    more than two agents alive, every status message starts with the roster.
 8. Idle is not done. A worker that goes idle without a REPORT is often waiting
-   on its own subagents: leave it alone. When the watcher flags
-   `idle, no report`, `agent read` that worker. A `done` wait without a REPORT
+   on its own subagents: leave it alone. When the team mod flags
+   `idle, no report`, `agent read` that worker's pane. A `done` wait without a REPORT
    means read the screen.
 9. Only source-backed facts in every artifact. Unknowns become numbered open
    questions, never guesses. Verify one load-bearing claim of every report
@@ -173,18 +181,20 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     decisions file carry all the context a task needs. When the old context
     holds knowledge the next task needs, `/compact` instead, so that knowledge
     survives in condensed form. Confirm the reset landed (the agent reports a
-    cleared or compacted context) before you send the next brief.
+    cleared or compacted context) before you send the next brief. A `/clear`
+    gives the agent a new session id; the hooks follow it, and `brief_send`
+    refuses an agent that was not cleared since its last brief.
 12. When the human is away, the orchestrator writes every own call to
     `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
-14. A watcher runs per team in the orchestrator tab. It flags an agent that
+14. The team mod runs in your own session. Every 15 s it flags an agent that
     turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
-    layout within budget. Other state changes show only in its own pane.
+    layout within budget. Other state changes show only in the `Team` pane.
     Never sit blind: act on `WATCH` lines.
-15. Pane budgets: the orchestrator tab holds at most 3 panes (you, the
-    overview, and the watcher); a worker tab holds at most 6, tiled as a
+15. Pane budgets: the orchestrator tab is yours (the `Team` overview is a pane
+    inside your session, not a herdr pane); a worker tab holds at most 6, tiled as a
     2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
     empty pane closes automatically only when a team record names it (an
     agent that exited); a pane no record names, such as one a human opened by
@@ -200,7 +210,7 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
     role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
-    before every `team-brief send`, and whenever you ask the human to act (a
+    before every `brief_send`, and whenever you ask the human to act (a
     `- [ ] you: <action>` item, moved to DONE when the human confirms).
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
@@ -345,12 +355,14 @@ message above tells the human to answer the dialog there. Then verify the status
    bar once: model family (Opus, Sonnet, Haiku), mode (`auto` or
    `accept edits`), cwd. Abort with exit 3 and the screen text if any of the
    three is wrong.
-6. Write `.team/<name>.json` with role, pane, started, and the resolved
-   `cwd` (absolute), so `team-brief send` can tell a worktree agent from a
-   main-repo one.
+6. Write `.team/<name>.json` with role, pane, started, the resolved `cwd`
+   (absolute, so `team-brief prepare` can tell a worktree agent from a
+   main-repo one), `session` (the uuid passed as `--session-id`), and the
+   launch flags `model`, `effort`, `mode` (for `/team:resurrect`). Write the
+   session index entry `${TEAM_INDEX_DIR:-~/.claude/team/sessions}/<session>.json`
+   = `{"scratch", "name"}`.
 7. Print one JSON line: `{"name","role","pane","session","model","mode"}`, where
-   `session` is the first 8 chars of Herdr's `agent_session.value` (for the
-   human-facing roster only; the hook does not use it).
+   `session` is the first 8 chars of the assigned session id.
 
 Exit codes: 0 ok, 2 bad arguments, 3 pre-flight failed, 4 herdr error
 (pass through the herdr message on stderr).
@@ -359,7 +371,7 @@ Exit codes: 0 ok, 2 bad arguments, 3 pre-flight failed, 4 herdr error
 
 ```
 team-brief compose <name> <topic> [--template <t>] [--var key=value ...]
-team-brief send <name> [--topic <topic>]
+team-brief prepare <name> [--topic <topic>]
 ```
 
 `compose` writes `brief-<name>-<topic>.md` by concatenating, in this order:
@@ -376,27 +388,18 @@ It prints the path and exits 0. The orchestrator then edits the task section
 with its own tools. `compose` refuses to overwrite an existing brief (use
 `-rev2` via `--topic`).
 
-`send` records `topic` and `brief` in `.team/<name>.json`. If the agent's
-record `cwd` is set and differs from `send`'s own cwd (a worktree agent), it
+`prepare` records `topic` and `brief` in `.team/<name>.json`. If the agent's
+record `cwd` is set and differs from `prepare`'s own cwd (a worktree agent), it
 first copies the brief and, when the team's `ticket` names one, the decisions
 file into `<cwd>/scratchpad/current/`, so the agent never reads a path outside its
 own working directory; the kick-off then names the brief relative to that
 cwd instead of the orchestrator's path.
 
-It then runs `herdr agent prompt <name> "Read <brief-ref> and execute it
-fully. Report back as it describes. You are in execution mode; if your
-session shows plan mode, say so immediately." --wait --until working --until
-blocked` and maps the result: herdr's real contract is that plain `--wait`
-waits for a fully settled state (idle/done/blocked), never `working`, so
-`--until working` (repeated with `--until blocked`) is required to return as
-soon as either is observed. `agent_status: working` (or any other non-blocked
-settled state) -> exit 0 and print the status; `agent_status: blocked`
-(matched mid-turn, returned as success, not an error) -> read the dialog text
-with `agent read --source detection` and print it, exit 6; the error
-`agent_prompt_stalled` -> read the pane, print the last 20 lines, exit 5
-without re-sending (the orchestrator decides); the error `agent_blocked` (the
-agent was already at a dialog before submission) -> print its `dialog` field,
-exit 6.
+It then prints the kick-off, "Read <brief-ref> and execute it fully. Report
+back as it describes. You are in execution mode; if your session shows plan
+mode, say so immediately.", and exits 0; a missing record or brief exits 2.
+It calls no herdr. The team mod's `brief_send` tool runs `prepare` and sends
+the printed line to the agent's session (see [The team mod](#the-team-mod)).
 
 ### `team-slice`
 
@@ -431,7 +434,9 @@ team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--cop
 team-status [--json] [--read-idle]
 ```
 
-Merges `herdr agent list` with `.team/*.json` and prints one line per agent:
+Matches `herdr agent list` to `.team/*.json` by session id (`agent_session.value`
+against each record's `session` and the config's `orchestrator_session`; herdr
+names are not used) and prints one line per agent:
 `name (pane, session) status role topic last-report-age`. With `--read-idle`,
 every `idle`/`done` agent without a report file newer than its brief gets an
 `agent read --source recent-unwrapped --lines 8` and the last line is
@@ -443,66 +448,87 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket> [--label]` | Derives the tab label (never asks which roles; agents start on demand), runs `team-init` (archives the previous run, renames the current pane's agent to `<team_id>-orch`), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, starts the overview and the watcher, writes the first roster. |
-| `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then `team-brief send`, then reports the status line to Alfred. |
+| `/team:init <ticket> [--label]` | Derives the tab label (never asks which roles; agents start on demand), runs `team-init` (archives the previous run, records this session as `orchestrator_session`), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, writes the first roster. The team mod activates on its next tick. |
+| `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then the `brief_send` tool, then reports the status line to Alfred. |
 | `/team:status` | `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. |
-| `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <name> "/clear"`, run the overlay's `release_check` command if defined (orphan processes), then close the pane; closing the last pane closes the tab. With `all`, also stops and closes the watcher and overview panes. Refuses to release an agent that is `working`. |
+| `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <pane> "/clear"` (pane found by session id), run the overlay's `release_check` command if defined (orphan processes), close the pane (closing the last pane closes the tab), delete its session index entry. With `all`, also removes the mod's state files. Refuses to release an agent that is `working`. |
+| `/team:resurrect` | `team-resurrect`, then reports which workers it relaunched, which were healthy, and which are missing. |
+| `/team-overview` | A mod command: hides or shows the `Team` pane; the choice is kept per team. |
 
 ### Report hook
 
-`hooks/hooks.json` registers a `Stop` hook:
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {"hooks": [{"type": "command",
-                  "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/handlers/stop-report.sh\""}]}
-    ]
-  }
-}
-```
+`hooks/hooks.json` registers a `SessionStart` and a `Stop` command hook, and
+the team mod module (`"modules": ["./mod/team.tsx"]`).
 
 `stop-report.sh` runs in every session of every profile that has the plugin
 enabled, so it must be silent and cheap when it does not apply:
 
 1. Read the hook payload from stdin (`last_assistant_message`,
-   `transcript_path`, `cwd`).
-2. Read `TEAM_NAME` and `TEAM_SCRATCH` from the environment (`team-start`
-   stamps both onto the pane; `TEAM_SCRATCH` is absolute, so the agent's cwd
-   does not matter). No `TEAM_NAME`, a malformed one, or no
-   `$TEAM_SCRATCH/.team/<TEAM_NAME>.json` -> exit 0.
-   This is how a session knows it is a team agent and which one.
+   `transcript_path`, `cwd`, `session_id`).
+2. Find the agent: `TEAM_NAME` and `TEAM_SCRATCH` from the environment
+   (`team-start` stamps both onto the pane; `TEAM_SCRATCH` is absolute; both
+   survive `/clear`, not a restart), else the payload's `session_id` through the
+   session index, then the record, whose `session` must match. Neither, a
+   malformed name, or no record -> exit 0.
 3. Take the last assistant message from the payload's
    `last_assistant_message`; only without it, extract it from the transcript,
    which may not hold the final message yet when the hook runs. Write it to
    `reports/<name>-<topic>.md` with a header (name, topic, brief path,
    timestamp). Overwrite on every stop, so the file always holds the latest.
    Also write `.team/stops/<name>.json` with the transcript path and the stop
-   time (epoch seconds), for `team-watch`. It sits in a subdirectory because
+   time (epoch seconds), for the team mod. It sits in a subdirectory because
    every top-level `*.json` in `.team/` is read as an agent record.
-4. When the message holds a REPORT line, push it to the orchestrator pane:
-   `team-deliver <orchestrator> "<line>"`, started
-   detached so the stop does not wait on it,
-   where `<orchestrator>` comes from `.team/config.json` (default `orchestrator`).
-   `team-deliver` reads the orchestrator screen first. While the Claude Code
-   input box holds a human draft, it checks again every 2s, so the line never
-   merges into the draft; after 5 min it sends anyway and appends a line to
-   `.team/hook.log`. A screen without an input box sends at once.
-   `team-watch` pushes its `WATCH` lines the same way.
-   The `<line>` is the first line in the message that starts with `REPORT ` (found
-   anywhere, not only at the start). A stop without one pushes nothing: it is
-   often a pause while the worker waits on its own subagents, and `team-watch`
-   flags a worker that stays quiet without a REPORT. Never push when `<name>`
-   equals `<orchestrator>` (no self-ping).
+4. Forward nothing: the team mod picks the REPORT line up from the report file.
 5. Never block the stop; on any error exit 0 and append one line to
    `.team/hook.log`.
 
-Resolved: Herdr's `agent_session.value` and Claude Code's `session_id` are
-different identifiers, so a session-id match never fires. `team-start` stamps
-`TEAM_NAME` onto the pane environment (`--env` on a pane/tab it creates, or a
-`herdr pane run` export into a caller-provided `--pane`) and the hook identifies
-itself from that.
+`session-start.sh` keeps a worker's identity current. On `source: clear` with
+`TEAM_NAME` set (a `/clear` starts a new session id in the same process), it
+writes the payload's `session_id` into the record's `session`, writes the new
+index entry and deletes the old one. On `source: resume` without `TEAM_NAME`
+(a herdr restore) and an index entry whose record names this session, it
+creates `.team/restored/<name>` for `/team:resurrect`. Anything else: exit 0,
+silently.
+
+### The team mod
+
+`hooks/mod/` (TypeScript, Claude Code function hooks, Claude Code 2.1.287 or
+newer). The engine follows `$` only into functions declared in the hooks
+module file itself, so `team.tsx` holds every hook and builds one `Io` object
+of closures over `$`; every other module takes `io` and never sees `$`.
+
+- Activation: on `session.start` it sets `TEAM_SESSION_ID` (which `team-init`
+  writes into the config) and starts a 15 s tick. A tick is a no-op unless
+  `.team/config.json`'s `orchestrator_session` is this session. On
+  `session.end` with `reason: clear` it remembers the old id; the next tick
+  writes the new id into the config when the old one was `orchestrator_session`.
+- Tick: reads the plan file, maps records to herdr agents by session id
+  (writing moved pane ids back), runs the watch rules, closes empty
+  record-named panes in worker tabs (never a pending one, never in the
+  orchestrator's own tab), picks up new report files (marks in
+  `.team/delivered.json`; a missing file is a baseline), and sends every
+  REPORT line, then every WATCH line, as one `$.prompt.submit`. herdr down ->
+  one `WATCH herdr unreachable: <reason>` until it is back.
+- Pane `team-overview`, title `Team`: plan (DONE, RUNNING, NEXT as glyph rows;
+  DONE gives up its oldest items when short), agents, last error, tick time.
+  Opened on activation unless hidden; `/team-overview` toggles it and keeps the
+  choice in `$.store` under `overviewHidden:<team_id>`; a close by the person
+  counts as hiding.
+- Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): runs
+  `team-brief prepare`, sends the printed kick-off with
+  `$.session.send({ to: { sessionId } })`, writes `brief_sent_session`, and
+  returns `<name>: <state>`. When the record's `brief_sent_session` equals its
+  `session`, it waits up to 6 s for a `/clear` to land, then refuses (a hook
+  gets 10 s, and a clock wait counts against it). Auto mode reviews the send as
+  a `SendMessage` with no user request behind it and its classifier gives no
+  verdict, so `team-init` seeds `SendMessage` into `permissions.allow`
+  (`.claude/settings.local.json`); an allow rule decides it without the
+  classifier.
+
+Resolved: Herdr's `agent_session.value` is Claude Code's `session_id` (checked
+2026-10-05 on Claude Code 2.1.287). `team-start` assigns it with
+`--session-id`, so every script, hook and the mod address an agent by it.
+`TEAM_NAME` stays as the in-process carrier until a restart.
 
 ---
 
@@ -610,17 +636,21 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
    gate in order; substitutes variables; refuses to overwrite.
 4. `team-brief compose` with an empty overlay still produces a valid brief
    (the project-agnostic guarantee).
-5. `team-brief send` maps a settled state (printed from
-   `result.agent.agent_status`), `agent_prompt_stalled`, `agent_blocked` to
-   exit 0, 5, 6 and never re-sends on a stall.
+5. `team-brief prepare` records topic and brief, mirrors into a worktree, and
+   prints the kick-off without calling herdr.
 6. `team-slice` uses `worktree_cmd` from `project.yaml` when present, the git
    default otherwise, and runs `git m add` only when `stacked: true`.
-7. `team-status` joins the roster and flags idle agents without a fresh
-   report.
-8. `stop-report.sh` exits 0 silently for a session with no `TEAM_NAME` or no
-   record, writes the report file when it identifies its agent, and on every
-   stop forwards the message's `REPORT ` line (found anywhere) or a fallback
-   nudge, never to itself.
+7. `team-status` matches agents by session id and flags idle agents without
+   a fresh report.
+8. `stop-report.sh` exits 0 silently for a session it cannot identify, finds
+   its agent by `TEAM_NAME` or by `session_id` through the index, writes the
+   report file, and forwards nothing.
+8a. `session-start.sh` follows `/clear` and marks a restored worker;
+   `team-resurrect` relaunches marked workers with their saved flags.
+8b. The team mod (`claude plugin test plugins/team`, an in-memory world in
+   `tests/mod/world.ts`): activation and following `/clear`, the pane and
+   `/team-overview`, agent rows and pane healing, report pickup and the
+   baseline, the watch and layout rules, `brief_send`.
 9. A hook error (unreadable transcript) exits 0 and logs one line.
 
 ---
@@ -1014,3 +1044,20 @@ the hook read the message before it, found no REPORT line, and forwarded
 nothing; the watcher then flagged the worker `idle, no report`. The hook now
 takes the message from the payload's `last_assistant_message` and reads the
 transcript only when the payload lacks it.
+
+## Increment 2026-10-05
+
+Design: `docs/superpowers/specs/2026-10-05-team-mod-and-resurrect-design.md`.
+Plan: `docs/superpowers/plans/2026-10-05-team-mod-and-resurrect.md`.
+
+The watcher and the overview run as a Claude Code mod in the orchestrator
+session instead of two herdr panes. The mod activates in the session that
+`config.json` names as `orchestrator_session`, ticks every 15 s, sends REPORT
+and WATCH lines as one prompt, and draws the `Team` pane (`/team-overview`
+toggles it). Agents are addressed by Claude session id, not herdr name:
+`team-start` assigns `--session-id`, a `SessionStart` hook follows `/clear`,
+the Stop hook finds its agent through `~/.claude/team/sessions/`, and briefs
+go out through the `brief_send` tool. `/team:resurrect` relaunches workers
+that a herdr restore brought back without their flags. `team-watch`,
+`team-overview`, `team-deliver` and `lib/overview.py` are gone. Requires
+Claude Code 2.1.287.

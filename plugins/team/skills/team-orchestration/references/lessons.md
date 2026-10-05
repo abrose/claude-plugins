@@ -31,7 +31,7 @@ never here.
 ## Agents
 
 - Idle is not done. An agent that stays quiet without a REPORT until the
-  watcher flags it gets an `agent read`. Silence is not success. A short idle
+  team mod flags it gets an `agent read` of its pane. Silence is not success. A short idle
   is not silence: a worker that waits on its own subagents ends a turn each
   time one reports back.
 - Reset an agent before every reuse. Never brief a new task on an un-reset
@@ -40,14 +40,15 @@ never here.
   `/compact` when the old context holds knowledge the next task needs. A stale,
   un-reset context poisons the next brief and wastes tokens.
 - Do not `/clear` an agent until its deliverable file is confirmed on disk.
-- A worker writes its REPORT line as plain text and stops; the Stop hook delivers
-  that line to the orchestrator and saves the whole message to the report file. The
+- A worker writes its REPORT line as plain text and stops; the Stop hook saves
+  the whole message to the report file, and the team mod delivers the REPORT
+  line to the orchestrator. The
   REPORT summary never goes into the deliverable file. An agent that writes its
   closing summary to the deliverable path overwrites the deliverable. The summary
   can look healthy while the file holds 21 lines of a 587-line catalogue.
 - Reference every agent as `name (pane, session)` so the human can find it.
-- `team-status` may list herdr agents from other sessions on this machine. Your
-  team's agents are the `<team_id>-*` names; read those.
+- `team-status` lists only the agents whose session ids your `.team/` records
+  hold, so agents from other sessions on this machine never show up there.
 - Names are unique by construction. `team-init` skips a `<team_id>-*` namespace
   that live agents already hold, so a re-run for the same ticket gets a fresh id
   (`app-1` then `app-1-2`), never the old team's names. `team-start` refuses a
@@ -55,9 +56,9 @@ never here.
 
 ## Fan-out
 
-- `team-brief send --wait` blocks until the agent's whole turn completes, not
-  until it starts. To fan out N independent agents in parallel, background each
-  send. Do not wait on one before you start the next.
+- `brief_send` returns as soon as the kick-off is queued at the agent. To fan
+  out N independent agents, call it once per agent; their REPORT lines come back
+  through the team mod, several of one tick in one prompt.
 
 ## Loops and limits
 
@@ -75,27 +76,32 @@ never here.
 - A blocked login or a missing port is a BLOCKED report with the port list, not
   a reason to start guessing credentials.
 
-## Watcher
+## Team mod
 
-- Start the watcher with `team-watch --spawn`. It splits its own pane off the
-  orchestrator pane, runs by absolute path, and passes that pane's id as
-  `--own-pane`. Do not start `team-watch` by hand in a `--no-focus` pane:
-  `herdr pane current` returns the focused pane, not the watcher's, so a
-  hand-started watcher can record the wrong own-pane and close its real pane.
-- The watcher flags a tab "consider release" only when the tab holds a briefed
+- The watcher and the overview are the team mod in the orchestrator session:
+  nothing to start or restart. It activates within 15 s of `/team:init`, and
+  again by itself when the session comes back after a restart. The `Team`
+  pane's footer shows the last tick; a tick older than a minute means the mod
+  is not running (check the Claude Code version, and that the plugin is
+  enabled).
+- `/team-overview` hides or shows the `Team` pane. Closing it with ✕ or Esc
+  hides it too; the choice is kept per team.
+- The mod flags a tab "consider release" only when the tab holds a briefed
   agent. A freshly spawned, un-briefed agent looks idle but is not a release
-  candidate, so it no longer triggers the flag.
-- `team-start` registers a spilled tab only after its agent is live. The watcher
-  never sees a registered tab with an empty root pane, so it never closes one.
-- The orchestrator tab is the human's own workspace. The watcher never closes or
-  budget-flags panes there, so you can open a temporary pane in it without the
-  watcher killing it. Pane hygiene applies to worker tabs only.
-- The watcher pane logs each event and a once-a-minute heartbeat. A watcher pane
-  with no heartbeat for over a minute is not running; restart it with
-  `team-watch --spawn`.
-- The overview pane (`team-overview`) shares the orchestrator tab, and the
-  watcher never closes it; restart it with `team-overview --spawn` if it is
-  closed.
+  candidate.
+- `team-start` marks a pane it creates as pending until its agent is live, and
+  registers a spilled tab only after that. The mod never closes a pending pane
+  or an empty root pane of a fresh tab.
+- The orchestrator tab is the human's own workspace. The mod never closes or
+  budget-flags panes there. Pane hygiene applies to worker tabs only.
+
+## Restarts
+
+- herdr restores panes and resumes each Claude session with the same session
+  id, but not herdr names, pane env, or the team launch flags. Agents are
+  addressed by session id, so reports and briefs keep flowing; run
+  `/team:resurrect` to relaunch workers that came back without their flags
+  (otherwise briefs may wait for approval at the worker).
 
 ## The absent human
 

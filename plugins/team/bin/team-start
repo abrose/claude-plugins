@@ -65,6 +65,9 @@ if [ "$model_flag" = haiku-4-5 ] && [ "$mode" = auto ]; then
   exit 2
 fi
 
+session_id="$(python3 -c "import uuid;print(uuid.uuid4())")"
+index_dir="${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}"
+
 placements=0
 for p in "$pane" "$split_pane" "$into_tab" "$new_tab"; do [ -n "$p" ] && placements=$((placements + 1)); done
 [ "$placements" -ge 1 ] || usage
@@ -100,7 +103,7 @@ if [ -f "$teamcfg" ]; then
 fi
 
 if [ -n "$dry_run" ]; then
-  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'"
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'"
   exit 0
 fi
 
@@ -121,9 +124,9 @@ fi
 scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad/current}")"
 team_env=(--env "TEAM_NAME=$name" --env "TEAM_SCRATCH=$scratch_abs")
 
-# The pending marker shields a pane from the watcher's empty-pane cleanup
-# (team-watch). Mark a created pane right after herdr hands it back, before
-# any other herdr call touches it, so the watcher can never see it unmarked.
+# The pending marker shields a pane from the team mod's empty-pane cleanup.
+# Mark a created pane right after herdr hands it back, before any other herdr
+# call touches it, so the mod can never see it unmarked.
 pending_dir="${TEAM_SCRATCH:-scratchpad/current}/.team/pending"
 pending_file_for() { printf '%s/%s' "$pending_dir" "$(printf '%s' "$1" | tr ':/' '__')"; }
 mark_pending() { mkdir -p "$pending_dir"; : > "$(pending_file_for "$1")"; }
@@ -132,7 +135,7 @@ mark_pending() { mkdir -p "$pending_dir"; : > "$(pending_file_for "$1")"; }
 # env's HERDR_WORKSPACE_ID is a spawn-time snapshot and goes stale after a pane
 # move; herdr resolves the calling pane live. The tab is registered only after
 # its agent is live (see below): a registered tab with an empty root pane would
-# let the watcher close it.
+# let the team mod close it.
 create_tab() {
   local ws out
   ws=$(herdr pane current --current | json_get "d['result']['pane']['workspace_id']") || exit 4
@@ -220,8 +223,8 @@ start() {
   # ListAgents/SendMessage match. --settings accepts cross-session messages so
   # a peer question never sits held pending human approval.
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
-    --agent "team-$role" --model "$model" --effort "$effort" --permission-mode "$permission_mode" \
-    --name "$name" --settings '{"crossSessionInbound":"accept"}'
+    --agent "team-$role" --session-id "$session_id" --model "$model" --effort "$effort" \
+    --permission-mode "$permission_mode" --name "$name" --settings '{"crossSessionInbound":"accept"}'
 }
 
 # Re-mark the target pane so the trap below always has a marker to remove,
@@ -275,8 +278,7 @@ if ! { echo "$bar" | grep -qF "$bar_model" \
   exit 3
 fi
 
-session=$(echo "$out" | json_get "d['result']['agent']['agent_session']['value']")
-session="${session:0:8}"
+session="${session_id:0:8}"
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 teamdir="${TEAM_SCRATCH:-scratchpad/current}/.team"
@@ -295,8 +297,21 @@ PY
 fi
 
 cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$cwd")"
-printf '{"role":"%s","topic":"","brief":"","pane":"%s","started":"%s","cwd":"%s"}\n' \
-  "$role" "$pane" "$started" "$cwd_abs" >"$teamdir/$name.json"
+ROLE="$role" PANE="$pane" STARTED="$started" CWD_ABS="$cwd_abs" SESSION="$session_id" \
+MODEL="$model" EFFORT="$effort" MODE="$permission_mode" python3 - "$teamdir/$name.json" <<'PY'
+import json, os, sys
+json.dump({"role": os.environ["ROLE"], "topic": "", "brief": "", "pane": os.environ["PANE"],
+           "started": os.environ["STARTED"], "cwd": os.environ["CWD_ABS"],
+           "session": os.environ["SESSION"], "model": os.environ["MODEL"],
+           "effort": os.environ["EFFORT"], "mode": os.environ["MODE"]},
+          open(sys.argv[1], "w"))
+PY
+
+mkdir -p "$index_dir"
+SCRATCH="$scratch_abs" NAME="$name" python3 - "$index_dir/$session_id.json" <<'PY'
+import json, os, sys
+json.dump({"scratch": os.environ["SCRATCH"], "name": os.environ["NAME"]}, open(sys.argv[1], "w"))
+PY
 
 printf '{"name":"%s","role":"%s","pane":"%s","session":"%s","model":"%s","mode":"%s"}\n' \
   "$name" "$role" "$pane" "$session" "$model" "$mode"

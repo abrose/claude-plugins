@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Compose a brief file from templates + overlay, or send its kick-off prompt.
-# Exit codes: 0 ok, 1 refused (brief exists), 2 bad arguments, 4 herdr error,
-#             5 prompt stalled, 6 agent blocked.
+# Compose a brief file from templates + overlay, or prepare its kick-off prompt.
+# Exit codes: 0 ok, 1 refused (brief exists), 2 bad arguments.
 set -euo pipefail
 
 usage() {
   echo "usage: team-brief compose <name> <topic> [--template <t>] [--var key=value ...]" >&2
-  echo "       team-brief send <name> [--topic <topic>]" >&2
+  echo "       team-brief prepare <name> [--topic <topic>]" >&2
   exit 2
 }
 
@@ -111,7 +110,7 @@ PY
   echo "$out_file"
   ;;
 
-send)
+prepare)
   [ $# -ge 1 ] || usage
   name="$1"; shift
   valid_name "$name" || { echo "bad name: $name" >&2; exit 2; }
@@ -162,37 +161,7 @@ PY
     fi
   fi
 
-  prompt="Read $brief_ref and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
-  err="$(mktemp)"
-  trap 'rm -f "$err"' EXIT
-  # herdr's real contract: plain --wait waits for a fully settled state
-  # (idle/done/blocked), so a long-running turn is never seen until it ends or
-  # blocks. --until working (repeatable with --until blocked) makes --wait
-  # return as soon as either is observed, matching this command's contract.
-  if out=$(herdr agent prompt "$name" "$prompt" --wait --until working --until blocked 2>"$err"); then
-    status="$(echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result',{}).get('agent',{}).get('agent_status','unknown'))")"
-    if [ "$status" = "blocked" ]; then
-      echo "BLOCKED: $name is at a dialog:" >&2
-      herdr agent read "$name" --source detection --lines 20 >&2 || true
-      exit 6
-    fi
-    echo "$status"
-    exit 0
-  fi
-  code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$err" 2>/dev/null || true)"
-  case "$code" in
-    agent_prompt_stalled)
-      echo "STALLED: $name did not start a turn; not re-sending." >&2
-      herdr agent read "$name" --source recent-unwrapped --lines 20 >&2 || true
-      exit 5 ;;
-    agent_blocked)
-      echo "BLOCKED: $name is at a dialog:" >&2
-      python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('dialog',''))" <"$err" >&2
-      exit 6 ;;
-    *)
-      cat "$err" >&2
-      exit 4 ;;
-  esac
+  echo "Read $brief_ref and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
   ;;
 
 *) usage ;;

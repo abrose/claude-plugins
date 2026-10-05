@@ -9,18 +9,21 @@ when `all`):
 
 1. Check for its report file. If it is `working`, refuse to release it and say
    so.
-2. Send it `/clear` with `herdr agent prompt <name> "/clear" --wait`. `/clear`
-   never starts a turn, so this always returns `agent_prompt_stalled`; that is
-   expected here, not a failure. Confirm the reset landed by reading the
+2. Find its pane with `team-status` (agents are matched by session id, not by
+   herdr name). Send it `/clear` with `herdr agent prompt <pane> "/clear" --wait`.
+   `/clear` never starts a turn, so this always returns `agent_prompt_stalled`;
+   that is expected here, not a failure. Confirm the reset landed by reading the
    agent's status bar and checking the context gauge reads 0 percent, not by
    the prompt's exit code.
 3. If the overlay defines `release_check` in `.claude/team/project.yaml`, run it
    to catch orphan processes.
-4. Close its pane with `herdr pane close`. Closing the last pane closes the tab.
-5. When releasing `all`, also stop the watcher and the overview. For each of
-   the watcher pane (`own_pane` in `.team/watch-state.json`) and the overview
-   pane (`pane` in `.team/overview.json`), send it Ctrl-C, then close it.
-   Remove `.team/watch-state.json`, `.team/overview.json` and
-   `.team/tabs.json`, all under `${TEAM_SCRATCH:-scratchpad/current}`.
+4. Close its pane with `herdr pane close <pane>`. Closing the last pane closes
+   the tab. Delete its session index entry:
+   `rm -f "${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}/<session>.json"`, with
+   `<session>` from its record.
+5. When releasing `all`, also remove `.team/tabs.json`, `.team/watch-state.json`,
+   `.team/layout-flags.json` and `.team/delivered.json`, all under
+   `${TEAM_SCRATCH:-scratchpad/current}`. The team mod stays active in this
+   session until `/team:init` starts another run.
 
 Report which agents were released and which were refused.
