@@ -39,6 +39,10 @@ for name, rec in sorted(recs.items()):
         kind = "missing"
     print("\t".join([kind, name, pane or "-", sid, old, rec.get("role", ""), rec.get("model", ""),
                      rec.get("effort", ""), rec.get("mode", "")]))
+restored = os.path.join(teamdir, "restored")
+for name in sorted(os.listdir(restored) if os.path.isdir(restored) else []):
+    if name not in recs:
+        print("\t".join(["stale", name] + ["-"] * 7))
 PY
 )"
 
@@ -61,7 +65,7 @@ relaunch() {
     rm -f "$pending_file"; pending_file=""
     return 1
   fi
-  herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
+  herdr pane run "$pane" "export TEAM_NAME=$(printf %q "$name") TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
     --resume "$sid" --agent "team-$role" --model "$model" --effort "$effort" \
     --permission-mode "$mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' >/dev/null || exit 4
@@ -90,7 +94,11 @@ PY
 while IFS=$'\t' read -r kind name pane sid old role model effort mode; do
   [ -n "$kind" ] || continue
   case "$kind" in
-    missing) echo "missing $name: session $sid not in herdr" ;;
+    missing)
+      rm -f "$teamdir/restored/$name"
+      echo "missing $name: session $sid not in herdr"
+      ;;
+    stale) rm -f "$teamdir/restored/$name" ;;
     healthy) echo "healthy $name" ;;
     relaunch)
       relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" || continue

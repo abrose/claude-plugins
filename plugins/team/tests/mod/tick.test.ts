@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { agentRows, team } from './world'
+import { agentRows, start, team } from './world'
 
 describe('agent rows', () => {
   test('maps records to herdr agents by session id, not name', async ($, on) => {
@@ -7,6 +7,14 @@ describe('agent rows', () => {
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
     await w.clock.advance(15000)
     expect(await agentRows($)).toEqual(['working app-1-scout w1:p2'])
+  })
+
+  test('a second session.start replaces the tick loop instead of adding one', async ($, on) => {
+    const w = await team($, on)
+    await start($)
+    await w.clock.advance(15000)
+    const lists = w.runs.filter(argv => argv.slice(1, 3).join(' ') === 'agent list')
+    expect(lists).toHaveLength(1)
   })
 
   test('writes a moved pane id back to the record', async ($, on) => {

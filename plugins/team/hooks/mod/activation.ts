@@ -16,7 +16,7 @@ export const noteClear = (oldId: string) => {
   clearedFrom = oldId
 }
 
-export async function followClear(io: Io): Promise<void> {
+async function followClear(io: Io): Promise<void> {
   if (clearedFrom === null) return
   const old = clearedFrom
   clearedFrom = null
@@ -29,7 +29,10 @@ export async function followClear(io: Io): Promise<void> {
   }
 }
 
+// Follows a pending /clear first, so a command or tool call right after one
+// does not wait for the next tick to find the team.
 export async function activeConfig(io: Io): Promise<TeamConfig | null> {
+  await followClear(io)
   const cfg = await readJson<TeamConfig>(io, `${await teamDir(io)}/config.json`)
   if (!cfg?.orchestrator_session) return null
   return cfg.orchestrator_session === (await io.sessionId()) ? cfg : null

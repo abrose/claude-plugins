@@ -4,7 +4,8 @@
 # failed), 2 bad arguments, 4 herdr error.
 set -euo pipefail
 
-usage() { echo "usage: team-init <ticket> [--orchestrator-pane <id>]" >&2; exit 2; }
+usage_text="usage: team-init <ticket> [--orchestrator-pane <id>]"
+usage() { echo "$usage_text" >&2; exit 2; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scratch="${TEAM_SCRATCH:-scratchpad/current}"
@@ -21,6 +22,10 @@ print(d.get('$1', '') if isinstance(d, dict) else '')
 "; }
 
 [ $# -ge 1 ] || usage
+case "$1" in
+  -h|--help) echo "$usage_text"; exit 0 ;;
+  -*) echo "a ticket cannot start with '-': $1" >&2; usage ;;
+esac
 ticket="$1"; shift
 orch_pane=""
 while [ $# -gt 0 ]; do

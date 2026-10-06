@@ -32,23 +32,11 @@ fi
 emit() { printf '%s\n' "$1"; }
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 
-# A Claude Code screen (ANSI) whose input box holds $1 (empty for an empty
-# box). Claude Code draws the ❯ prompt grey, then a no-break space.
-claude_screen() {
-  local rule=$'\e[38;2;136;136;136m────────────────────────────────\e[0m'
-  printf 'earlier output\n%s\n\e[0m\e[38;2;153;153;153m❯\302\240\e[0m%s\n%s\n  status line\n' \
-    "$rule" "$1" "$rule"
-}
-
 case "$group $sub" in
   "pane split")
     emit '{"result":{"pane":{"pane_id":"w1:p9"}}}' ;;
   "pane current")
-    if [ "$scenario" = "own_pane_blind" ]; then
-      emit '{"result":{"pane":{}}}'
-    else
-      emit '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}'
-    fi ;;
+    emit '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}' ;;
   "pane run")
     emit '{"result":{"ok":true}}' ;;
   "pane layout")
@@ -109,62 +97,20 @@ case "$group $sub" in
       emit 'Quick safety check: Is this a project you created or one you trust?
  ❯ No, exit
    Yes, I trust this folder'
-    elif [ "$scenario" = "prompt_blocked_midrun" ]; then
-      emit 'Allow Bash(rm -rf build)? [y/n]'
-    elif [ "$scenario" = "box_empty" ]; then
-      claude_screen ""
-    elif [ "$scenario" = "box_queued_hint" ]; then
-      claude_screen $'\e[2mPress up to edit queued messages\e[0m'
-    elif [ "$scenario" = "draft_stuck" ]; then
-      claude_screen "half typed"
-    elif [ "$scenario" = "draft_then_clear" ]; then
-      if [ "$same_before" -lt 2 ]; then claude_screen "half typed"; else claude_screen ""; fi
     else
       emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
     fi ;;
-  "agent get")
-    emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "pane get")
     emit "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",\"cwd\":\"${FAKE_PANE_CWD:-/tmp}\"}}}" ;;
-  "agent send-keys")
-    emit '{"result":{"ok":true}}' ;;
   "agent wait")
     if [ -n "${FAKE_AGENT_WAIT_FAILS:-}" ]; then
       fail '{"error":{"code":"timeout"}}'
     fi
     emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "agent prompt")
-    case "$scenario" in
-      prompt_stalled) fail '{"error":{"code":"agent_prompt_stalled"}}' ;;
-      prompt_blocked) fail '{"error":{"code":"agent_blocked","dialog":"Allow write? [y/n]"}}' ;;
-      prompt_no_status) emit '{"result":{"type":"agent_info"}}' ;;
-      prompt_working) emit '{"result":{"agent":{"agent_status":"working"}}}' ;;
-      prompt_blocked_midrun) emit '{"result":{"agent":{"agent_status":"blocked"}}}' ;;
-      *) emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
-    esac ;;
+    emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "agent list")
     case "$scenario" in
-      watch_change)
-        if [ "$same_before" -eq 0 ]; then
-          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"aaaa1111"}}]}}'
-        else
-          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"blocked","agent_session":{"value":"aaaa1111"}}]}}'
-        fi ;;
-      watch_pause)
-        if [ "$same_before" -eq 0 ]; then
-          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"aaaa1111"}}]}}'
-        else
-          emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"aaaa1111"}}]}}'
-        fi ;;
-      watch_two_teams)
-        emit '{"result":{"agents":[
-          {"name":"app-1-scout","pane_id":"w1:p2","agent_status":"blocked","agent_session":{"value":"aaaa1111"}},
-          {"name":"app-2-maker","pane_id":"w2:p2","agent_status":"working","agent_session":{"value":"bbbb2222"}}
-        ]}}' ;;
-      watch_working)
-        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"aaaa1111"}}]}}' ;;
-      watch_idle)
-        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"aaaa1111"}}]}}' ;;
       bad_list)
         emit 'not json' ;;
       status_mixed)
@@ -186,14 +132,6 @@ case "$group $sub" in
         ]}}' ;;
       name_scout_taken)
         emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
-      overview)
-        emit '{"result":{"agents":[
-          {"name":"app-1-orch","pane_id":"w2:p1","agent_status":"working","agent_session":{"value":"oooo0000dddd"}},
-          {"name":"app-1-impl","pane_id":"w2:p3","agent_status":"working","agent_session":{"value":"33333333aaaa"}},
-          {"name":"app-1-rev","pane_id":"w2:p4","agent_status":"idle","agent_session":{"value":"44444444bbbb"}},
-          {"name":"app-2-maker","pane_id":"w3:p2","agent_status":"working","agent_session":{"value":"55555555cccc"}},
-          {"pane_id":"w2:pB","agent_status":"idle","agent_session":{"value":"c23a1be5eeee"}}
-        ]}}' ;;
       list_fails)
         fail '{"error":{"code":"server_unavailable"}}' ;;
       resurrect_cleared)
@@ -210,16 +148,6 @@ case "$group $sub" in
     esac ;;
   "pane list")
     case "$scenario" in
-      panes_empty | own_pane_blind)
-        emit '{"result":{"panes":[
-          {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"idle"},
-          {"pane_id":"w1:p3","tab_id":"w1:t2","agent_status":"unknown"}
-        ]}}' ;;
-      panes_idle_only)
-        emit '{"result":{"panes":[
-          {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"idle"},
-          {"pane_id":"w1:p3","tab_id":"w1:t2","agent_status":"idle"}
-        ]}}' ;;
       panes_overbudget)
         emit '{"result":{"panes":[
           {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"working"},

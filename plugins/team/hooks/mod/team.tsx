@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { TeamAgentRow, TeamPlan } from '../../types'
-import { activeConfig, followClear, noteClear } from './activation'
+import { activeConfig, noteClear } from './activation'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
 import type { Io } from './io'
 import { herdrAgents } from './herdr'
@@ -17,6 +17,8 @@ const plan = atom({ plugin: 'team', key: 'plan' } as const, null as TeamPlan | n
 const planPath = atom({ plugin: 'team', key: 'planPath' } as const, '')
 const tickAt = atom({ plugin: 'team', key: 'tickAt' } as const, '')
 const error = atom({ plugin: 'team', key: 'error' } as const, '')
+// One tick loop per module: a second session.start replaces it, never adds one.
+let tickTimer: Timer | null = null
 
 function makeIo($: EngineInterface): Io {
   return {
@@ -69,7 +71,6 @@ async function showPane($: EngineInterface, teamId: string): Promise<void> {
 }
 
 async function tick($: EngineInterface, io: Io): Promise<void> {
-  await followClear(io)
   const cfg = await activeConfig(io)
   const was = await read($, active)
   await update($, active, () => cfg !== null)
@@ -110,7 +111,8 @@ export const register: Register = on => {
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     await $.command.register({ name: 'team-overview', description: 'Show or hide the team overview pane' })
     await $.tool.register(BRIEF_TOOL_SPEC)
-    $.clock.every(TICK_MS, () => tick($, io))
+    tickTimer?.cancel()
+    tickTimer = $.clock.every(TICK_MS, () => tick($, io))
     return next(e)
   })
 

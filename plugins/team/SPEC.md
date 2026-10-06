@@ -448,7 +448,7 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket> [--label]` | Derives the tab label (never asks which roles; agents start on demand), runs `team-init` (archives the previous run, records this session as `orchestrator_session`), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, writes the first roster. The team mod activates on its next tick. |
+| `/team:init <ticket>` | Never asks which roles (agents start on demand). Runs `team-init` (archives the previous run, records this session as `orchestrator_session`; `--help` prints its usage, and a ticket starting with `-` is refused before anything is archived), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, writes the first roster. The team mod activates on its next tick. |
 | `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then the `brief_send` tool, then reports the status line to Alfred. |
 | `/team:status` | `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. |
 | `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <pane> "/clear"` (pane found by session id), run the overlay's `release_check` command if defined (orphan processes), close the pane (closing the last pane closes the tab), delete its session index entry. With `all`, also removes the mod's state files. Refuses to release an agent that is `working`. |

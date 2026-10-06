@@ -1,14 +1,13 @@
 ---
 description: Start a team run for a ticket - create the numbered decisions file, the plan file, and the first roster; the team mod opens the overview.
-argument-hint: <ticket> [--label "<tab label>"]
+argument-hint: <ticket>
 ---
 Set up a team run for: $ARGUMENTS
 
 Load the `team-orchestration` skill first. Then, doing no operational work
 beyond these steps:
 
-1. Derive the tab label from the ticket, or use the `--label` argument if given.
-   Do not ask which roles the run needs: start agents on demand, when a task
+1. Do not ask which roles the run needs: start agents on demand, when a task
    reveals the need for one.
 2. Run `team-init <ticket> --orchestrator-pane <this pane id>`. It archives the
    previous run and every loose scratchpad entry to `scratchpad/.archive/`,

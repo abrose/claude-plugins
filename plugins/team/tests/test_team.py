@@ -1208,6 +1208,27 @@ class TeamResurrect(Base):
         p = self.run_script("team-resurrect", scenario="resurrect")
         self.assertIn("missing ghost: session sid-ghost not in herdr", p.stdout)
 
+    def test_missing_worker_loses_its_restored_marker(self):
+        self.setup_team()
+        self.run_script("team-resurrect", scenario="resurrect")
+        self.assertFalse(os.path.exists(self.sp(".team", "restored", "ghost")))
+
+    def test_marker_without_a_record_is_removed(self):
+        self.setup_team()
+        open(self.sp(".team", "restored", "released"), "w").close()
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".team", "restored", "released")))
+
+    def test_team_name_is_shell_quoted_in_the_pane(self):
+        self.setup_team()
+        os.rename(self.sp(".team", "scout.json"), self.sp(".team", "sc out.json"))
+        os.rename(self.sp(".team", "restored", "scout"), self.sp(".team", "restored", "sc out"))
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p5 export TEAM_NAME=sc\\ out TEAM_SCRATCH=%s" % os.path.realpath(self.sp()),
+                      self.herdr_calls())
+
     def test_herdr_down_is_a_herdr_error(self):
         self.setup_team()
         p = self.run_script("team-resurrect", scenario="list_fails")
@@ -1335,6 +1356,24 @@ class TeamInit(Base):
 
     def archive(self, *parts):
         return os.path.join(self.proj, "scratchpad", ".archive", *parts)
+
+    def test_help_prints_usage_and_touches_nothing(self):
+        self.old_run()
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                p = self.init(ticket=flag)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("usage: team-init <ticket>", p.stdout)
+                self.assertEqual(json.loads(read_text(self.sp(".team", "config.json")))["ticket"], "APP-1")
+                self.assertFalse(os.path.exists(self.archive()))
+
+    def test_ticket_that_looks_like_a_flag_is_bad_args(self):
+        self.old_run()
+        p = self.init(ticket="--label")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("usage: team-init <ticket>", p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".team", "config.json")))["ticket"], "APP-1")
+        self.assertFalse(os.path.exists(self.archive()))
 
     def test_archives_the_finished_run_and_starts_fresh(self):
         self.old_run()
