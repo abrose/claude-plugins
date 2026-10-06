@@ -20,7 +20,9 @@ const MARK = {
   ' ': { glyph: '○', color: undefined, dim: false },
 } as const
 
-export function drawPane({ Box, Text }: Pick<Elements['terminal'], 'Box' | 'Text'>, view: PaneView) {
+export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>, view: PaneView,
+  focus: (agent: TeamAgentRow) => void,
+) {
   const room = Math.max(view.rows - view.agents.length - 12, 3)
   const fitted = view.plan ? fitPlan(view.plan, room) : null
   const item = (i: TeamPlanItem) => (
@@ -50,10 +52,10 @@ export function drawPane({ Box, Text }: Pick<Elements['terminal'], 'Box' | 'Text
       <Text> </Text>
       <Text bold>Agents</Text>
       {view.agents.length === 0 && <Text dimColor> (none)</Text>}
-      {view.agents.map(a => (
-        <Text wrap="truncate-end">
-          {' '}{a.state.padEnd(8)} {a.name} <Text dimColor>{a.pane}</Text>
-        </Text>
+      {view.agents.map((a, i) => (
+        <Button key={a.name} plain hotkey={i < 9 ? String(i + 1) : undefined} onPress={() => focus(a)}>
+          {`${a.state.padEnd(8)} ${a.name} ${a.pane}`}
+        </Button>
       ))}
       {view.error !== '' && <Text color="red" wrap="truncate-end">{view.error}</Text>}
       <Text dimColor>tick {view.tickAt || '-'}</Text>

@@ -57,7 +57,7 @@ export async function team($: any, on: On): Promise<World> {
 export async function agentRows($: any): Promise<string[]> {
   const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
                                 requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
-  const found = await ui.findAll({ type: 'Text', text: /app-1-/ })
+  const found = await ui.findAll({ type: 'Button', text: /app-1-/ })
   return found.map((f: any) => f.text.trim().replace(/\s+/g, ' '))
 }
 

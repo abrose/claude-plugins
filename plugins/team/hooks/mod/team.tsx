@@ -4,7 +4,7 @@ import type { TeamAgentRow, TeamPlan } from '../../types'
 import { activeConfig, noteClear } from './activation'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
 import type { Io } from './io'
-import { herdrAgents } from './herdr'
+import { herdrAgents, herdrFocus } from './herdr'
 import { drawPane, hiddenKey, PANE } from './pane'
 import { runDir, setCwd, teamDir } from './paths'
 import { parsePlan } from './plan'
@@ -148,14 +148,17 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    return drawPane({ Box, Text } as never, {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    return drawPane({ Box, Text, Button } as never, {
       agents: await read($, agents),
       plan: await read($, plan),
       planPath: await read($, planPath),
       tickAt: await read($, tickAt),
       error: await read($, error),
       rows: e.viewport?.rows ?? 30,
+    }, async a => {
+      const reason = await herdrFocus(makeIo($), a.pane)
+      if (reason !== '') await update($, error, () => `focus ${a.name}: ${reason}`)
     })
   })
 }

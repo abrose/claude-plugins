@@ -14,9 +14,13 @@ async function herdr(io: Io, args: string[]) {
   return io.run([bin, ...args])
 }
 
+function failure(r: { exitCode: number; stdout: string; stderr: string }): string {
+  return (r.stderr || r.stdout).trim().slice(0, 200) || `exit ${r.exitCode}`
+}
+
 export async function herdrAgents(io: Io): Promise<HerdrListing> {
   const r = await herdr(io, ['agent', 'list'])
-  if (r.exitCode !== 0) return { ok: false, reason: (r.stderr || r.stdout).trim().slice(0, 200) || `exit ${r.exitCode}` }
+  if (r.exitCode !== 0) return { ok: false, reason: failure(r) }
   try {
     return { ok: true, agents: JSON.parse(r.stdout)?.result?.agents ?? [] }
   } catch {
@@ -37,6 +41,12 @@ export async function herdrPanes(io: Io): Promise<HerdrPane[] | null> {
 export async function herdrDialog(io: Io, pane: string): Promise<string> {
   const r = await herdr(io, ['agent', 'read', pane, '--source', 'detection', '--lines', '20'])
   return r.stdout.split('\n').find(l => l.trim() !== '')?.trim() ?? ''
+}
+
+/** Focuses the agent's pane; the failure reason, or '' when it worked. */
+export async function herdrFocus(io: Io, pane: string): Promise<string> {
+  const r = await herdr(io, ['agent', 'focus', pane])
+  return r.exitCode === 0 ? '' : failure(r)
 }
 
 export async function herdrClose(io: Io, pane: string): Promise<void> {

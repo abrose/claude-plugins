@@ -57,6 +57,8 @@ Or install from the marketplace once published:
 | `/team:resurrect` | After a restart, relaunch workers that came back without their team flags, resuming their sessions. |
 | `/team-overview` | Hide or show the `Team` pane (a mod command; the choice is kept per team). |
 
+In the `Team` pane, click an agent row to jump to its herdr pane. With the keyboard: `ctrl+x tab` focuses the pane, then `1`-`9` jumps to that agent.
+
 ## Scripts (`bin/`, on `PATH` when enabled)
 
 | Script | Does |

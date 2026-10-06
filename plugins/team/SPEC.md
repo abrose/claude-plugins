@@ -523,7 +523,9 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   DONE gives up its oldest items when short), agents, last error, tick time.
   Opened on activation unless hidden; `/team-overview` toggles it and keeps the
   choice in `$.store` under `overviewHidden:<team_id>`; a close by the person
-  counts as hiding.
+  counts as hiding. Each agent row is a Button: a click, or its hotkey `1`-`9`
+  while the pane holds the focus (ctrl+x tab), runs `herdr agent focus <pane>`;
+  a failure shows as `focus <name>: <reason>` until the next tick.
 - Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): refuses
   outside the session that runs the team; runs
   `team-brief prepare`, sends the printed kick-off with

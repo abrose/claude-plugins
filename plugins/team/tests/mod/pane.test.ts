@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { CWD, start, world } from './world'
+import { agentRows, CWD, start, team, world } from './world'
 
 async function activeTeam($: any, on: any) {
   const w = world(on)
@@ -39,6 +39,43 @@ describe('Team pane', () => {
     expect(w.store.get('overviewHidden:app-1')).toBe(true)
     expect(await $.command.run({ command: 'team-overview' } as never)).toMatchObject({ text: 'Team overview shown.' })
     expect(w.store.get('overviewHidden:app-1')).toBe(false)
+  })
+
+  test('pressing an agent row focuses its herdr pane', async ($, on) => {
+    const w = await team($, on)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    await agentRows($)
+
+    await $.ui.press({ plugin: 'team', key: 'app-1-scout' })
+
+    expect(w.runs).toContainEqual(['herdr', 'agent', 'focus', 'w1:p2'])
+  })
+
+  test('a failed focus shows the herdr reason in the pane', async ($, on) => {
+    const w = await team($, on)
+    await w.clock.advance(15000)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+    w.herdrFails = 'no agent w1:p2'
+
+    await $.ui.press({ plugin: 'team', key: 'app-1-scout' })
+
+    expect(await ui.find({ type: 'Text', text: /focus app-1-scout: no agent w1:p2/ })).toBeDefined()
+  })
+
+  test('agent rows carry hotkeys 1 to 9 in order, the tenth none', async ($, on) => {
+    const w = await team($, on)
+    for (let i = 2; i <= 10; i++) {
+      w.writeJson(`${w.team}/app-1-w${i}.json`, { role: 'implementer', topic: '', brief: '', pane: `w1:p${i + 10}`, session: `sid-${i}` })
+    }
+    await w.clock.advance(15000)
+
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+    const buttons = await ui.findAll({ type: 'Button', text: /app-1-/ })
+
+    expect(buttons.map((b: any) => b.props.hotkey)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', undefined])
   })
 
   test('a hidden overview stays hidden when the mod activates again', async ($, on) => {
