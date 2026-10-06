@@ -9,23 +9,35 @@ scratch="${TEAM_SCRATCH:-scratchpad/current}"
 teamdir="$scratch/.team"
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$scratch")"
+index_dir="${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}"
 
 list="$(herdr agent list)" || exit 4
 
+# A marked worker that was /clear'd before this ran has a new session id its
+# record does not know (no TEAM_NAME, so the hook could not follow). When its
+# recorded pane runs a session no record claims, that session is adopted.
 plan="$(PYTHONPATH="$lib" TEAMDIR="$teamdir" LIST="$list" python3 - <<'PY'
 import json, os
 from teamlib import records
 teamdir = os.environ["TEAMDIR"]
 agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
-panes = {a.get("agent_session", {}).get("value"): a.get("pane_id") for a in agents}
-for name, rec in sorted(records(teamdir).items()):
+pane_of = {a.get("agent_session", {}).get("value"): a.get("pane_id") for a in agents}
+session_in = {a.get("pane_id"): a.get("agent_session", {}).get("value") for a in agents}
+recs = records(teamdir)
+claimed = {r.get("session") for r in recs.values()}
+for name, rec in sorted(recs.items()):
     sid = rec.get("session", "")
     if not sid:
         continue
-    pane = panes.get(sid)
     marked = os.path.exists(os.path.join(teamdir, "restored", name))
-    kind = "missing" if not pane else "relaunch" if marked else "healthy"
-    print("\t".join([kind, name, pane or "-", sid, rec.get("role", ""), rec.get("model", ""),
+    pane, kind, old = pane_of.get(sid), None, "-"
+    if pane:
+        kind = "relaunch" if marked else "healthy"
+    elif marked and session_in.get(rec.get("pane")) and session_in[rec["pane"]] not in claimed:
+        kind, pane, old, sid = "adopt", rec["pane"], sid, session_in[rec["pane"]]
+    else:
+        kind = "missing"
+    print("\t".join([kind, name, pane or "-", sid, old, rec.get("role", ""), rec.get("model", ""),
                      rec.get("effort", ""), rec.get("mode", "")]))
 PY
 )"
@@ -36,28 +48,58 @@ pending_dir="$teamdir/pending"
 pending_file=""
 trap '[ -z "$pending_file" ] || rm -f "$pending_file"' EXIT
 
-while IFS=$'\t' read -r kind name pane sid role model effort mode; do
+# relaunch <name> <pane> <session> <role> <model> <effort> <mode>; returns 1
+# when the running Claude does not exit.
+relaunch() {
+  local name="$1" pane="$2" sid="$3" role="$4" model="$5" effort="$6" mode="$7"
+  mkdir -p "$pending_dir"
+  pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
+  : >"$pending_file"
+  herdr agent prompt "$pane" "/exit" >/dev/null 2>&1 || true
+  if ! herdr agent wait "$pane" --until unknown --timeout 30000 >/dev/null 2>&1; then
+    echo "could not stop $name ($pane): answer what its pane shows, then run /team:resurrect again"
+    rm -f "$pending_file"; pending_file=""
+    return 1
+  fi
+  herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
+  herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
+    --resume "$sid" --agent "team-$role" --model "$model" --effort "$effort" \
+    --permission-mode "$mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' >/dev/null || exit 4
+  rm -f "$pending_file"; pending_file=""
+  rm -f "$teamdir/restored/$name"
+}
+
+# adopt_session <name> <new session> <old session>: move the record and the
+# session index entry to the adopted session.
+adopt_session() {
+  SID="$2" OLD="$3" SCRATCH="$scratch_abs" INDEX="$index_dir" NAME="$1" python3 - "$teamdir/$1.json" <<'PY'
+import json, os, sys
+rec = json.load(open(sys.argv[1]))
+rec["session"] = os.environ["SID"]
+json.dump(rec, open(sys.argv[1], "w"))
+os.makedirs(os.environ["INDEX"], exist_ok=True)
+json.dump({"scratch": os.environ["SCRATCH"], "name": os.environ["NAME"]},
+          open(os.path.join(os.environ["INDEX"], os.environ["SID"] + ".json"), "w"))
+try:
+    os.remove(os.path.join(os.environ["INDEX"], os.environ["OLD"] + ".json"))
+except OSError:
+    pass
+PY
+}
+
+while IFS=$'\t' read -r kind name pane sid old role model effort mode; do
   [ -n "$kind" ] || continue
   case "$kind" in
     missing) echo "missing $name: session $sid not in herdr" ;;
     healthy) echo "healthy $name" ;;
     relaunch)
-      mkdir -p "$pending_dir"
-      pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
-      : >"$pending_file"
-      herdr agent prompt "$pane" "/exit" >/dev/null 2>&1 || true
-      if ! herdr agent wait "$pane" --until unknown --timeout 30000 >/dev/null 2>&1; then
-        echo "could not stop $name ($pane): answer what its pane shows, then run /team:resurrect again"
-        rm -f "$pending_file"; pending_file=""
-        continue
-      fi
-      herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
-      herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
-        --resume "$sid" --agent "team-$role" --model "$model" --effort "$effort" \
-        --permission-mode "$mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' >/dev/null || exit 4
-      rm -f "$pending_file"; pending_file=""
-      rm -f "$teamdir/restored/$name"
+      relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" || continue
       echo "relaunched $name ($pane)"
+      ;;
+    adopt)
+      relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" || continue
+      adopt_session "$name" "$sid" "$old"
+      echo "relaunched $name ($pane), adopted session $sid"
       ;;
   esac
 done <<<"$plan"

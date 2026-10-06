@@ -89,7 +89,7 @@ async function tick($: EngineInterface, io: Io): Promise<void> {
 
   const run = await runDir(io)
   const now = await $.clock.now()
-  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id())
+  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), cfg.orchestrator_tab)
   const reports = await newReportLines(io, run, teamdir, records)
   const lines = [...reports.lines, ...watch]
   try {

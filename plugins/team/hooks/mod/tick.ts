@@ -62,7 +62,7 @@ const NO_REPORT_AFTER = 120
  */
 export async function watchTick(
   io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
-  listed: HerdrListing, now: number, myId: string,
+  listed: HerdrListing, now: number, myId: string, orchestratorTab?: string,
 ): Promise<string[]> {
   const memPath = `${teamdir}/watch-state.json`
   const mem = (await readJson<WatchMemory>(io, memPath)) ?? { agents: {}, _flagged: {}, _idle_since: {} }
@@ -95,7 +95,8 @@ export async function watchTick(
     const layout = layoutActions({
       panes,
       teamTabs: (await readJson<string[]>(io, `${teamdir}/tabs.json`)) ?? [],
-      orchTab: listed.agents.find(a => a.agent_session?.value === myId)?.tab_id ?? null,
+      orchTabs: [listed.agents.find(a => a.agent_session?.value === myId)?.tab_id, orchestratorTab]
+        .filter((t): t is string => !!t),
       namedPanes: new Set(Object.values(records).map(r => r.pane)),
       pending: new Set(panes.map(p => p.pane_id).filter(id => marked.has(pendingFile(id)))),
       briefed: new Map(facts.filter(f => records[f.name]?.brief).map(f => [f.pane, f.hasFreshReport])),

@@ -1,3 +1,4 @@
+import { activeConfig } from './activation'
 import { bySession, herdrAgents } from './herdr'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
@@ -36,6 +37,7 @@ async function clearedRecord(io: Io, path: string): Promise<TeamRecord | null> {
 }
 
 export async function briefSend(io: Io, name: string, topic: string): Promise<BriefResult> {
+  if (!(await activeConfig(io))) return fail('brief_send works only in the session that runs the team (/team:init)')
   if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) return fail(`bad name: ${name}`)
   const path = `${await teamDir(io)}/${name}.json`
   const rec = await clearedRecord(io, path)

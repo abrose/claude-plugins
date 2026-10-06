@@ -241,6 +241,12 @@ t = os.environ["TAB"]
 if t not in tabs: tabs.append(t)
 json.dump(tabs, open(path, "w"))
 PY
+  TAB="$tab" python3 - "$teamdir/config.json" <<'PY'
+import os, json, sys
+cfg = json.load(open(sys.argv[1]))
+cfg["orchestrator_tab"] = os.environ["TAB"]
+json.dump(cfg, open(sys.argv[1], "w"))
+PY
 fi
 
 # Drop session index entries whose agent record is gone or names another

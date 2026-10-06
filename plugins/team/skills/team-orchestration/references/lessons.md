@@ -102,6 +102,9 @@ never here.
   addressed by session id, so reports and briefs keep flowing; run
   `/team:resurrect` to relaunch workers that came back without their flags
   (otherwise briefs may wait for approval at the worker).
+- Run `/team:resurrect` before you `/clear` a restored worker. If you cleared it
+  first, resurrect adopts the session its pane now runs; check the
+  `adopted session` line before the next brief.
 
 ## The absent human
 

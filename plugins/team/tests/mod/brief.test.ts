@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { team } from './world'
+import { start, team, world } from './world'
 
 const call = ($: any, args: { name: string; topic: string }) =>
   $.tool.call({ tool: 'mcp__team__brief_send', tool_use_id: 't1', ...args } as never)
@@ -13,6 +13,18 @@ describe('brief_send', () => {
     expect(w.sends).toEqual([{ to: 'sid-scout',
                                text: 'Read scratchpad/current/brief-app-1-scout-dig.md and execute it fully.' }])
     expect(w.json(`${w.team}/app-1-scout.json`).brief_sent_session).toBe('sid-scout')
+  })
+
+  test('refuses in a session that is not the team orchestrator', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.writeJson(`${w.team}/config.json`, {
+      team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch', orchestrator_session: 'sid-other',
+    })
+    w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout' })
+    const r = await call($, { name: 'app-1-scout', topic: 'dig' })
+    expect(r).toMatchObject({ isError: true, result: 'brief_send works only in the session that runs the team (/team:init)' })
+    expect(w.sends).toEqual([])
   })
 
   test('an unknown agent is an error', async ($, on) => {

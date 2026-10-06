@@ -196,6 +196,10 @@ case "$group $sub" in
         ]}}' ;;
       list_fails)
         fail '{"error":{"code":"server_unavailable"}}' ;;
+      resurrect_cleared)
+        emit '{"result":{"agents":[
+          {"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-cleared"}}
+        ]}}' ;;
       resurrect)
         emit '{"result":{"agents":[
           {"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-scout"}},

@@ -3,7 +3,8 @@ import type { HerdrPane } from './herdr'
 export type LayoutInput = {
   panes: HerdrPane[]
   teamTabs: string[]
-  orchTab: string | null
+  /** The orchestrator's tabs: the human's workspace, never closed or flagged. */
+  orchTabs: string[]
   namedPanes: Set<string>
   /** Pane ids team-start marked while it brings an agent up: never closed. */
   pending: Set<string>
@@ -22,7 +23,7 @@ export function layoutActions(input: LayoutInput): { closes: string[]; flags: st
   const closes: string[] = []
   const flags: string[] = []
   for (const [tab, list] of byTab) {
-    if (!input.teamTabs.includes(tab) || tab === input.orchTab) continue
+    if (!input.teamTabs.includes(tab) || input.orchTabs.includes(tab)) continue
     if (list.length > BUDGET) flags.push(`layout: tab ${tab} over budget (${list.length}/${BUDGET})`)
     const empty = (p: HerdrPane) =>
       !OCCUPIED.has(p.agent_status) && input.namedPanes.has(p.pane_id) && !input.pending.has(p.pane_id)

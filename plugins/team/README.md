@@ -67,7 +67,7 @@ Or install from the marketplace once published:
 | `team-brief compose\|prepare` | Compose a brief from templates + overlay, or prepare its kick-off prompt (update the record, mirror into a worktree, print the prompt). |
 | `team-slice <branch> <parent>` | Create a worktree (with the repo's own `worktree_cmd` from the overlay; refuses without one) and a Herdr tab for one slice. |
 | `team-status` | Match `herdr agent list` to `.team/` records by session id into a roster. |
-| `team-resurrect` | Relaunch workers a herdr restore marked as restored, with their saved flags. |
+| `team-resurrect` | Relaunch workers a herdr restore marked as restored, with their saved flags. A marked worker `/clear`ed before it ran is adopted: the session its recorded pane runs, when no record claims it, becomes its identity. |
 
 ## Roles
 
@@ -115,7 +115,8 @@ session with the plugin enabled and activates only in the session that
   report file holds a `REPORT` line and is newer than the brief;
 - closes an empty pane in a team-managed worker tab only when a team record
   names that pane and `team-start` has not marked it pending; never touches the
-  orchestrator's own tab;
+  orchestrator's own tab (the one herdr shows it in, and `orchestrator_tab` in
+  the config, which `team-init` records);
 - flags a tab over its pane budget, and a worker tab whose agents are all idle
   or done with fresh reports, as a release candidate;
 - sends one `WATCH herdr unreachable: <reason>` while herdr is down.
@@ -124,6 +125,8 @@ All lines of one tick go out as one prompt (`REPORT` lines first), which waits
 until the orchestrator is idle and never touches a draft you are typing.
 
 The `brief_send` tool (`mcp__team__brief_send`) sends a kick-off by session id.
+It works only in the session that runs the team; elsewhere (a worker, another
+repo) it refuses.
 Auto mode reviews that send as a `SendMessage` with no user request behind it,
 so its classifier gives no verdict; `team-init` therefore adds `SendMessage` to
 `permissions.allow` in `.claude/settings.local.json`, which decides it without

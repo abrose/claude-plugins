@@ -35,7 +35,7 @@ describe('watchLines', () => {
 
 describe('layoutActions', () => {
   const base = {
-    teamTabs: ['w1:t2'], orchTab: 'w1:t1', namedPanes: new Set(['w1:p2', 'w1:p3']),
+    teamTabs: ['w1:t2'], orchTabs: ['w1:t1'], namedPanes: new Set(['w1:p2', 'w1:p3']),
     pending: new Set<string>(), briefed: new Map<string, boolean>(), prevFlags: [] as string[],
   }
   test('never closes a pane team-start marked pending', () => {
@@ -154,6 +154,16 @@ describe('watch in the tick', () => {
     expect(w.submits).toEqual([
       'WATCH app-1-scout: idle, no report - read /proj/scratchpad/current/reports/app-1-scout-.md',
     ])
+  })
+
+  test('the orchestrator tab from the config gets no layout flags while herdr does not know the session', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/config.json`, { ...w.json(`${w.team}/config.json`), orchestrator_tab: 'w1:t1' })
+    w.writeJson(`${w.team}/tabs.json`, ['w1:t1'])
+    w.panes = Array.from({ length: 7 }, (_, i) => ({ pane_id: `w1:x${i}`, tab_id: 'w1:t1', agent_status: 'working' }))
+    await w.clock.advance(15000)
+    expect(w.submits.filter(s => s.includes('layout'))).toEqual([])
   })
 
   test('a report file without a REPORT line still counts as no report', async ($, on) => {

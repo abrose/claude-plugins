@@ -505,7 +505,9 @@ of closures over `$`; every other module takes `io` and never sees `$`.
 - Tick: reads the plan file, maps records to herdr agents by session id
   (writing moved pane ids back), runs the watch rules, closes empty
   record-named panes in worker tabs (never a pending one, never in the
-  orchestrator's own tab), picks up new report files (marks in
+  orchestrator's own tab: the tab herdr shows its session in, and
+  `orchestrator_tab` from the config, which `team-init` records for the time
+  herdr does not know the session yet), picks up new report files (marks in
   `.team/delivered.json`; a missing file is a baseline), and sends every
   REPORT line, then every WATCH line, as one `$.prompt.submit`. herdr down ->
   one `WATCH herdr unreachable: <reason>` until it is back.
@@ -514,7 +516,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   Opened on activation unless hidden; `/team-overview` toggles it and keeps the
   choice in `$.store` under `overviewHidden:<team_id>`; a close by the person
   counts as hiding.
-- Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): runs
+- Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): refuses
+  outside the session that runs the team; runs
   `team-brief prepare`, sends the printed kick-off with
   `$.session.send({ to: { sessionId } })`, writes `brief_sent_session`, and
   returns `<name>: <state>`. When the record's `brief_sent_session` equals its
@@ -1061,3 +1064,15 @@ go out through the `brief_send` tool. `/team:resurrect` relaunches workers
 that a herdr restore brought back without their flags. `team-watch`,
 `team-overview`, `team-deliver` and `lib/overview.py` are gone. Requires
 Claude Code 2.1.287.
+
+## Increment 2026-10-06
+
+Three fixes from the 0.5.0 review. `team-resurrect` adopts a restored worker
+that was `/clear`ed before it ran (the hook could not follow the `/clear`
+without `TEAM_NAME`): when the worker is marked, its recorded session is
+gone, and its recorded pane runs a session no record claims, it resumes that
+session and moves the record and the index entry to it. `brief_send` refuses
+outside the session that runs the team, so a worker cannot brief a peer.
+`team-init` records the orchestrator's tab as `orchestrator_tab` in the
+config, and the mod exempts it from layout hygiene even while herdr does not
+know the orchestrator's session yet (just after its `/clear`).

@@ -7,6 +7,7 @@ export type TeamConfig = {
   ticket: string
   orchestrator: string
   orchestrator_session?: string
+  orchestrator_tab?: string
 }
 
 let clearedFrom: string | null = null

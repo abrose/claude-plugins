@@ -1213,6 +1213,37 @@ class TeamResurrect(Base):
         p = self.run_script("team-resurrect", scenario="list_fails")
         self.assertEqual(p.returncode, 4)
 
+    def cleared_worker(self, marked):
+        # Restored without its env, then /clear'd: its record still names the
+        # old session, while its pane now runs a session no record claims.
+        d = self.sp(".team"); os.makedirs(os.path.join(d, "restored"))
+        write_text(os.path.join(d, "scout.json"), json.dumps(
+            {"role": "investigator", "topic": "", "brief": "", "pane": "w1:p5", "session": "sid-old",
+             "model": "claude-sonnet-5-5", "effort": "low", "mode": "auto", "cwd": self.proj}))
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "sid-old.json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": "scout"}))
+        if marked:
+            open(os.path.join(d, "restored", "scout"), "w").close()
+
+    def test_adopts_the_session_a_restored_worker_got_from_a_clear(self):
+        self.cleared_worker(marked=True)
+        p = self.run_script("team-resurrect", scenario="resurrect_cleared")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("relaunched scout (w1:p5), adopted session sid-cleared", p.stdout)
+        self.assertTrue(any(c.startswith("agent start scout ") and "--resume sid-cleared " in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+        self.assertEqual(self.team_json("scout")["session"], "sid-cleared")
+        self.assertEqual(self.index_entry("sid-cleared")["name"], "scout")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "_index", "sid-old.json")))
+
+    def test_never_adopts_a_pane_session_of_an_unmarked_worker(self):
+        self.cleared_worker(marked=False)
+        p = self.run_script("team-resurrect", scenario="resurrect_cleared")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("missing scout: session sid-old not in herdr", p.stdout)
+        self.assertEqual(self.team_json("scout")["session"], "sid-old")
+
     def test_pane_is_pending_while_its_agent_restarts(self):
         # The team mod closes an empty pane a record names; a pane between
         # /exit and the relaunched Claude looks empty, so it must be pending.
@@ -1498,6 +1529,15 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         tabs = json.loads(read_text(self.sp(".team", "tabs.json")))
         self.assertIn("w1:t1", tabs)
+
+    def test_config_names_the_orchestrator_tab(self):
+        # The team mod exempts this tab from layout hygiene even while herdr
+        # does not yet know the orchestrator's session (just after a /clear).
+        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+                            scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(self.sp(".team", "config.json")))
+        self.assertEqual(cfg["orchestrator_tab"], "w1:t1")
 
     def test_does_not_rename_the_orchestrator(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
