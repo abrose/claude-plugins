@@ -66,7 +66,7 @@ if [ "$model_flag" = haiku-4-5 ] && [ "$mode" = auto ]; then
 fi
 
 session_id="$(python3 -c "import uuid;print(uuid.uuid4())")"
-index_dir="${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}"
+index_dir="${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}"
 
 placements=0
 for p in "$pane" "$split_pane" "$into_tab" "$new_tab"; do [ -n "$p" ] && placements=$((placements + 1)); done
@@ -123,6 +123,13 @@ fi
 # absolute so the hook finds the team dir wherever the agent moves its cwd.
 scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad/current}")"
 team_env=(--env "TEAM_NAME=$name" --env "TEAM_SCRATCH=$scratch_abs")
+# A herdr pane's shell takes its env from the herdr server, not from this
+# session, so the worker runs in this session's Claude profile only if passed.
+profile_export=""
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  team_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  profile_export=" CLAUDE_CONFIG_DIR=$(printf %q "$CLAUDE_CONFIG_DIR")"
+fi
 
 # The pending marker shields a pane from the team mod's empty-pane cleanup.
 # Mark a created pane right after herdr hands it back, before any other herdr
@@ -215,7 +222,7 @@ fi
 # Export it into the pane's shell before the agent starts, so the agent and its
 # Stop hook inherit it. The pane feeds one PTY in order, so this runs first.
 if [ -z "$pane_created" ]; then
-  herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")" >/dev/null || exit 4
+  herdr pane run "$pane" "export TEAM_NAME=$name TEAM_SCRATCH=$(printf %q "$scratch_abs")$profile_export" >/dev/null || exit 4
 fi
 
 start() {

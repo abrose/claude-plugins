@@ -59,7 +59,8 @@ try:
 
     def by_session():
         sid = p.get("session_id", "")
-        index = os.environ.get("TEAM_INDEX_DIR") or os.path.expanduser("~/.claude/team/sessions")
+        index = os.environ.get("TEAM_INDEX_DIR") or os.path.join(
+            os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "team", "sessions")
         if not re.match(r"^[A-Za-z0-9-]{1,64}$", sid):
             return None
         try:

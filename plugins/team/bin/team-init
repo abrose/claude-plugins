@@ -257,7 +257,7 @@ fi
 # Drop session index entries whose agent record is gone or names another
 # session, so a stale entry never claims a session for a finished run. A
 # record that cannot be read right now (another team writing it) is kept.
-INDEX="${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}" python3 - <<'PY'
+INDEX="${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}" python3 - <<'PY'
 import glob, json, os
 for f in glob.glob(os.path.join(os.environ["INDEX"], "*.json")):
     sid = os.path.splitext(os.path.basename(f))[0]

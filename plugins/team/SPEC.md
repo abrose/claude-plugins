@@ -333,7 +333,10 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    identify itself and find the team dir from any cwd: `--env` on a pane/tab
    this step creates, or a
    `herdr pane run <pane> "export TEAM_NAME=<name> TEAM_SCRATCH=<abs>"` into a
-   caller-provided `--pane`.
+   caller-provided `--pane`. When the caller has `CLAUDE_CONFIG_DIR` (a Claude
+   Code profile), stamp it the same way: a pane's shell takes its env from the
+   herdr server, so without it the worker runs in the default profile.
+   `team-resurrect` adds it to its export too.
 4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --model <model id> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
    `--name` gives `claude` the same resolved name Herdr knows it by, so
    `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
@@ -359,7 +362,7 @@ message above tells the human to answer the dialog there. Then verify the status
    (absolute, so `team-brief prepare` can tell a worktree agent from a
    main-repo one), `session` (the uuid passed as `--session-id`), and the
    launch flags `model`, `effort`, `mode` (for `/team:resurrect`). Write the
-   session index entry `${TEAM_INDEX_DIR:-~/.claude/team/sessions}/<session>.json`
+   session index entry `${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-~/.claude}/team/sessions}/<session>.json`
    = `{"scratch", "name"}`.
 7. Print one JSON line: `{"name","role","pane","session","model","mode"}`, where
    `session` is the first 8 chars of the assigned session id.
@@ -1059,7 +1062,7 @@ session instead of two herdr panes. The mod activates in the session that
 and WATCH lines as one prompt, and draws the `Team` pane (`/team-overview`
 toggles it). Agents are addressed by Claude session id, not herdr name:
 `team-start` assigns `--session-id`, a `SessionStart` hook follows `/clear`,
-the Stop hook finds its agent through `~/.claude/team/sessions/`, and briefs
+the Stop hook finds its agent through the session index, and briefs
 go out through the `brief_send` tool. `/team:resurrect` relaunches workers
 that a herdr restore brought back without their flags. `team-watch`,
 `team-overview`, `team-deliver` and `lib/overview.py` are gone. Requires

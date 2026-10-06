@@ -167,8 +167,10 @@ archives the previous run and loose scratchpad entries to `scratchpad/.archive/`
 `.team/restored/`, `.team/roster.md`.
 
 One file lives outside the run dir: the session index,
-`${TEAM_INDEX_DIR:-~/.claude/team/sessions}/<session>.json`
-(`{ "scratch", "name" }` per agent).
+`${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-~/.claude}/team/sessions}/<session>.json`
+(`{ "scratch", "name" }` per agent). It follows the Claude Code profile, and
+`team-start` passes the orchestrator's `CLAUDE_CONFIG_DIR` to every worker
+pane, so a team runs in one profile.
 
 ## Hook identity
 

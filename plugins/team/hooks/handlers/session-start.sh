@@ -9,7 +9,8 @@ import json, os, re
 
 p = json.loads(os.environ["PAYLOAD"])
 sid, source = p.get("session_id", ""), p.get("source", "")
-index = os.environ.get("TEAM_INDEX_DIR") or os.path.expanduser("~/.claude/team/sessions")
+index = os.environ.get("TEAM_INDEX_DIR") or os.path.join(
+    os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "team", "sessions")
 if not re.match(r"^[A-Za-z0-9-]{1,64}$", sid):
     raise SystemExit(0)
 

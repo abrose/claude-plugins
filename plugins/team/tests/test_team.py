@@ -58,6 +58,7 @@ class Base(unittest.TestCase):
         e["CLAUDE_PLUGIN_ROOT"] = ROOT
         e["TEAM_INDEX_DIR"] = os.path.join(self.proj, "_index")
         e["TEAM_SESSION_ID"] = "orch-sid"
+        e.pop("CLAUDE_CONFIG_DIR", None)
         e.update(extra)
         for k in [k for k, v in e.items() if v is None]:
             del e[k]
@@ -98,6 +99,17 @@ class Base(unittest.TestCase):
     def index_entry(self, session):
         return json.loads(read_text(os.path.join(self.proj, "_index", session + ".json")))
 
+    # A Claude Code profile: its own config dir, with a space to prove quoting.
+    # The session index follows it when TEAM_INDEX_DIR is not set.
+    def profile(self):
+        return os.path.join(self.proj, "my profile")
+
+    def profile_env(self):
+        return {"CLAUDE_CONFIG_DIR": self.profile(), "TEAM_INDEX_DIR": None}
+
+    def profile_index(self, *parts):
+        return os.path.join(self.profile(), "team", "sessions", *parts)
+
     def write_record(self, name, role, topic="", brief="", cwd=None, pane="w1:p2", session=None):
         d = self.sp(".team")
         os.makedirs(d, exist_ok=True)
@@ -131,6 +143,43 @@ class TeamStart(Base):
         entry = self.index_entry(sid)
         self.assertEqual(entry["name"], "scout")
         self.assertEqual(entry["scratch"], os.path.realpath(self.sp()))
+
+    def test_session_index_follows_the_claude_profile(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5", cwd=self.proj), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        sid = self.team_json("scout")["session"]
+        self.assertEqual(json.loads(read_text(self.profile_index(sid + ".json")))["name"], "scout")
+
+    def test_pane_gets_the_claude_profile(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export TEAM_NAME=scout TEAM_SCRATCH=%s CLAUDE_CONFIG_DIR=%s"
+                      % (self.abs_scratch(), self.profile().replace(" ", "\\ ")), self.herdr_calls())
+
+    def test_split_pane_gets_the_claude_profile(self):
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "down",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("pane split") and "--env CLAUDE_CONFIG_DIR=%s " % self.profile() in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_new_tab_gets_the_claude_profile(self):
+        p = self.run_script("team-start", "scout", "investigator", "--new-tab", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("tab create") and "--env CLAUDE_CONFIG_DIR=%s " % self.profile() in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_no_profile_passes_no_config_dir(self):
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "down",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any("CLAUDE_CONFIG_DIR" in c for c in self.herdr_calls()), self.herdr_calls())
 
     def bar_env(self, model, mode="auto", cwd=None):
         return {"FAKE_STATUS_MODEL": model, "FAKE_STATUS_MODE": mode,
@@ -979,6 +1028,17 @@ class StopHook(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
 
+    def test_finds_agent_in_the_index_of_the_claude_profile(self):
+        self.write_record("scout", "investigator", topic="digest", session="sid-1")
+        os.makedirs(self.profile_index())
+        write_text(self.profile_index("sid-1.json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": "scout"}))
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"session_id": "sid-1", "transcript_path": tr, "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None, **self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
+
     def test_index_entry_for_another_session_is_ignored(self):
         self.write_record("scout", "investigator", topic="digest")
         rec = self.team_json("scout"); rec["session"] = "sid-2"
@@ -1143,6 +1203,13 @@ class SessionStartHook(Base):
         self.assertEqual(self.index_entry("new-2")["name"], "scout")
         self.assertFalse(os.path.exists(os.path.join(self.proj, "_index", "old-1.json")))
 
+    def test_clear_writes_the_index_of_the_claude_profile(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          TEAM_NAME="scout", **self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(self.profile_index("new-2.json")))["name"], "scout")
+
     def test_clear_without_team_name_changes_nothing(self):
         self.setup_worker("old-1")
         p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
@@ -1228,6 +1295,13 @@ class TeamResurrect(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("pane run w1:p5 export TEAM_NAME=sc\\ out TEAM_SCRATCH=%s" % os.path.realpath(self.sp()),
                       self.herdr_calls())
+
+    def test_relaunched_pane_gets_the_claude_profile(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect", env_extra=self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p5 export TEAM_NAME=scout TEAM_SCRATCH=%s CLAUDE_CONFIG_DIR=%s"
+                      % (os.path.realpath(self.sp()), self.profile().replace(" ", "\\ ")), self.herdr_calls())
 
     def test_herdr_down_is_a_herdr_error(self):
         self.setup_team()
@@ -1630,6 +1704,14 @@ class TeamInit(Base):
         p = self.run_script("team-init", "APP-1")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(os.path.exists(os.path.join(idx, "gone.json")))
+
+    def test_prunes_the_index_of_the_claude_profile(self):
+        os.makedirs(self.profile_index())
+        write_text(self.profile_index("gone.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "nowhere"), "name": "x"}))
+        p = self.run_script("team-init", "APP-1", env_extra=self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.profile_index("gone.json")))
 
     def test_missing_orchestrator_pane_value_is_bad_args(self):
         p = self.run_script("team-init", "APP-1", "--orchestrator-pane")

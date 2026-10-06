@@ -19,7 +19,7 @@ when `all`):
    to catch orphan processes.
 4. Close its pane with `herdr pane close <pane>`. Closing the last pane closes
    the tab. Delete its session index entry:
-   `rm -f "${TEAM_INDEX_DIR:-$HOME/.claude/team/sessions}/<session>.json"`, with
+   `rm -f "${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}/<session>.json"`, with
    `<session>` from its record.
 5. When releasing `all`, also remove `.team/tabs.json`, `.team/watch-state.json`,
    `.team/layout-flags.json` and `.team/delivered.json`, all under
