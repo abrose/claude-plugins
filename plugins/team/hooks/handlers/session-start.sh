@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# SessionStart hook: a team worker keeps its identity across /clear, and a
-# worker restored without its team env is marked for /team:resurrect. Runs in
+# SessionStart hook: a team worker keeps its identity across /clear, a /compact
+# lifts its brief mark, and a worker restored without its team env is marked
+# for /team:resurrect. Runs in
 # every session, so it stays silent and cheap when it does not apply.
 set -uo pipefail
 
@@ -40,6 +41,15 @@ if source == "clear" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
             os.remove(os.path.join(index, old + ".json"))
         except OSError:
             pass
+elif source == "compact" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
+    # A /compact keeps the session id, so it lifts the brief mark itself:
+    # brief_send then accepts the compacted worker for its next brief.
+    scratch = os.path.realpath(os.environ.get("TEAM_SCRATCH", "scratchpad/current"))
+    recf = os.path.join(scratch, ".team", name + ".json")
+    rec = load(recf)
+    if rec and rec.get("session") == sid and "brief_sent_session" in rec:
+        del rec["brief_sent_session"]
+        save(recf, rec)
 elif source == "resume" and not name:
     entry = load(os.path.join(index, sid + ".json"))
     if entry and re.match(r"^[a-z][a-z0-9_-]{0,31}$", entry.get("name", "")):

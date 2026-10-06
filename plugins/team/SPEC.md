@@ -175,15 +175,17 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
     count in every status. A fourth round is the human's explicit exception.
     Behaviour-neutral tidy-ups do not count as rounds.
-11. Reset an agent's context before every reuse. Never brief a new task on top
-    of an old context: each reuse then stacks another layer, and the context
-    grows every round for no gain. `/clear` is the default - the brief and the
-    decisions file carry all the context a task needs. When the old context
-    holds knowledge the next task needs, `/compact` instead, so that knowledge
-    survives in condensed form. Confirm the reset landed (the agent reports a
-    cleared or compacted context) before you send the next brief. A `/clear`
-    gives the agent a new session id; the hooks follow it, and `brief_send`
-    refuses an agent that was not cleared since its last brief.
+11. Reset an agent's context before every new task. Never brief a new task on
+    top of an old context: each reuse then stacks another layer, and the
+    context grows every round for no gain. When the new task is unrelated to
+    the current one, `/clear` - the brief and the decisions file carry all the
+    context it needs. Every other new task (a follow-up, a fix round, the next
+    step of the same work) gets `/compact`, so what the agent learned survives
+    in condensed form. Confirm the reset landed (the agent reports a cleared or
+    compacted context) before you send the next brief. A `/clear` gives the
+    agent a new session id and the hooks follow it; a `/compact` keeps the id
+    and the hooks lift its brief mark. `brief_send` refuses an agent that was
+    neither cleared nor compacted since its last brief.
 12. When the human is away, the orchestrator writes every own call to
     `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
     The human's decisions stay in the numbered file.
@@ -488,7 +490,10 @@ enabled, so it must be silent and cheap when it does not apply:
 `session-start.sh` keeps a worker's identity current. On `source: clear` with
 `TEAM_NAME` set (a `/clear` starts a new session id in the same process), it
 writes the payload's `session_id` into the record's `session`, writes the new
-index entry and deletes the old one. On `source: resume` without `TEAM_NAME`
+index entry and deletes the old one. On `source: compact` with `TEAM_NAME` set
+and a record whose `session` is the payload's `session_id` (a `/compact` keeps
+the id), it drops the record's `brief_sent_session`, so `brief_send` accepts
+the next brief. On `source: resume` without `TEAM_NAME`
 (a herdr restore) and an index entry whose record names this session, it
 creates `.team/restored/<name>` for `/team:resurrect`. Anything else: exit 0,
 silently.
@@ -524,7 +529,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `team-brief prepare`, sends the printed kick-off with
   `$.session.send({ to: { sessionId } })`, writes `brief_sent_session`, and
   returns `<name>: <state>`. When the record's `brief_sent_session` equals its
-  `session`, it waits up to 6 s for a `/clear` to land, then refuses (a hook
+  `session`, it waits up to 6 s for a `/clear` or `/compact` to land (a new
+  `session`, or a dropped `brief_sent_session`), then refuses (a hook
   gets 10 s, and a clock wait counts against it). Auto mode reviews the send as
   a `SendMessage` with no user request behind it and its classifier gives no
   verdict, so `team-init` seeds `SendMessage` into `permissions.allow`

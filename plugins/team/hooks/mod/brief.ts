@@ -27,7 +27,11 @@ const fail = (result: string): BriefResult => ({ result, isError: true })
 const briefedInThisSession = (rec: TeamRecord) =>
   rec.session !== undefined && rec.brief_sent_session === rec.session
 
-/** The record once its session differs from the one last briefed, or after WAIT_MS. */
+/**
+ * The record once it is no longer briefed in its current session, or after
+ * WAIT_MS. A /clear moves `session` on; a /compact keeps it, and the
+ * SessionStart hook drops `brief_sent_session` instead.
+ */
 async function clearedRecord(io: Io, path: string): Promise<TeamRecord | null> {
   for (let waited = 0; ; waited += POLL_MS) {
     const rec = await readJson<TeamRecord>(io, path)
@@ -43,7 +47,7 @@ export async function briefSend(io: Io, name: string, topic: string): Promise<Br
   const rec = await clearedRecord(io, path)
   if (!rec) return fail(`no agent record: ${name}`)
   if (!rec.session) return fail(`${name} has no session id; start it again with team-start`)
-  if (briefedInThisSession(rec)) return fail(`${name} was not cleared since its last brief`)
+  if (briefedInThisSession(rec)) return fail(`${name} was not cleared or compacted since its last brief`)
 
   const prepared = await io.run([`${io.pluginRoot}/bin/team-brief`, 'prepare', name, '--topic', topic])
   if (prepared.exitCode !== 0) return fail(prepared.stderr.trim() || `team-brief prepare failed (${prepared.exitCode})`)

@@ -48,7 +48,7 @@ describe('brief_send', () => {
     w.writeJson(`${w.team}/app-1-scout.json`, { ...rec, brief_sent_session: 'sid-scout' })
     const pending = call($, { name: 'app-1-scout', topic: 'dig' })
     await w.clock.advance(6_500)
-    expect(await pending).toMatchObject({ isError: true, result: 'app-1-scout was not cleared since its last brief' })
+    expect(await pending).toMatchObject({ isError: true, result: 'app-1-scout was not cleared or compacted since its last brief' })
     expect(w.sends).toEqual([])
   })
 
@@ -64,5 +64,18 @@ describe('brief_send', () => {
     expect(r.isError).toBeUndefined()
     expect(w.sends[0]?.to).toBe('sid-new')
     expect(w.json(`${w.team}/app-1-scout.json`).brief_sent_session).toBe('sid-new')
+  })
+
+  test('sends to the same session once a /compact lifts the brief mark', async ($, on) => {
+    const w = await team($, on)
+    const rec = w.json(`${w.team}/app-1-scout.json`)
+    w.writeJson(`${w.team}/app-1-scout.json`, { ...rec, brief_sent_session: 'sid-scout' })
+    const pending = call($, { name: 'app-1-scout', topic: 'dig' })
+    await w.clock.advance(1000)
+    w.writeJson(`${w.team}/app-1-scout.json`, rec)
+    await w.clock.advance(1000)
+    const r = await pending
+    expect(r.isError).toBeUndefined()
+    expect(w.sends[0]?.to).toBe('sid-scout')
   })
 })

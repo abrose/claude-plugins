@@ -34,11 +34,11 @@ never here.
   team mod flags it gets an `agent read` of its pane. Silence is not success. A short idle
   is not silence: a worker that waits on its own subagents ends a turn each
   time one reports back.
-- Reset an agent before every reuse. Never brief a new task on an un-reset
+- Reset an agent before every new task. Never brief a new task on an un-reset
   context: each reuse stacks another layer and the context grows every round.
-  `/clear` by default (the brief and the decisions file carry the context), or
-  `/compact` when the old context holds knowledge the next task needs. A stale,
-  un-reset context poisons the next brief and wastes tokens.
+  `/clear` when the new task is unrelated to the current one (the brief and
+  the decisions file carry the context), `/compact` for every other new task.
+  A stale, un-reset context poisons the next brief and wastes tokens.
 - Do not `/clear` an agent until its deliverable file is confirmed on disk.
 - A worker writes its REPORT line as plain text and stops; the Stop hook saves
   the whole message to the report file, and the team mod delivers the REPORT

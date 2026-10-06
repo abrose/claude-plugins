@@ -56,15 +56,17 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
 10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
     count in every status. A fourth round is the human's explicit exception.
     Behaviour-neutral tidy-ups do not count as rounds.
-11. Reset an agent's context before every reuse. Never brief a new task on top
-    of an old context: each reuse then stacks another layer, and the context
-    grows every round for no gain. `/clear` is the default - the brief and the
-    decisions file carry all the context a task needs. When the old context
-    holds knowledge the next task needs, `/compact` instead, so that knowledge
-    survives in condensed form. Confirm the reset landed (the agent reports a
-    cleared or compacted context) before you send the next brief. A `/clear`
-    gives the agent a new session id; the hooks follow it, and `brief_send`
-    refuses an agent that was not cleared since its last brief.
+11. Reset an agent's context before every new task. Never brief a new task on
+    top of an old context: each reuse then stacks another layer, and the
+    context grows every round for no gain. When the new task is unrelated to
+    the current one, `/clear` - the brief and the decisions file carry all the
+    context it needs. Every other new task (a follow-up, a fix round, the next
+    step of the same work) gets `/compact`, so what the agent learned survives
+    in condensed form. Confirm the reset landed (the agent reports a cleared or
+    compacted context) before you send the next brief. A `/clear` gives the
+    agent a new session id and the hooks follow it; a `/compact` keeps the id
+    and the hooks lift its brief mark. `brief_send` refuses an agent that was
+    neither cleared nor compacted since its last brief.
 12. When the human is away, the orchestrator writes every own call to
     `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
     The human's decisions stay in the numbered file.

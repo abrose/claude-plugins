@@ -131,8 +131,9 @@ Auto mode reviews that send as a `SendMessage` with no user request behind it,
 so its classifier gives no verdict; `team-init` therefore adds `SendMessage` to
 `permissions.allow` in `.claude/settings.local.json`, which decides it without
 the classifier. Remove that entry if you want to approve each send yourself.
-When the agent got a brief in its current session and was not cleared since,
-it waits up to 6 s for a `/clear` to land, then refuses.
+When the agent got a brief in its current session and was neither cleared nor
+compacted since, it waits up to 6 s for a `/clear` or `/compact` to land, then
+refuses.
 
 ### Upgrading from 0.4.x
 

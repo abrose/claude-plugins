@@ -1217,6 +1217,34 @@ class SessionStartHook(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.team_json("scout")["session"], "old-1")
 
+    def setup_briefed_worker(self, session):
+        self.setup_worker(session)
+        rec = self.team_json("scout"); rec["brief_sent_session"] = session
+        write_text(self.sp(".team", "scout.json"), json.dumps(rec))
+
+    def test_compact_lifts_the_brief_mark(self):
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertNotIn("brief_sent_session", rec)
+        self.assertEqual(rec["session"], "s-1")
+
+    def test_compact_of_another_session_keeps_the_brief_mark(self):
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "other", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["brief_sent_session"], "s-1")
+
+    def test_compact_without_team_name_keeps_the_brief_mark(self):
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME=None, TEAM_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["brief_sent_session"], "s-1")
+
     def test_resume_without_team_env_marks_restored_worker(self):
         self.setup_worker("old-1")
         p = self.run_hook({"session_id": "old-1", "source": "resume", "cwd": self.proj},
