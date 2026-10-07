@@ -1,0 +1,9 @@
+{
+  "name": "chebu-ui",
+  "version": "0.1.0",
+  "description": "Personal Claude Code UI tweaks. Draws your own prompts in a bold style so they stand out in the transcript; /prompt-style switches styles.",
+  "author": {
+    "name": "Alfred Brose"
+  },
+  "types": "./types/index.d.ts"
+}
