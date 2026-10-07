@@ -40,9 +40,14 @@ enters the conversation.
 ### Prompt list
 
 `/prompts` opens a pane with every prompt you sent this session: number, send
-time and text, soft-wrapped, newest at the bottom. Run it again to close the
-pane. A `[ p: prompts ]` button above the input does the same: click it, or
-press `ctrl+x tab` and then `p`.
+time and text with its newlines, soft-wrapped, newest at the bottom. The pane
+scrolls, and each new prompt brings it back to the end. A frame copied from a
+terminal box (`│`) and trailing spaces are stripped. A prompt longer than five
+rows (a pasted block) is folded to four rows and a `── N more lines hidden ──`
+rule; press `▶` beside the time to unfold, and `▼` to fold again. Run
+`/prompts` again to close the pane; behind another plugin's pane tab, it comes
+to the front instead. A `[ p: prompts ]` button above the input does the same:
+click it, or press `ctrl+x tab` and then `p`.
 
 ### Turn separator
 

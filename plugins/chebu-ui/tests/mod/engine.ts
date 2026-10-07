@@ -7,6 +7,8 @@ const ENGINE_ROWS = ['UserMessage', 'AssistantMessage', 'ToolUse', 'ToolResult',
 export async function start($: any, on: any) {
   const clock = mock.clock(on, { now: 1_700_000_000_000 })
   const panes = new Set<string>()
+  // Open panes behind another plugin's tab; a fresh open seats a pane in front.
+  const hidden = new Set<string>()
 
   on('command.register', ($: any, e: any) => ({ value: { command: e.name } }))
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
@@ -15,13 +17,17 @@ export async function start($: any, on: any) {
   on('turn.complete', () => ({ text: '' }))
   on('ui.open', ($: any, e: any) => {
     panes.add(e.id)
-    return { value: { isOpen: true } }
+    hidden.delete(e.id)
+    return { value: { isPlaced: true } }
   })
   on('ui.close', ($: any, e: any) => {
     panes.delete(e.id)
+    hidden.delete(e.id)
     return { value: undefined }
   })
-  on('ui.panes', () => ({ value: [...panes].map(id => ({ id, title: id, isPlaced: true })) }))
+  on('ui.panes', () => ({
+    value: [...panes].map(id => ({ id, title: id, isShown: !hidden.has(id), isFocused: false, isPlaced: true })),
+  }))
   for (const component of ENGINE_ROWS) {
     on('ui.render', { component }, ($: any, e: any) => {
       const { Text } = $.ui.resolve(e)
@@ -31,7 +37,7 @@ export async function start($: any, on: any) {
 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
 
-  return { clock, panes }
+  return { clock, panes, hidden }
 }
 
 /** Sends an own prompt; a turnId means a turn was running, so the prompt waits in the queue. */

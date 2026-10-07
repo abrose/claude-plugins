@@ -19,6 +19,8 @@ declare module 'claude-code' {
       turnEnds: TurnEnd[]
       /** Reply blocks (trimmed) a tool call followed in the same turn: narration, drawn dim. */
       narration: string[]
+      /** Numbers of the long prompts the person unfolded in the prompt pane. */
+      unfolded: number[]
     }
   }
 }

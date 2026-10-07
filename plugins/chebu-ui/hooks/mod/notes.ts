@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import { isOwn } from './state'
+import { isOwn, PROMPT_PANE } from './state'
 
 /**
  * Every state write of the mod. Drawing may not write state, a mod holds one hook per event
@@ -23,6 +23,17 @@ async function deliver($: EngineInterface, has: (text: string) => boolean) {
   }
 }
 
+/** Brings a new prompt into view in an open prompt pane, even after the person scrolled up. */
+async function revealNewest($: EngineInterface) {
+  try {
+    if ((await $.ui.panes()).some(pane => pane.id === PROMPT_PANE)) {
+      await $.ui.scroll({ in: PROMPT_PANE, to: 'end' })
+    }
+  } catch {
+    // Scrolling is cosmetic: a host without it (the test kit) must not lose the prompt note.
+  }
+}
+
 export function registerNotes(on: On) {
   // Reply text of the running turn not yet followed by a tool call: the answer, unless a tool call comes.
   let pending: string[] = []
@@ -33,6 +44,7 @@ export function registerNotes(on: On) {
       // A turnId means a turn was running as the prompt was sent, so it waits behind that turn.
       const queued = e.turnId !== undefined
       await update($, sent, list => [...list, { text: e.text, at, queued }])
+      await revealNewest($)
     }
 
     return next(e)

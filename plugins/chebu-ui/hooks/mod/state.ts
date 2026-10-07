@@ -1,5 +1,8 @@
 import type { SentPrompt } from '../../types'
 
+/** The id of the pane that lists the session's prompts. */
+export const PROMPT_PANE = 'prompt-log'
+
 export const isOwn = (origin: { kind: string }) => origin.kind === 'composer' || origin.kind === 'bridge'
 
 /** The prompt's number and send time, or undefined for one sent before the mod loaded. */
