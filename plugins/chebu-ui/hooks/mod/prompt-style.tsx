@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { On } from 'claude-code'
 
 import type { PromptStyle } from '../../types'
-import { findSent, isOwn } from './state'
+import { findSent, isOwn, shownText } from './state'
 
 export const STYLES: PromptStyle[] = ['box', 'banner', 'gutter', 'label', 'double']
 
@@ -37,8 +37,8 @@ export function registerPromptStyle(on: On) {
     }
 
     const { Box, Text } = $.ui.resolve(e)
-    const text = e.props.text
-    const found = findSent(await read($, sent), text)
+    const found = findSent(await read($, sent), e.props.text)
+    const text = shownText(e.props.text)
     const tag = found === undefined ? '' : `#${found.n} `
 
     // A queued prompt has one look in every style, so the wait reads the same everywhere.

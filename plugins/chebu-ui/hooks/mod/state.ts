@@ -13,6 +13,14 @@ export function findSent(list: SentPrompt[], text: string) {
   return one === undefined ? undefined : { n: i + 1, at: one.at, queued: one.queued === true }
 }
 
+/**
+ * A prompt's text as it is drawn: without the `<pasted_content id="…">` tags the host wraps
+ * around a paste. The tags stay in the sent text, which is what a prompt is matched by.
+ */
+export function shownText(text: string) {
+  return text.replace(/[ \t]*<\/?pasted_content(?:\s+[\w-]+="[^"]*")*\s*>[ \t]*(?:\r?\n)?/g, '').trimEnd()
+}
+
 export function clockTime(ms: number) {
   const d = new Date(ms)
   const pad = (v: number) => String(v).padStart(2, '0')

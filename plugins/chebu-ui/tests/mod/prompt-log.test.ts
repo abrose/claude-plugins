@@ -101,6 +101,14 @@ describe('Prompt log', () => {
     expect(await ui.find({ key: 'fold:1' })).toBeUndefined()
   })
 
+  test('the pane hides the pasted_content tags around a paste', async ($, on) => {
+    await start($, on)
+    await submit($, 'see this:\n<pasted_content id="3dae">\nthe pasted block\n</pasted_content id="3dae">')
+    const ui = await mountPane($)
+
+    expect(await ui.find({ type: 'Text', text: 'see this:\nthe pasted block' })).toBeDefined()
+  })
+
   test('draws every prompt and leaves the window to the pane', async ($, on) => {
     await start($, on)
     for (let i = 1; i <= 40; i++) {

@@ -1,6 +1,6 @@
 {
   "name": "chebu-ui",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Personal Claude Code UI tweaks: bold numbered prompts, a /prompts pane, a separator after each turn, quiet tool rows, dim narration and framed answers.",
   "author": {
     "name": "Alfred Brose"

@@ -32,6 +32,17 @@ describe('Prompt style', () => {
     expect(await ui.find({ type: 'Box' })).toBeUndefined()
   })
 
+  test('hides the pasted_content tags around a paste, and still numbers the prompt', async ($, on) => {
+    await start($, on)
+    const pasted = 'see this:\n\n<pasted_content id="3dae">\nthe pasted block\n</pasted_content id="3dae">'
+    await submit($, pasted)
+    const ui = await mountMessage($, 'terminal', { kind: 'composer' }, pasted)
+
+    expect(await ui.find({ type: 'Text', text: /see this:\n\nthe pasted block$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /pasted_content/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /#1/ })).toBeDefined()
+  })
+
   test('numbers each prompt in the order sent', async ($, on) => {
     await start($, on)
     await submit($, 'first')

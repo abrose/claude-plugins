@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import { clockTime, PROMPT_PANE as PANE } from './state'
+import { clockTime, PROMPT_PANE as PANE, shownText } from './state'
 
 /** A prompt that wraps to more rows than this is folded: its first rows, then a count of the rest. */
 const MAX_ROWS = 5
@@ -66,7 +66,7 @@ function hiddenRule(hidden: number, width: number) {
  * `│` at each line's edges and the padding before it; both would wrap as rows of their own.
  */
 function paneText(text: string) {
-  return text
+  return shownText(text)
     .replace(/\r\n?/g, '\n')
     .replace(/^│ ?/gm, '')
     .replace(/[ \t]*│$/gm, '')
