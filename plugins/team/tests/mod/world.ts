@@ -23,6 +23,15 @@ export type World = {
   submitFails: boolean
   /** Runs after each fs.read answered, to stand for a writer in another process. */
   afterRead?: (path: string) => void
+  /** Directories made with mkdir, which have no file under them. */
+  dirs: Set<string>
+  /** Paths another process claims first: the next plain mkdir of one finds it already there. */
+  raceMkdir: Set<string>
+  statuses: (string | undefined)[]
+  toasts: string[]
+  /** session.send answers not delivered, with this reason. */
+  sendFails: string | null
+  titles: Map<string, string>
   runs: string[][]
   submits: string[]
   sends: { to: unknown; text: string }[]
@@ -53,6 +62,43 @@ export async function team($: any, on: On): Promise<World> {
   return w
 }
 
+export const call = ($: any, tool: string, args: object) =>
+  $.tool.call({ tool: `mcp__team__${tool}`, tool_use_id: 't1', ...args } as never)
+
+export const CARD = {
+  context: 'Fixtures load from a snapshot. The snapshot is 3 weeks old.',
+  question: 'Use real fixtures or the snapshot?',
+  options: [{ option: 'real fixtures', cost: '~1 h' }, { option: 'snapshot', cost: 'none' }],
+  recommendation: 'real fixtures: the snapshot hides the bug',
+  blocks: 'the whole task',
+  door: 'two-way',
+  rework: '~1 h: swap the fixture loader',
+  parked: false,
+}
+
+/** Writes card Q-<n> as the mod would, with CARD's fields unless overridden. */
+export function card(w: World, n: number, fields: object = {}) {
+  const { parked, ...rest } = CARD
+  w.writeJson(`${w.team}/questions/Q-${n}.json`, {
+    id: `Q-${n}`, n, from: 'app-1-scout', tag: 'general', ...rest,
+    urgent: false, refs: [], status: parked ? 'assumed' : 'open', at: w.clock.now(), ...fields,
+  })
+}
+
+/** A started envoy session: the config names it envoy_session; the orchestrator is another session. */
+export async function envoyTeam($: any, on: On): Promise<World> {
+  const w = world(on)
+  await start($)
+  w.writeJson(`${w.team}/config.json`, {
+    team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch',
+    orchestrator_session: 'sid-orch-worker', envoy_session: w.id,
+  })
+  w.writeJson(`${w.team}/app-1-scout.json`, {
+    role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout',
+  })
+  return w
+}
+
 /** The agent rows the pane draws, read through the drawing. */
 export async function agentRows($: any): Promise<string[]> {
   const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
@@ -73,6 +119,12 @@ export function world(on: On): World {
     panes: [],
     herdrFails: null,
     submitFails: false,
+    dirs: new Set(),
+    raceMkdir: new Set(),
+    statuses: [],
+    toasts: [],
+    sendFails: null,
+    titles: new Map(),
     runs: [],
     submits: [],
     sends: [],
@@ -115,7 +167,7 @@ export function world(on: On): World {
   on('fs.list', ($, e) => {
     const prefix = e.path.endsWith('/') ? e.path : `${e.path}/`
     const names = new Set<string>()
-    for (const p of w.files.keys()) {
+    for (const p of [...w.files.keys(), ...w.dirs]) {
       if (p.startsWith(prefix)) names.add(p.slice(prefix.length).split('/')[0] ?? '')
     }
     return {
@@ -135,6 +187,17 @@ export function world(on: On): World {
     })
     const bin = argv[0] ?? ''
     if (bin === 'tail') return out(w.files.get(argv[argv.length - 1] ?? '')?.text ?? '')
+    if (bin === 'mkdir') {
+      const p = argv[argv.length - 1] ?? ''
+      if (argv[1] === '-p') {
+        w.dirs.add(p)
+        return out('')
+      }
+      if (w.raceMkdir.has(p)) w.dirs.add(p)
+      if (w.dirs.has(p)) return out('', 1, `mkdir: ${p}: File exists`)
+      w.dirs.add(p)
+      return out('')
+    }
     if (bin.endsWith('/bin/team-brief')) {
       return out(`Read scratchpad/current/brief-${argv[2]}-${argv[4]}.md and execute it fully.\n`)
     }
@@ -160,11 +223,21 @@ export function world(on: On): World {
     return { text: e.text }
   })
   on('session.send', ($, e) => {
+    if (w.sendFails) return { isDelivered: false, reason: w.sendFails }
     w.sends.push({ to: e.to, text: e.text })
     return { isDelivered: true }
   })
+  on('ui.status', ($, e) => {
+    w.statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.open', ($, e) => {
     w.opened.push(e.id)
+    w.titles.set(e.id, e.title ?? 'Team')
     return { value: { isPlaced: true } }
   })
   on('ui.close', ($, e) => {
@@ -174,7 +247,7 @@ export function world(on: On): World {
   on('ui.panes', () => ({
     value: [...new Set(w.opened)]
       .filter(id => w.opened.lastIndexOf(id) > w.closed.lastIndexOf(id))
-      .map(id => ({ id, title: 'Team', isShown: true, isFocused: false, isPlaced: true })),
+      .map(id => ({ id, title: w.titles.get(id) ?? 'Team', isShown: true, isFocused: false, isPlaced: true })),
   }))
   return w
 }

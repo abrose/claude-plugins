@@ -1,5 +1,7 @@
 export type RunResult = { exitCode: number; stdout: string; stderr: string }
 
+export type ToolResult = { result: string; isError?: true }
+
 /** Everything the mod's logic needs from the engine, built over `$` in team.tsx. */
 export type Io = {
   sessionId: () => Promise<string>
@@ -11,6 +13,7 @@ export type Io = {
   mtime: (path: string) => Promise<number | null>
   run: (argv: string[], timeoutMs?: number) => Promise<RunResult>
   sleep: (ms: number) => Promise<void>
+  now: () => Promise<number>
   sendTo: (sessionId: string, text: string) => Promise<{ isDelivered: boolean; reason?: string }>
   pluginRoot: string
 }

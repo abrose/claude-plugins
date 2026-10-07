@@ -1,7 +1,7 @@
 import { activeConfig } from './activation'
 import { bySession, herdrAgents } from './herdr'
 import { readJson, writeJson } from './io'
-import type { Io } from './io'
+import type { Io, ToolResult } from './io'
 import { teamDir } from './paths'
 import type { TeamRecord } from './tick'
 
@@ -21,8 +21,7 @@ export const BRIEF_TOOL_SPEC = {
 const WAIT_MS = 6000
 const POLL_MS = 500
 
-export type BriefResult = { result: string; isError?: true }
-const fail = (result: string): BriefResult => ({ result, isError: true })
+const fail = (result: string): ToolResult => ({ result, isError: true })
 
 const briefedInThisSession = (rec: TeamRecord) =>
   rec.session !== undefined && rec.brief_sent_session === rec.session
@@ -40,7 +39,7 @@ async function clearedRecord(io: Io, path: string): Promise<TeamRecord | null> {
   }
 }
 
-export async function briefSend(io: Io, name: string, topic: string): Promise<BriefResult> {
+export async function briefSend(io: Io, name: string, topic: string): Promise<ToolResult> {
   if (!(await activeConfig(io))) return fail('brief_send works only in the session that runs the team (/team:init)')
   if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) return fail(`bad name: ${name}`)
   const path = `${await teamDir(io)}/${name}.json`

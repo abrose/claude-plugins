@@ -8,6 +8,7 @@ import { herdrAgents, herdrFocus } from './herdr'
 import { drawPane, hiddenKey, PANE } from './pane'
 import { runDir, setCwd, teamDir } from './paths'
 import { parsePlan } from './plan'
+import { ASK_TOOL_SPEC, askTool } from './questions'
 import { agentRows, newReportLines, readRecords, watchTick } from './tick'
 
 export const TICK_MS = 15000
@@ -57,6 +58,7 @@ function makeIo($: EngineInterface): Io {
       }
     },
     sleep: ms => $.clock.sleep(ms),
+    now: () => $.clock.now(),
     sendTo: async (sessionId, text) => {
       const sent = await $.session.send({ to: { sessionId }, text })
       return sent.isDelivered ? { isDelivered: true } : { isDelivered: false, reason: sent.reason }
@@ -111,6 +113,7 @@ export const register: Register = on => {
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     await $.command.register({ name: 'team-overview', description: 'Show or hide the team overview pane' })
     await $.tool.register(BRIEF_TOOL_SPEC)
+    await $.tool.register(ASK_TOOL_SPEC)
     tickTimer?.cancel()
     tickTimer = $.clock.every(TICK_MS, () => tick($, io))
     return next(e)
@@ -123,6 +126,8 @@ export const register: Register = on => {
 
   on('tool.call', { tool: `mcp__team__${BRIEF_TOOL}` }, async ($, e) =>
     briefSend(makeIo($), String(e.name ?? ''), String(e.topic ?? '')))
+
+  on('tool.call', { tool: 'mcp__team__ask' }, async ($, e) => askTool(makeIo($), e))
 
   on('command.run', { command: 'team-overview' }, async $ => {
     const cfg = await activeConfig(makeIo($))
