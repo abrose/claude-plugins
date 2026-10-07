@@ -7,7 +7,7 @@ A Claude Code plugin that ships **one output style**. The style combines two ide
 - **ADHD-friendly shape:** lead with the action, number the steps, restate state, make wins
   visible, cut preamble and closers.
 
-It keeps the `★ Insight` teaching blocks. Code, commands, and quoted text are exempt.
+It keeps the teaching depth: the "why" behind each change. Code, commands, and quoted text are exempt.
 
 ## How it works
 

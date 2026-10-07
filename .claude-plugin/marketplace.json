@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "adhd-friendly-simple-technical-english",
-      "description": "Ships one output style combining Simplified Technical English (short, direct sentences) with an ADHD-friendly, action-first shape, and keeps the teaching insight blocks. Select it from /config.",
+      "description": "Ships one output style combining Simplified Technical English (short, direct sentences) with an ADHD-friendly, action-first shape, and keeps the teaching depth. Select it from /config.",
       "source": "./plugins/adhd-friendly-simple-technical-english",
       "category": "productivity"
     },
