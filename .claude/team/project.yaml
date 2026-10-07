@@ -1,2 +1,2 @@
-worktree_cmd: "git worktree add -b {branch} ../claude-plugins-worktrees/{branch} {parent}"
-worktree_dir: "../claude-plugins-worktrees/{branch}"
+worktree_cmd: "git worktree add -b {branch} .worktrees/{branch} {parent}"
+worktree_dir: ".worktrees/{branch}"

@@ -11,3 +11,6 @@ plugins/*/tsconfig.json
 # Python bytecode cache from running the quota-statusline tests.
 __pycache__/
 *.pyc
+
+# Team worktrees made by team-slice (see .claude/team/project.yaml).
+.worktrees/
