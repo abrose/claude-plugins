@@ -211,9 +211,11 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
-    role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
-    before every `brief_send`, and whenever you ask the human to act (a
-    `- [ ] you: <action>` item, moved to DONE when the human confirms).
+    role in parentheses, `fix round 2 (impl)`. The mark alone sets where the
+    pane shows an item: flip the mark in place, never move lines between the
+    DONE, RUNNING and NEXT headings. Update it after every REPORT, before
+    every `brief_send`, and whenever you ask the human to act (a
+    `- [ ] you: <action>` item, marked `[x]` when the human confirms).
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `team-slice`, which uses the repo's own
@@ -519,8 +521,10 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `.team/delivered.json`; a missing file is a baseline), and sends every
   REPORT line, then every WATCH line, as one `$.prompt.submit`. herdr down ->
   one `WATCH herdr unreachable: <reason>` until it is back.
-- Pane `team-overview`, title `Team`: plan (DONE, RUNNING, NEXT as glyph rows;
-  DONE gives up its oldest items when short), agents, last error, tick time.
+- Pane `team-overview`, title `Team`: plan (DONE, RUNNING, NEXT as glyph rows,
+  bucketed by mark, not by heading, in file order; items count only under
+  those three headings; DONE gives up its oldest items when short), agents,
+  last error, tick time.
   Opened on activation unless hidden; `/team-overview` toggles it and keeps the
   choice in `$.store` under `overviewHidden:<team_id>`; a close by the person
   counts as hiding. Each agent row is a Button: a click, or its hotkey `1`-`9`

@@ -1,20 +1,24 @@
 import type { TeamPlan, TeamPlanItem } from '../../types'
 
 const ITEM = /^\s*[-*]\s+\[([xX> ])\]\s*(.*?)\s*$/
-const SECTIONS = { DONE: 'done', RUNNING: 'running', NEXT: 'next' } as const
+const SECTIONS = new Set(['DONE', 'RUNNING', 'NEXT'])
+const BUCKET = { x: 'done', '>': 'running', ' ': 'next' } as const
 
+/** Buckets items by their mark, not their heading: the orchestrator flips a
+ *  mark in place and does not always move the line to the matching section. */
 export function parsePlan(text: string): TeamPlan {
   const plan: TeamPlan = { title: '', done: [], running: [], next: [] }
-  let section: TeamPlanItem[] | null = null
+  let inPlan = false
   for (const line of text.split('\n')) {
     if (line.startsWith('# ') && !plan.title) {
       plan.title = line.slice(2).trim()
     } else if (line.startsWith('## ')) {
-      const key = SECTIONS[line.slice(3).trim().toUpperCase() as keyof typeof SECTIONS]
-      section = key ? plan[key] : null
+      inPlan = SECTIONS.has(line.slice(3).trim().toUpperCase())
     } else {
       const m = ITEM.exec(line)
-      if (m && section) section.push({ mark: (m[1] ?? ' ').toLowerCase() as TeamPlanItem['mark'], text: m[2] ?? '' })
+      if (!m || !inPlan) continue
+      const mark = (m[1] ?? ' ').toLowerCase() as TeamPlanItem['mark']
+      plan[BUCKET[mark]].push({ mark, text: m[2] ?? '' })
     }
   }
   return plan

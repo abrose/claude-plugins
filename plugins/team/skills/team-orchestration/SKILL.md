@@ -92,9 +92,11 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
-    role in parentheses, `fix round 2 (impl)`. Update it after every REPORT,
-    before every `brief_send`, and whenever you ask the human to act (a
-    `- [ ] you: <action>` item, moved to DONE when the human confirms).
+    role in parentheses, `fix round 2 (impl)`. The mark alone sets where the
+    pane shows an item: flip the mark in place, never move lines between the
+    DONE, RUNNING and NEXT headings. Update it after every REPORT, before
+    every `brief_send`, and whenever you ask the human to act (a
+    `- [ ] you: <action>` item, marked `[x]` when the human confirms).
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `team-slice`, which uses the repo's own

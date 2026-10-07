@@ -30,6 +30,13 @@ describe('parsePlan', () => {
   test('matches headings in any case and an upper-case X', () => {
     expect(parsePlan('## done\n- [X] a\n').done).toEqual([{ mark: 'x', text: 'a' }])
   })
+
+  test('sorts items by mark, not by heading, in file order', () => {
+    const plan = parsePlan('# T\n\n## DONE\n- [x] a\n\n## RUNNING\n- [x] b\n- [ ] you: c\n\n## NEXT\n- [x] d\n- [>] e\n')
+    expect(plan.done.map((i) => i.text)).toEqual(['a', 'b', 'd'])
+    expect(plan.running.map((i) => i.text)).toEqual(['e'])
+    expect(plan.next.map((i) => i.text)).toEqual(['you: c'])
+  })
 })
 
 describe('fitPlan', () => {
