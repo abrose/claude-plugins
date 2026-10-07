@@ -1,21 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-/** Stands in for the engine beneath the plugin, then starts the session. */
-async function start($: any, on: any) {
-  on('command.register', ($: any, e: any) => ({ value: { command: e.name } }))
-  on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
-  on('ui.render', { component: 'UserMessage' }, ($: any, e: any) => {
-    const { Text } = $.ui.resolve(e)
-    return h(Text, { key: 'engine-row' }, e.props.text)
-  })
-  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
-}
+import { mount, start, submit } from './engine'
 
-const mountMessage = ($: any, surface: 'terminal' | 'desktop', origin: { kind: string }) =>
-  $.ui.mount({
-    plugin: 'chebu-ui', surface, component: 'UserMessage',
-    props: { text: 'find me later', origin, isExpanded: true },
-  } as never)
+const mountMessage = ($: any, surface: 'terminal' | 'desktop', origin: { kind: string }, text = 'find me later') =>
+  mount($, 'UserMessage', { text, origin, isExpanded: true }, surface)
 
 const runStyle = ($: any, args: string) => $.command.run({ command: 'prompt-style', args } as never)
 
@@ -25,8 +13,7 @@ describe('Prompt style', () => {
       await start($, on)
       const ui = await mountMessage($, surface, { kind: 'composer' })
 
-      const frame = await ui.find({ type: 'Box' })
-      expect(frame?.props).toMatchObject({ borderStyle: 'double', borderColor: 'green' })
+      expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double', borderColor: 'green' })
       expect(await ui.find({ type: 'Text', text: /find me later/ })).toBeDefined()
     })
   }
@@ -35,7 +22,7 @@ describe('Prompt style', () => {
     await start($, on)
     const ui = await mountMessage($, 'terminal', { kind: 'bridge' })
 
-    expect((await ui.find({ type: 'Box' }))?.props).toMatchObject({ borderStyle: 'double' })
+    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double' })
   })
 
   test('leaves messages from tasks and other agents alone', async ($, on) => {
@@ -45,12 +32,35 @@ describe('Prompt style', () => {
     expect(await ui.find({ type: 'Box' })).toBeUndefined()
   })
 
+  test('numbers each prompt in the order sent', async ($, on) => {
+    await start($, on)
+    await submit($, 'first')
+    await submit($, 'find me later')
+    const ui = await mountMessage($, 'terminal', { kind: 'composer' })
+
+    expect(await ui.find({ type: 'Text', text: /#2/ })).toBeDefined()
+  })
+
+  test('draws a queued prompt in a dashed yellow frame until its turn starts', async ($, on) => {
+    await start($, on)
+    await submit($, 'find me later', 'turn-0')
+
+    const waiting = await mountMessage($, 'terminal', { kind: 'composer' })
+    expect((await waiting.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'dashed', borderColor: 'yellow' })
+    expect(await waiting.find({ type: 'Text', text: /queued/ })).toBeDefined()
+    await waiting.unmount()
+
+    await $.turn.start({ text: 'find me later' } as never)
+    const delivered = await mountMessage($, 'terminal', { kind: 'composer' })
+    expect((await delivered.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double' })
+  })
+
   test('/prompt-style <name> switches the style', async ($, on) => {
     await start($, on)
     expect(await runStyle($, 'box')).toMatchObject({ text: 'Prompt style: box' })
 
     const ui = await mountMessage($, 'terminal', { kind: 'composer' })
-    expect((await ui.find({ type: 'Box' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'magenta' })
+    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'magenta' })
   })
 
   test('/prompt-style with no argument cycles to the next style', async ($, on) => {
@@ -65,6 +75,6 @@ describe('Prompt style', () => {
     expect(await runStyle($, 'neon')).toMatchObject({ text: expect.stringContaining('Unknown style "neon"') })
 
     const ui = await mountMessage($, 'terminal', { kind: 'composer' })
-    expect((await ui.find({ type: 'Box' }))?.props).toMatchObject({ borderStyle: 'double' })
+    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double' })
   })
 })

@@ -14,7 +14,7 @@
     },
     {
       "name": "chebu-ui",
-      "description": "Personal Claude Code UI tweaks as a mod. Draws your own prompts in a bold style so they stand out in the transcript; /prompt-style switches between five styles.",
+      "description": "Personal Claude Code UI tweaks as a mod: bold numbered prompts, a /prompts pane, a separator after each turn, quiet tool rows, dim narration and framed answers.",
       "source": "./plugins/chebu-ui",
       "category": "productivity"
     },

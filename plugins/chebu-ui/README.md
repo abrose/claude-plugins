@@ -33,6 +33,36 @@ were.
 
 The choice lasts for the session; new sessions start with `double`.
 
+Each prompt also carries its number (`#3`) in this session. A prompt sent while
+a turn runs shows in a dashed yellow frame with a `⏳ queued` tag until it
+enters the conversation.
+
+### Prompt list
+
+`/prompts` opens a pane with every prompt you sent this session: number, send
+time and text, soft-wrapped, newest at the bottom. Run it again to close the
+pane. A `[ p: prompts ]` button above the input does the same: click it, or
+press `ctrl+x tab` and then `p`.
+
+### Turn separator
+
+Replaces the engine's `Worked for 3s` line with a gray rule after each turn,
+with the time the turn ended: `── 10:26 · Worked for 3s ─────────`.
+
+### Quiet tools
+
+Draws each tool call as one dim line (`· Bash ls -la`). Bash output shows its
+first three lines and counts the rest (`ctrl+o` shows all). Edits, writes,
+questions, subagents and plan exits keep the engine's full row, and so does a
+call that failed or was interrupted.
+
+### Reply style
+
+The answer shows as markdown in a round blue frame. Text that a tool call
+followed in the same turn (narration such as "Let me read the file") shows dim
+and italic instead, so the answer stands out. Replies from before the plugin
+loaded show framed.
+
 ## Development
 
 ```
