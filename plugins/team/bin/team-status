@@ -41,16 +41,19 @@ try:
     cfg = json.load(open(os.path.join(teamdir, "config.json")))
 except (OSError, ValueError):
     pass
-if cfg and not cfg.get("orchestrator_session"):
+if cfg and not cfg.get("orchestrator_session") and not cfg.get("envoy_session"):
     print("warning: this team was started before team 0.5.0: the team mod does not "
           "deliver its REPORT lines. Finish it by reading reports/ by hand, or start "
           "a new run with /team:init.", file=sys.stderr)
 by_session = {a.get("agent_session", {}).get("value"): a for a in agents}
+# The envoy session talks to the human and is never a roster member: /team:release walks
+# this roster and closes each pane on it.
+envoy = cfg.get("envoy_session")
 members = []
-if cfg.get("orchestrator_session") in by_session:
+if cfg.get("orchestrator_session") in by_session and cfg.get("orchestrator_session") != envoy:
     members.append((cfg.get("orchestrator", "orchestrator"), by_session[cfg["orchestrator_session"]]))
 for rname, rec in sorted(recs.items()):
-    if rec.get("session") in by_session:
+    if rec.get("session") in by_session and rec["session"] != envoy:
         members.append((rname, by_session[rec["session"]]))
 
 out, text = [], []

@@ -93,7 +93,9 @@ case "$group $sub" in
       emit '{"result":{"agent":{"name":"a","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef1234567890"}}}}'
     fi ;;
   "agent read")
-    if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
+    if [ -n "${FAKE_AGENT_READ_FAILS:-}" ]; then
+      fail '{"error":{"code":"agent_not_found","message":"agent read failed"}}'
+    elif [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
       emit 'Quick safety check: Is this a project you created or one you trust?
  ❯ No, exit
    Yes, I trust this folder'
@@ -101,7 +103,13 @@ case "$group $sub" in
       emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
     fi ;;
   "pane get")
-    emit "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\",\"cwd\":\"${FAKE_PANE_CWD:-/tmp}\"}}}" ;;
+    if [ -n "${FAKE_PANE_GET_FAILS:-}" ]; then
+      fail '{"error":{"code":"pane_not_found","message":"pane lookup failed"}}'
+    fi
+    # The pane team-start makes (w1:p9) sits in the tab team-start makes (w1:t9).
+    tab="w1:t1"
+    [ "${3:-}" != "w1:p9" ] || tab="w1:t9"
+    emit "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"tab_id\":\"$tab\",\"cwd\":\"${FAKE_PANE_CWD:-/tmp}\"}}}" ;;
   "agent wait")
     if [ -n "${FAKE_AGENT_WAIT_FAILS:-}" ]; then
       fail '{"error":{"code":"timeout"}}'
@@ -134,6 +142,21 @@ case "$group $sub" in
         emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
       list_fails)
         fail '{"error":{"code":"server_unavailable"}}' ;;
+      orch_stuck)
+        # app-1-orch is live in w1:p9 from the first agent start until a call closes that pane.
+        if ! grep -q '^agent start ' "$log" 2>/dev/null || grep -qx 'pane close w1:p9' "$log" 2>/dev/null; then
+          emit '{"result":{"agents":[]}}'
+        else
+          emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef12"}}]}}'
+        fi ;;
+      orch_taken_late)
+        # The first agent list is unreadable (a caller treats that as no live agents);
+        # every later one shows app-1-orch live in a pane the caller never made.
+        if [ "$same_before" -eq 0 ]; then
+          emit 'not json'
+        else
+          emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}}]}}'
+        fi ;;
       resurrect_cleared)
         emit '{"result":{"agents":[
           {"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-cleared"}}

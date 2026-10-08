@@ -1,5 +1,20 @@
 import { describe, expect, test } from 'claude-code/testing'
+import { closeHides } from '../../hooks/mod/pane'
 import { agentRows, card, CWD, start, team, world } from './world'
+
+describe('closeHides', () => {
+  test('a close by the person hides the overview', () => {
+    expect(closeHides({ kind: 'person' })).toBe(true)
+  })
+
+  test('a close by a plugin does not', () => {
+    expect(closeHides({ kind: 'plugin' })).toBe(false)
+  })
+
+  test('a close on unload does not', () => {
+    expect(closeHides({ kind: 'unload' })).toBe(false)
+  })
+})
 
 async function activeTeam($: any, on: any) {
   const w = world(on)
@@ -15,30 +30,68 @@ async function activeTeam($: any, on: any) {
 describe('Team pane', () => {
   test('opens on activation', async ($, on) => {
     const w = await activeTeam($, on)
-    expect(w.opened).toEqual(['team-overview'])
+    expect(w.opened).toEqual(['team', 'questions'])
   })
 
   test('does not open again on later ticks', async ($, on) => {
     const w = await activeTeam($, on)
     await w.clock.advance(15000)
-    expect(w.opened).toEqual(['team-overview'])
+    expect(w.opened).toEqual(['team', 'questions'])
   })
 
   test('draws plan items as glyph rows, not markdown', async ($, on) => {
     await activeTeam($, on)
     const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                  requestId: 'team-overview', props: { bodyColumns: 60 } } as never)
+                                  requestId: 'team', props: { bodyColumns: 60 } } as never)
     expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /▶ 3\. Build/ })).toBeDefined()
   })
 
-  test('/team-overview hides and shows, and the choice is stored', async ($, on) => {
+  test('/team-overview hides and shows both tabs, and the choice is stored', async ($, on) => {
     const w = await activeTeam($, on)
     expect(await $.command.run({ command: 'team-overview' } as never)).toMatchObject({ text: 'Team overview hidden.' })
-    expect(w.closed).toEqual(['team-overview'])
+    expect([...w.closed].sort()).toEqual(['questions', 'team'])
     expect(w.store.get('overviewHidden:app-1')).toBe(true)
     expect(await $.command.run({ command: 'team-overview' } as never)).toMatchObject({ text: 'Team overview shown.' })
+    expect(w.opened).toEqual(['team', 'questions', 'team', 'questions'])
     expect(w.store.get('overviewHidden:app-1')).toBe(false)
+  })
+
+  test('each tab opens under its own title', async ($, on) => {
+    const w = await activeTeam($, on)
+    expect(w.titles.get('team')).toBe('Team')
+    expect(w.titles.get('questions')).toBe('Questions')
+  })
+
+  test('the question log lists every card, newest first, with how it closed', async ($, on) => {
+    const w = await activeTeam($, on)
+    card(w, 1, { status: 'answered', decision: 3, door: 'one-way', from: 'app-1-scout', tag: 'fixtures' })
+    card(w, 2, { from: 'app-1-tester', tag: 'auth' })
+    await w.clock.advance(15000)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'questions', props: { bodyColumns: 100 } } as never)
+    const rows = (await ui.findAll({ type: 'Text', text: /^Q-\d/ })).map((t: any) => t.text.replace(/\s+/g, ' '))
+    expect(rows[0]).toMatch(/^Q-2 open two-way app-1-tester\/auth: /)
+    expect(rows[1]).toMatch(/^Q-1 answered #3 one-way app-1-scout\/fixtures: /)
+  })
+
+  test('an empty question log says so', async ($, on) => {
+    await activeTeam($, on)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'questions', props: { bodyColumns: 100 } } as never)
+    expect(await ui.find({ type: 'Text', text: /no questions yet/ })).toBeDefined()
+  })
+
+  test('the question log shows obsolete and assumed cards too', async ($, on) => {
+    const w = await activeTeam($, on)
+    card(w, 1, { status: 'obsolete', reason: 'superseded' })
+    card(w, 2, { status: 'assumed' })
+    await w.clock.advance(15000)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'questions', props: { bodyColumns: 100 } } as never)
+    const rows = (await ui.findAll({ type: 'Text', text: /^Q-\d/ })).map((t: any) => t.text.replace(/\s+/g, ' '))
+    expect(rows[0]).toMatch(/^Q-2 assumed two-way /)
+    expect(rows[1]).toMatch(/^Q-1 obsolete two-way /)
   })
 
   test('pressing an agent row focuses its herdr pane', async ($, on) => {
@@ -56,7 +109,7 @@ describe('Team pane', () => {
     const w = await team($, on)
     await w.clock.advance(15000)
     const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+                                  requestId: 'team', props: { bodyColumns: 80 } } as never)
     w.herdrFails = 'no agent w1:p2'
 
     await $.ui.press({ plugin: 'team', key: 'app-1-scout' })
@@ -72,7 +125,7 @@ describe('Team pane', () => {
     await w.clock.advance(15000)
 
     const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+                                  requestId: 'team', props: { bodyColumns: 80 } } as never)
     const buttons = await ui.findAll({ type: 'Button', text: /app-1-/ })
 
     expect(buttons.map((b: any) => b.props.hotkey)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', undefined])
@@ -86,7 +139,7 @@ describe('Team pane', () => {
     card(w, 4, { tag: 'auth', status: 'answered', decision: 1 })
     await w.clock.advance(15000)
     const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+                                  requestId: 'team', props: { bodyColumns: 80 } } as never)
     const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text)
     const at = (re: RegExp) => texts.findIndex((t: string) => re.test(t))
     expect(at(/^Questions \(2 open, 1 assumed\)$/)).toBeGreaterThan(-1)
@@ -99,7 +152,7 @@ describe('Team pane', () => {
     card(w, 1, { status: 'answered', decision: 1 })
     await w.clock.advance(15000)
     const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+                                  requestId: 'team', props: { bodyColumns: 80 } } as never)
     expect(await ui.find({ type: 'Text', text: /Questions: none open/ })).toBeDefined()
   })
 

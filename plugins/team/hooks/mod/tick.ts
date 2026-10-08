@@ -22,7 +22,7 @@ export type TeamRecord = {
   brief_sent_session?: string
 }
 
-const NON_RECORD = new Set(['config.json', 'watch-state.json', 'tabs.json', 'layout-flags.json', 'delivered.json'])
+const NON_RECORD = new Set(['config.json', 'watch-state.json', 'tabs.json', 'layout-flags.json', 'delivered.json', 'toasted.json'])
 
 export async function readRecords(io: Io, teamdir: string): Promise<Record<string, TeamRecord>> {
   const out: Record<string, TeamRecord> = {}
@@ -37,6 +37,7 @@ export async function readRecords(io: Io, teamdir: string): Promise<Record<strin
 export async function reportFiles(io: Io, run: string, records: Record<string, TeamRecord>): Promise<ReportFile[]> {
   const files: ReportFile[] = []
   for (const [name, rec] of Object.entries(records)) {
+    if (rec.role === 'orchestrator') continue
     const path = `${run}/reports/${name}-${rec.topic}.md`
     const at = await io.mtime(path)
     const text = at === null ? null : await io.readText(path)
@@ -85,7 +86,7 @@ const NO_REPORT_AFTER = 120
  */
 export async function watchTick(
   io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
-  listed: HerdrListing, now: number, myId: string, orchestratorTab?: string,
+  listed: HerdrListing, now: number, myId: string, exemptTabs: string[],
 ): Promise<string[]> {
   const memPath = `${teamdir}/watch-state.json`
   const mem = (await readJson<WatchMemory>(io, memPath)) ?? { agents: {}, _flagged: {}, _idle_since: {} }
@@ -97,6 +98,7 @@ export async function watchTick(
   const sessions = bySession(listed.agents)
   const facts: AgentFacts[] = []
   for (const [name, rec] of Object.entries(records)) {
+    if (rec.role === 'orchestrator') continue
     const agent = rec.session ? sessions.get(rec.session) : undefined
     if (agent) facts.push(await gatherFacts(io, run, name, rec, agent.agent_status, now, NO_REPORT_AFTER))
   }
@@ -118,7 +120,7 @@ export async function watchTick(
     const layout = layoutActions({
       panes,
       teamTabs: (await readJson<string[]>(io, `${teamdir}/tabs.json`)) ?? [],
-      orchTabs: [listed.agents.find(a => a.agent_session?.value === myId)?.tab_id, orchestratorTab]
+      orchTabs: [listed.agents.find(a => a.agent_session?.value === myId)?.tab_id, ...exemptTabs]
         .filter((t): t is string => !!t),
       namedPanes: new Set(Object.values(records).map(r => r.pane)),
       pending: new Set(panes.map(p => p.pane_id).filter(id => marked.has(pendingFile(id)))),
@@ -132,21 +134,27 @@ export async function watchTick(
   return out
 }
 
-/** One row per record; a pane id herdr moved is written back to the record. */
-export async function agentRows(
+/** A pane id herdr moved is written back to the record, and into `records` for the rest of the tick. */
+export async function syncPanes(
   io: Io, teamdir: string, records: Record<string, TeamRecord>, listed: HerdrListing,
-): Promise<TeamAgentRow[]> {
-  const sessions = listed.ok ? bySession(listed.agents) : new Map<string, HerdrAgent>()
-  const rows: TeamAgentRow[] = []
+): Promise<void> {
+  if (!listed.ok) return
+  const sessions = bySession(listed.agents)
   for (const [name, rec] of Object.entries(records)) {
     const agent = rec.session ? sessions.get(rec.session) : undefined
-    if (agent && agent.pane_id !== rec.pane) {
-      rec.pane = agent.pane_id
-      const path = `${teamdir}/${name}.json`
-      const latest = await readJson<TeamRecord>(io, path)
-      if (latest) await writeJson(io, path, { ...latest, pane: agent.pane_id })
-    }
-    rows.push({ name, state: agent ? agent.agent_status : listed.ok ? 'gone' : '?', pane: rec.pane })
+    if (!agent || agent.pane_id === rec.pane) continue
+    rec.pane = agent.pane_id
+    const path = `${teamdir}/${name}.json`
+    const latest = await readJson<TeamRecord>(io, path)
+    if (latest) await writeJson(io, path, { ...latest, pane: agent.pane_id })
   }
-  return rows
+}
+
+/** One row per record, read-only: the pane shown is the one herdr reports. */
+export function agentRows(records: Record<string, TeamRecord>, listed: HerdrListing): TeamAgentRow[] {
+  const sessions = listed.ok ? bySession(listed.agents) : new Map<string, HerdrAgent>()
+  return Object.entries(records).map(([name, rec]) => {
+    const agent = rec.session ? sessions.get(rec.session) : undefined
+    return { name, state: agent ? agent.agent_status : listed.ok ? 'gone' : '?', pane: agent ? agent.pane_id : rec.pane }
+  })
 }

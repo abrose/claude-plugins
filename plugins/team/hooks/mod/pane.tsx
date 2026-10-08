@@ -4,8 +4,11 @@ import { queueGroups } from './cards'
 import type { QueueGroup } from './cards'
 import { fitPlan } from './plan'
 
-export const PANE = 'team-overview'
+export const TEAM_PANE = 'team'
+export const QUESTIONS_PANE = 'questions'
 export const hiddenKey = (teamId: string) => `overviewHidden:${teamId}`
+/** Only the person's own close hides the overview. A close by a plugin or on unload does not. */
+export const closeHides = (origin: { kind: string }) => origin.kind === 'person'
 
 export type PaneView = {
   agents: TeamAgentRow[]
@@ -85,6 +88,18 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
       ))}
       {view.error !== '' && <Text color="red" wrap="truncate-end">{view.error}</Text>}
       <Text dimColor>tick {view.tickAt || '-'}</Text>
+    </Box>
+  )
+}
+
+/** The question log: every card, newest first, one row each with how it stands or closed. */
+export function drawQuestions({ Box, Text }: Pick<Elements['terminal'], 'Box' | 'Text'>, cards: TeamCard[]) {
+  const row = (c: TeamCard) =>
+    `${c.id} ${c.status}${c.decision === undefined ? '' : ` #${c.decision}`} ${c.door} ${c.from}/${c.tag}: ${c.question}`
+  return (
+    <Box flexDirection="column">
+      {cards.length === 0 && <Text dimColor>no questions yet</Text>}
+      {[...cards].sort((a, b) => b.n - a.n).map(c => <Text key={c.id} wrap="truncate-end">{row(c)}</Text>)}
     </Box>
   )
 }

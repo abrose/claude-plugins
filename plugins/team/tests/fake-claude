@@ -2,4 +2,4 @@
 # Test double for the claude CLI: answers --version from $FAKE_CLAUDE_VERSION.
 set -euo pipefail
 [ "${1:-}" = "--version" ] || { echo "fake-claude: only --version" >&2; exit 2; }
-echo "${FAKE_CLAUDE_VERSION:-2.1.287} (Claude Code)"
+echo "${FAKE_CLAUDE_VERSION:-2.1.292} (Claude Code)"

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Establish a team: team id, config, allowlist baseline, orchestrator tab record.
+# Establish a team: team id, config, allowlist baseline, envoy tab record. This
+# session becomes the envoy; the orchestrator starts in a worker tab.
 # Exit codes: 0 ok, 1 refused (live agents, worktree in the way, or archive
-# failed), 2 bad arguments, 4 herdr error.
+# failed), 2 bad arguments, 4 herdr error (or the orchestrator did not start).
 set -euo pipefail
 
-usage_text="usage: team-init <ticket> [--orchestrator-pane <id>]"
+usage_text="usage: team-init <ticket> [--envoy-pane <id>]"
 usage() { echo "$usage_text" >&2; exit 2; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,10 +28,10 @@ case "$1" in
   -*) echo "a ticket cannot start with '-': $1" >&2; usage ;;
 esac
 ticket="$1"; shift
-orch_pane=""
+envoy_pane=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --orchestrator-pane) [ $# -ge 2 ] || usage; orch_pane="$2"; shift 2 ;;
+    --envoy-pane) [ $# -ge 2 ] || usage; envoy_pane="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
@@ -39,7 +40,7 @@ done
   echo "TEAM_SESSION_ID is unset: the team mod did not load in this session (Claude Code too old, or the team plugin disabled)" >&2
   exit 1
 }
-min_version="2.1.287"
+min_version="2.1.292"
 found_version="$(claude --version 2>/dev/null | awk '{print $1}')"
 FOUND="$found_version" MIN="$min_version" python3 -c "
 import os, sys
@@ -212,7 +213,7 @@ TICKET="$ticket" TEAM_ID="$team_id" ORCH="$orch" python3 - "$teamdir/config.json
 import os, json, sys
 json.dump({"team_id": os.environ["TEAM_ID"], "ticket": os.environ["TICKET"],
            "orchestrator": os.environ["ORCH"],
-           "orchestrator_session": os.environ["TEAM_SESSION_ID"]}, open(sys.argv[1], "w"))
+           "envoy_session": os.environ["TEAM_SESSION_ID"]}, open(sys.argv[1], "w"))
 PY
 
 # Seed the safe permission allowlist, adding only what is missing. SendMessage
@@ -235,9 +236,9 @@ for a in base:
 json.dump(data, open(path, "w"), indent=2)
 PY
 
-# Record the orchestrator's tab as team-managed.
-if [ -n "$orch_pane" ]; then
-  tab="$(herdr pane get "$orch_pane" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || exit 4
+# Record the envoy's tab as team-managed.
+if [ -n "$envoy_pane" ]; then
+  tab="$(herdr pane get "$envoy_pane" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || exit 4
   TAB="$tab" python3 - "$teamdir/tabs.json" <<'PY'
 import os, json, sys
 path = sys.argv[1]
@@ -249,10 +250,47 @@ PY
   TAB="$tab" python3 - "$teamdir/config.json" <<'PY'
 import os, json, sys
 cfg = json.load(open(sys.argv[1]))
-cfg["orchestrator_tab"] = os.environ["TAB"]
+cfg["envoy_tab"] = os.environ["TAB"]
 json.dump(cfg, open(sys.argv[1], "w"))
 PY
 fi
+
+# Start the orchestrator in its own worker tab. A failed start leaves the config
+# with envoy_session only: the envoy tools work, the orchestrator half stays off.
+if ! start_err="$("$here/team-start" orch orchestrator --new-tab --label orch --cwd "$PWD" 2>&1 >/dev/null)"; then
+  echo "orchestrator did not start: $start_err" >&2
+  # team-start leaves a dialog pane open for the human. Its own advice is to re-run
+  # team-start; here the next step is /team:init, which records the orchestrator.
+  case "$start_err" in
+    *"is at a startup dialog"*)
+      echo "After you answer it: close that pane, then run /team:init again; do not run team-start by hand, config.json would not know that orchestrator." >&2 ;;
+  esac
+  exit 4
+fi
+orch_record="$teamdir/$orch.json"
+orch_session="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['session'])" "$orch_record")"
+orch_pane="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['pane'])" "$orch_record")"
+# The session goes into the config first: the orchestrator is live from here on.
+SESSION="$orch_session" python3 - "$teamdir/config.json" <<'PY'
+import os, json, sys
+cfg = json.load(open(sys.argv[1]))
+cfg["orchestrator_session"] = os.environ["SESSION"]
+json.dump(cfg, open(sys.argv[1], "w"))
+PY
+if ! tab_out="$(herdr pane get "$orch_pane" 2>&1)"; then
+  echo "orchestrator started, tab lookup failed: $tab_out" >&2
+  exit 4
+fi
+orch_tab="$(printf '%s' "$tab_out" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || {
+  echo "orchestrator started, tab lookup failed: unreadable answer from herdr: $tab_out" >&2
+  exit 4
+}
+TAB="$orch_tab" python3 - "$teamdir/config.json" <<'PY'
+import os, json, sys
+cfg = json.load(open(sys.argv[1]))
+cfg["orchestrator_tab"] = os.environ["TAB"]
+json.dump(cfg, open(sys.argv[1], "w"))
+PY
 
 # Drop session index entries whose agent record is gone or names another
 # session, so a stale entry never claims a session for a finished run. A

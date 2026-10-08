@@ -4,8 +4,11 @@ argument-hint: [name ...|all]
 ---
 Release agents: $ARGUMENTS
 
-Load the `team-orchestration` skill first. For each named agent (or every agent
-when `all`):
+Load the `team-orchestration` skill first. Release only agents that `team-status`
+lists. Never close the pane of the session you run in, and never the envoy's pane
+(`envoy_session` and `envoy_tab` in `.team/config.json`), also for `all`. If
+`team-status` fails, stop and report its error: do not pick panes by hand. For each
+named agent (or every agent when `all`):
 
 1. Check for its report file. If it is `working`, refuse to release it and say
    so.

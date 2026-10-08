@@ -23,7 +23,7 @@ describe('brief_send', () => {
     })
     w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout' })
     const r = await call($, { name: 'app-1-scout', topic: 'dig' })
-    expect(r).toMatchObject({ isError: true, result: 'brief_send works only in the session that runs the team (/team:init)' })
+    expect(r).toMatchObject({ isError: true, result: 'brief_send works only in the orchestrator session' })
     expect(w.sends).toEqual([])
   })
 

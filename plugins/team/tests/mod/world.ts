@@ -104,7 +104,7 @@ export async function envoyTeam($: any, on: On): Promise<World> {
 /** The agent rows the pane draws, read through the drawing. */
 export async function agentRows($: any): Promise<string[]> {
   const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+                                requestId: 'team', props: { bodyColumns: 80 } } as never)
   const found = await ui.findAll({ type: 'Button', text: /app-1-/ })
   return found.map((f: any) => f.text.trim().replace(/\s+/g, ' '))
 }
@@ -242,19 +242,20 @@ export function world(on: On): World {
     w.toasts.push(e.text)
     return { value: undefined }
   })
+  const shown = new Set<string>()
   on('ui.open', ($, e) => {
     w.opened.push(e.id)
+    shown.add(e.id)
     w.titles.set(e.id, e.title ?? 'Team')
     return { value: { isPlaced: true } }
   })
   on('ui.close', ($, e) => {
     w.closed.push(e.id)
+    shown.delete(e.id)
     return { value: undefined }
   })
   on('ui.panes', () => ({
-    value: [...new Set(w.opened)]
-      .filter(id => w.opened.lastIndexOf(id) > w.closed.lastIndexOf(id))
-      .map(id => ({ id, title: w.titles.get(id) ?? 'Team', isShown: true, isFocused: false, isPlaced: true })),
+    value: [...shown].map(id => ({ id, title: w.titles.get(id) ?? 'Team', isShown: true, isFocused: false, isPlaced: true })),
   }))
   return w
 }

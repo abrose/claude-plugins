@@ -8,7 +8,8 @@ import glob
 import json
 import os
 
-NON_RECORD_FILES = ("config.json", "watch-state.json", "tabs.json", "layout-flags.json", "delivered.json")
+NON_RECORD_FILES = ("config.json", "watch-state.json", "tabs.json", "layout-flags.json", "delivered.json",
+                    "toasted.json")
 
 
 def agent_state(agent):
@@ -20,11 +21,15 @@ def records(teamdir):
     for f in glob.glob(os.path.join(teamdir, "*.json")):
         if os.path.basename(f) in NON_RECORD_FILES:
             continue
+        name = os.path.splitext(os.path.basename(f))[0]
         try:
             with open(f) as fh:
-                out[os.path.splitext(os.path.basename(f))[0]] = json.load(fh)
+                rec = json.load(fh)
         except (OSError, ValueError):
-            out[os.path.splitext(os.path.basename(f))[0]] = {}
+            rec = {}
+        # Only a JSON object is a record: a list or a scalar is some other state file.
+        if isinstance(rec, dict):
+            out[name] = rec
     return out
 
 

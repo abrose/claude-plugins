@@ -20,6 +20,7 @@ case "$role" in
   investigator) def_effort=medium; def_model=opus-5-5 ;;
   implementer)  def_effort=medium; def_model=sonnet-5-5 ;;
   tester)       def_effort=low;    def_model=sonnet-5-5 ;;
+  orchestrator) def_effort=medium; def_model=opus-5-5 ;;
   *) echo "unknown role: $role" >&2; exit 2 ;;
 esac
 
@@ -102,8 +103,21 @@ if [ -f "$teamcfg" ]; then
   fi
 fi
 
+# The new pane's claude loads only the installed plugin, which may lack this
+# version's agents/team-<role>.md and mod (agents/team-orchestrator.md is new in
+# 0.6): `--agent` then fails, the agent never becomes ready, and `herdr agent
+# start` times out. So hand the child the plugin this script came from. An
+# installed copy (under <profile>/plugins/cache) loads by itself and needs none.
+plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+plugin_args=()
+profile_dir="$(cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" 2>/dev/null && pwd -P || true)"
+case "$plugin_root" in
+  "${profile_dir:-/nonexistent}"/plugins/cache/*) ;;
+  *) plugin_args=(--plugin-dir "$plugin_root") ;;
+esac
+
 if [ -n "$dry_run" ]; then
-  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'"
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'${plugin_args[*]:+ ${plugin_args[*]}}"
   exit 0
 fi
 
@@ -231,7 +245,8 @@ start() {
   # a peer question never sits held pending human approval.
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
     --agent "team-$role" --session-id "$session_id" --model "$model" --effort "$effort" \
-    --permission-mode "$permission_mode" --name "$name" --settings '{"crossSessionInbound":"accept"}'
+    --permission-mode "$permission_mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' \
+    ${plugin_args[@]+"${plugin_args[@]}"}
 }
 
 # Re-mark the target pane so the trap below always has a marker to remove,
@@ -276,12 +291,20 @@ while true; do
   exit 4
 done
 
-bar=$(herdr agent read "$name" --source detection --lines 20) || exit 4
+if ! bar=$(herdr agent read "$name" --source detection --lines 20); then
+  # Same state as a mismatch below: a live agent that no record names. Close our own pane.
+  [ -z "$pane_created" ] || herdr pane close "$pane" >/dev/null 2>&1 || true
+  exit 4
+fi
 if ! { echo "$bar" | grep -qF "$bar_model" \
     && echo "$bar" | grep -qF "$bar_mode" \
     && echo "$bar" | grep -qF "$(basename "$cwd")"; }; then
   echo "status bar mismatch (want $bar_model/$bar_mode/$(basename "$cwd")):" >&2
   echo "$bar" >&2
+  # The agent is live but wrong, and no record names its pane, so nobody else
+  # could find it. Close the pane we created (and with it a tab we made). A
+  # caller-provided --pane is never ours to close.
+  [ -z "$pane_created" ] || herdr pane close "$pane" >/dev/null 2>&1 || true
   exit 3
 fi
 

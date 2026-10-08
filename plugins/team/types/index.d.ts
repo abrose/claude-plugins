@@ -35,6 +35,7 @@ declare module 'claude-code' {
       agents: TeamAgentRow[]
       plan: TeamPlan | null
       cards: TeamCard[]
+      urgent: number
       planPath: string
       tickAt: string
       error: string

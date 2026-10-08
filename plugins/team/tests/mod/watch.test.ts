@@ -137,7 +137,7 @@ describe('watch in the tick', () => {
     await w.clock.advance(15000)
     expect(w.submits).toEqual(['WATCH herdr unreachable: server_unavailable'])
     const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
-                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+                                  requestId: 'team', props: { bodyColumns: 80 } } as never)
     expect(await ui.find({ type: 'Text', text: 'herdr: server_unavailable' })).toBeDefined()
     w.herdrFails = null
     await w.clock.advance(15000)

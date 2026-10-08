@@ -71,6 +71,10 @@ class Base(unittest.TestCase):
             capture_output=True, text=True, env=env, cwd=cwd or self.proj,
         )
 
+    def bar_env(self, model, mode="auto", cwd=None):
+        return {"FAKE_STATUS_MODEL": model, "FAKE_STATUS_MODE": mode,
+                "FAKE_STATUS_CWD": cwd or self.proj}
+
     def herdr_calls(self):
         with open(self.herdr_log) as f:
             return [l.rstrip("\n") for l in f if l.strip()]
@@ -181,15 +185,11 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(any("CLAUDE_CONFIG_DIR" in c for c in self.herdr_calls()), self.herdr_calls())
 
-    def bar_env(self, model, mode="auto", cwd=None):
-        return {"FAKE_STATUS_MODEL": model, "FAKE_STATUS_MODE": mode,
-                "FAKE_STATUS_CWD": cwd or self.proj}
-
     def start_argv(self, name, agent, model, effort, mode="auto"):
         return re.compile(
             r"agent start %s --kind claude --pane w1:p2 --timeout 90000 "
             r"-- --agent %s --session-id %s --model %s --effort %s --permission-mode %s "
-            r"--name %s --settings \{\"crossSessionInbound\":\"accept\"\}$"
+            r"--name %s --settings \{\"crossSessionInbound\":\"accept\"\}(?: --plugin-dir \S+)?$"
             % (name, agent, self.UUID, model, effort, mode, name))
 
     def assert_started(self, pattern):
@@ -210,6 +210,13 @@ class TeamStart(Base):
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assert_started(self.start_argv(role[:4], agent, model, effort))
                 self.assertEqual(json.loads(p.stdout)["model"], model)
+
+    def test_orchestrator_role_starts_the_orchestrator_agent(self):
+        p = self.run_script("team-start", "orch", "orchestrator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assert_started(self.start_argv("orch", "team-orchestrator", "claude-opus-5-5", "medium"))
+        self.assertEqual(self.team_json("orch")["role"], "orchestrator")
 
     def test_model_and_effort_override_role_defaults(self):
         cases = {
@@ -296,8 +303,46 @@ class TeamStart(Base):
         calls = self.herdr_calls()
         start_call = next(c for c in calls if c.startswith("agent start scout "))
         self.assertIn('--settings {"crossSessionInbound":"accept"}', start_call)
-        settings_arg = start_call.split("--settings ", 1)[1]
+        settings_arg = start_call.split("--settings ", 1)[1].split(" --plugin-dir ")[0]
         json.loads(settings_arg)  # must be valid JSON, one argument
+
+    def started_argv(self, p):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return next(c for c in self.herdr_calls() if c.startswith("agent start "))
+
+    def test_the_agent_loads_the_plugin_this_script_came_from(self):
+        # The new pane's claude has no --plugin-dir of its own and would load only the installed
+        # copy. With a copy that lacks agents/team-orchestrator.md (or a newer mod), the orchestrator
+        # never becomes ready and `herdr agent start` times out (live check, PROBE-1).
+        p = self.run_script("team-start", "orch", "orchestrator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertTrue(self.started_argv(p).endswith(" --plugin-dir %s" % os.path.realpath(ROOT)))
+
+    def test_every_role_loads_that_plugin(self):
+        for role, bar in (("investigator", "Opus 5.5"), ("implementer", "Sonnet 5.5"), ("tester", "Sonnet 5.5")):
+            with self.subTest(role=role):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("team-start", role[:4], role, "--pane", "w1:p2",
+                                    "--cwd", self.proj, env_extra=self.bar_env(bar, cwd=self.proj))
+                self.assertIn(" --plugin-dir %s" % os.path.realpath(ROOT), self.started_argv(p))
+
+    def test_dry_run_shows_the_plugin_dir(self):
+        p = self.run_script("team-start", "orch", "orchestrator", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--plugin-dir %s" % os.path.realpath(ROOT), p.stdout)
+
+    def test_an_installed_copy_adds_no_plugin_dir(self):
+        # Under <profile>/plugins/cache the installed plugin loads by itself: no --plugin-dir.
+        cfg = os.path.join(self.proj, "profile")
+        bindir = os.path.join(cfg, "plugins", "cache", "market", "team", "0.5.6", "bin")
+        os.makedirs(bindir)
+        copy = os.path.join(bindir, "team-start")
+        shutil.copy(os.path.join(BIN, "team-start"), copy)
+        env = self.env(**{**self.bar_env("Opus 5.5", cwd=self.proj), "CLAUDE_CONFIG_DIR": cfg})
+        p = subprocess.run([copy, "orch", "orchestrator", "--pane", "w1:p2", "--cwd", self.proj],
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertNotIn("--plugin-dir", self.started_argv(p))
 
     def test_dry_run_echoes_name_and_settings(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
@@ -402,6 +447,55 @@ class TeamStart(Base):
                             env_extra=self.bar_env("Opus 5.5"))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_status_bar_mismatch_closes_the_pane_it_created(self):
+        # The agent is live in a pane team-start made, but it is the wrong model:
+        # no record is written, so nobody else could find that pane. Close it.
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("status bar mismatch", p.stderr)
+        self.assertIn("pane close w1:p9", self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".team", "scout.json")))
+
+    def test_status_bar_mismatch_closes_the_tab_pane_it_created(self):
+        p = self.run_script("team-start", "scout", "investigator", "--new-tab",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("pane close w1:p9", self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".team", "tabs.json")))
+
+    def test_status_bar_mismatch_never_closes_a_caller_pane(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_failed_status_bar_read_closes_the_pane_it_created(self):
+        # Same state as a mismatch: a live agent, no record, nobody can find the pane (N7).
+        p = self.run_script("team-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Opus 5.5"), "FAKE_AGENT_READ_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("pane close w1:p9", self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".team", "scout.json")))
+
+    def test_failed_status_bar_read_never_closes_a_caller_pane(self):
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Opus 5.5"), "FAKE_AGENT_READ_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_refusing_a_live_name_creates_and_closes_no_pane(self):
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
+        p = self.run_script("team-start", "orch", "orchestrator", "--new-tab", "--cwd", self.proj,
+                            scenario="names_app1_taken", env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("name already in use by a live agent: app-1-orch", p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith(("tab create", "pane split", "pane close")) for c in calls), calls)
 
     def test_pending_marker_exists_before_first_agent_start_call(self):
         # The marker must protect a created pane from the watcher's empty-pane
@@ -701,6 +795,28 @@ class TeamStart(Base):
         self.assertTrue(any("agent start scout --kind claude --pane w1:g1" in c for c in calls), calls)
 
 
+class AgentFiles(unittest.TestCase):
+    def frontmatter(self, name):
+        text = read_text(os.path.join(ROOT, "agents", name + ".md"))
+        return text.split("---")[1]
+
+    def test_every_role_has_an_agent_file(self):
+        for role in ("investigator", "implementer", "tester", "orchestrator", "envoy"):
+            with self.subTest(role=role):
+                self.assertIn("name: team-%s" % role, self.frontmatter("team-" + role))
+
+    def test_orchestrator_preloads_the_protocol_skill(self):
+        self.assertIn("- team-orchestration", self.frontmatter("team-orchestrator"))
+
+    def test_envoy_cannot_edit_files(self):
+        self.assertIn("disallowedTools: Edit, MultiEdit, NotebookEdit, Write", self.frontmatter("team-envoy"))
+
+    def test_envoy_preloads_its_role_skill(self):
+        fm = self.frontmatter("team-envoy")
+        self.assertIn("- team-role-envoy", fm)
+        self.assertTrue(os.path.exists(os.path.join(ROOT, "skills", "team-role-envoy", "SKILL.md")))
+
+
 class TeamBriefCompose(Base):
     def overlay(self):
         d = os.path.join(self.proj, ".claude", "team")
@@ -932,6 +1048,49 @@ class TeamStatus(Base):
         p = self.run_script("team-status", scenario="status_two_teams")
         self.assertEqual(p.stderr, "")
 
+    def envoy_cfg(self):
+        # What team-init writes when the orchestrator did not start (live run, PROBE-1).
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+                               "envoy_session": "eeee0000ffff", "envoy_tab": "w4:tX"}))
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w4:tX"]))
+
+    def test_envoy_run_without_an_orchestrator_does_not_crash_or_warn(self):
+        self.envoy_cfg()
+        write_text(self.sp(".team", "toasted.json"), "[]")
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.strip(), "")
+
+    def test_a_json_list_in_the_team_dir_is_no_record(self):
+        # Any file the mod keeps there may hold a list; only objects are records.
+        self.cfg()
+        write_text(self.sp(".team", "stray.json"), "[1]")
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), [
+            "app-1-orch (w2:p1, oooo0000) working - - -",
+            "app-1-scout (w2:p2, 11111111) idle investigator - -",
+        ])
+
+    def test_the_envoy_session_is_never_on_the_roster(self):
+        # /team:release walks this roster and closes each pane on it: the envoy's own pane
+        # must not be there, even when a record or the orchestrator entry names its session.
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch",
+                               "orchestrator_session": "oooo0000dddd", "envoy_session": "c23a1be5eeee"}))
+        self.write_record("app-1-ghost", "investigator", session="c23a1be5eeee")
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("team-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch", "app-1-scout"])
+
     def test_record_without_a_live_session_is_left_out(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", session="gone0000")
@@ -968,7 +1127,8 @@ class DefaultScratch(Base):
                    json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
 
     def test_init_with_default_path_creates_current(self):
-        p = self.run_script("team-init", "APP-1", env_extra=self.UNSET)
+        p = self.run_script("team-init", "APP-1",
+                            env_extra={**self.UNSET, **self.bar_env("Opus 5.5")})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.sp(".team", "config.json")))
 
@@ -1425,6 +1585,97 @@ class TeamId(Base):
 class TeamInit(Base):
     ALLOW = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
 
+    def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
+        env = {**self.bar_env("Opus 5.5", cwd=self.proj), **(env_extra or {})}
+        return super().run_script(name, *args, scenario=scenario, env_extra=env, cwd=cwd)
+
+    def cfg(self):
+        return json.loads(read_text(self.sp(".team", "config.json")))
+
+    def test_records_this_session_as_envoy(self):
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.cfg()["envoy_session"], "orch-sid")
+
+    def test_starts_the_orchestrator_in_a_worker_tab(self):
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("tab create") and "--label orch" in c for c in calls), calls)
+        self.assertTrue(any("agent start app-1-orch " in c and "--agent team-orchestrator" in c for c in calls), calls)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertEqual(self.cfg()["orchestrator_tab"], "w1:t9")
+        self.assertIn("w1:t9", json.loads(read_text(self.sp(".team", "tabs.json"))))
+
+    def test_envoy_pane_records_the_envoy_tab(self):
+        p = self.run_script("team-init", "APP-1", "--envoy-pane", "w1:p1", scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.cfg()["envoy_tab"], "w1:t1")
+        self.assertIn("w1:t1", json.loads(read_text(self.sp(".team", "tabs.json"))))
+
+    def test_failed_orchestrator_start_is_a_herdr_error(self):
+        p = self.run_script("team-init", "APP-1", env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator did not start", p.stderr)
+        self.assertIn("status bar mismatch", p.stderr)
+        self.assertNotIn("orchestrator_session", self.cfg())
+        self.assertEqual(self.cfg()["envoy_session"], "orch-sid")
+
+    def failed_start(self, scenario="ok"):
+        return self.run_script("team-init", "APP-1", scenario=scenario,
+                               env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+
+    def test_failed_start_closes_the_orchestrator_pane(self):
+        # team-start closes the pane it made; team-init asks herdr for no pane itself.
+        p = self.failed_start(scenario="orch_stuck")
+        self.assertEqual(p.returncode, 4, p.stderr)
+        calls = self.herdr_calls()
+        self.assertEqual(calls.count("pane close w1:p9"), 1, calls)
+        self.assertEqual(sum(c == "agent list" for c in calls), 2, calls)
+
+    def test_failed_start_for_a_name_live_before_closes_no_pane(self):
+        # team-init's own agent list fails once, so it picks the id app-1 and
+        # team-start then finds app-1-orch live (another team's agent in w1:p1).
+        # Nothing here made that pane, so nothing here may close it.
+        p = self.run_script("team-init", "APP-1", scenario="orch_taken_late",
+                            env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator did not start: name already in use by a live agent: app-1-orch", p.stderr)
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")], self.herdr_calls())
+
+    def test_startup_dialog_tells_the_human_to_close_the_pane_and_init_again(self):
+        # team-start's own advice is "re-run team-start"; through team-init the next step is
+        # /team:init, because a hand-made team-start would leave an orchestrator that the config does not know (N8).
+        p = self.run_script("team-init", "APP-1", scenario="first_run_dialog",
+                            env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator did not start: app-1-orch is at a startup dialog", p.stderr)
+        self.assertIn("close that pane, then run /team:init again; do not run team-start by hand", p.stderr)
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")])
+
+    def test_other_failed_starts_carry_no_dialog_advice(self):
+        p = self.failed_start()
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertNotIn("/team:init again", p.stderr)
+
+    def test_init_after_a_failed_start_is_not_refused(self):
+        self.assertEqual(self.failed_start(scenario="orch_stuck").returncode, 4)
+        p = self.run_script("team-init", "APP-1", scenario="orch_stuck")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("already initialised", p.stderr)
+
+    def test_failed_tab_lookup_keeps_the_orchestrator_session(self):
+        p = self.run_script("team-init", "APP-1", env_extra={"FAKE_PANE_GET_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator started, tab lookup failed:", p.stderr)
+        self.assertIn("pane lookup failed", p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")])
+
+    def test_orchestrator_pane_flag_is_gone(self):
+        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1")
+        self.assertEqual(p.returncode, 2)
+
     def test_writes_config_with_team_id_and_orch(self):
         p = self.run_script("team-init", "APP-5066")
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -1664,24 +1915,23 @@ class TeamInit(Base):
         s = json.loads(read_text(os.path.join(self.proj, ".claude", "settings.local.json")))
         self.assertIn("SendMessage", s["permissions"]["allow"])
 
-    def test_records_orchestrator_tab(self):
-        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+    def test_records_envoy_tab(self):
+        p = self.run_script("team-init", "APP-1", "--envoy-pane", "w1:p1",
                             scenario="pane_in_tab")
         self.assertEqual(p.returncode, 0, p.stderr)
         tabs = json.loads(read_text(self.sp(".team", "tabs.json")))
         self.assertIn("w1:t1", tabs)
 
-    def test_config_names_the_orchestrator_tab(self):
+    def test_config_names_the_envoy_tab(self):
         # The team mod exempts this tab from layout hygiene even while herdr
-        # does not yet know the orchestrator's session (just after a /clear).
-        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+        # does not yet know the envoy's session (just after a /clear).
+        p = self.run_script("team-init", "APP-1", "--envoy-pane", "w1:p1",
                             scenario="pane_in_tab")
         self.assertEqual(p.returncode, 0, p.stderr)
-        cfg = json.loads(read_text(self.sp(".team", "config.json")))
-        self.assertEqual(cfg["orchestrator_tab"], "w1:t1")
+        self.assertEqual(self.cfg()["envoy_tab"], "w1:t1")
 
     def test_does_not_rename_the_orchestrator(self):
-        p = self.run_script("team-init", "APP-1", "--orchestrator-pane", "w1:p1",
+        p = self.run_script("team-init", "APP-1", "--envoy-pane", "w1:p1",
                             scenario="pane_in_tab")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(any(c.startswith("agent rename") for c in self.herdr_calls()))
@@ -1689,8 +1939,7 @@ class TeamInit(Base):
     def test_records_orchestrator_session(self):
         p = self.run_script("team-init", "APP-1")
         self.assertEqual(p.returncode, 0, p.stderr)
-        cfg = json.loads(read_text(self.sp(".team", "config.json")))
-        self.assertEqual(cfg["orchestrator_session"], "orch-sid")
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
 
     def test_refuses_without_session_id(self):
         p = self.run_script("team-init", "APP-1", env_extra={"TEAM_SESSION_ID": None})
@@ -1698,9 +1947,9 @@ class TeamInit(Base):
         self.assertIn("TEAM_SESSION_ID is unset", p.stderr)
 
     def test_refuses_old_claude_code(self):
-        p = self.run_script("team-init", "APP-1", env_extra={"FAKE_CLAUDE_VERSION": "2.1.286"})
+        p = self.run_script("team-init", "APP-1", env_extra={"FAKE_CLAUDE_VERSION": "2.1.291"})
         self.assertEqual(p.returncode, 1)
-        self.assertIn("Claude Code 2.1.286 is older than 2.1.287", p.stderr)
+        self.assertIn("Claude Code 2.1.291 is older than 2.1.292", p.stderr)
 
     def test_keeps_an_index_entry_whose_record_it_cannot_read_right_now(self):
         # Another team's record caught mid-write is not a dead agent.
@@ -1741,8 +1990,8 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(os.path.exists(self.profile_index("gone.json")))
 
-    def test_missing_orchestrator_pane_value_is_bad_args(self):
-        p = self.run_script("team-init", "APP-1", "--orchestrator-pane")
+    def test_missing_envoy_pane_value_is_bad_args(self):
+        p = self.run_script("team-init", "APP-1", "--envoy-pane")
         self.assertEqual(p.returncode, 2)
 
     def test_picks_free_team_id_when_slug_taken(self):
