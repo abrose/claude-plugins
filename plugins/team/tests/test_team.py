@@ -335,10 +335,9 @@ class TeamStart(Base):
     def test_an_installed_copy_adds_no_plugin_dir(self):
         # Under <profile>/plugins/cache the installed plugin loads by itself: no --plugin-dir.
         cfg = os.path.join(self.proj, "profile")
-        bindir = os.path.join(cfg, "plugins", "cache", "market", "team", "0.5.6", "bin")
-        os.makedirs(bindir)
-        copy = os.path.join(bindir, "team-start")
-        shutil.copy(os.path.join(BIN, "team-start"), copy)
+        root = os.path.join(cfg, "plugins", "cache", "market", "team", "0.5.6")
+        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns("__pycache__"))  # bin/ sources lib/
+        copy = os.path.join(root, "bin", "team-start")
         env = self.env(**{**self.bar_env("Opus 5.5", cwd=self.proj), "CLAUDE_CONFIG_DIR": cfg})
         p = subprocess.run([copy, "orch", "orchestrator", "--pane", "w1:p2", "--cwd", self.proj],
                            capture_output=True, text=True, env=env, cwd=self.proj)
@@ -1490,9 +1489,32 @@ class TeamResurrect(Base):
         self.assertIn(
             'agent start scout --kind claude --pane w1:p5 --timeout 90000 -- --resume sid-scout '
             '--agent team-investigator --model claude-sonnet-5-5 --effort low --permission-mode auto '
-            '--name scout --settings {"crossSessionInbound":"accept"}', calls)
+            '--name scout --settings {"crossSessionInbound":"accept"} --plugin-dir %s'
+            % os.path.realpath(ROOT), calls)
         self.assertFalse(os.path.exists(self.sp(".team", "restored", "scout")))
         self.assertIn("relaunched scout (w1:p5)", p.stdout)
+
+    def resurrect_argv(self, p, name="scout"):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return next(c for c in self.herdr_calls() if c.startswith("agent start %s " % name))
+
+    def test_a_dev_copy_relaunches_with_its_own_plugin_dir(self):
+        # N10: the relaunched claude has no --plugin-dir of its own and would load only the
+        # installed copy, which may lack this version's agents and mod (same as team-start).
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertTrue(self.resurrect_argv(p).endswith(" --plugin-dir %s" % os.path.realpath(ROOT)))
+
+    def test_an_installed_copy_relaunches_without_a_plugin_dir(self):
+        # Under <profile>/plugins/cache the installed plugin loads by itself: no --plugin-dir.
+        self.setup_team()
+        cfg = os.path.join(self.proj, "profile")
+        copy = os.path.join(cfg, "plugins", "cache", "market", "team", "0.5.6")
+        shutil.copytree(ROOT, copy, ignore=shutil.ignore_patterns("__pycache__"))
+        env = self.env(scenario="resurrect", CLAUDE_CONFIG_DIR=cfg)
+        p = subprocess.run([os.path.join(copy, "bin", "team-resurrect")],
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertNotIn("--plugin-dir", self.resurrect_argv(p))
 
     def test_unmarked_worker_is_healthy_and_untouched(self):
         self.setup_team()

@@ -103,18 +103,9 @@ if [ -f "$teamcfg" ]; then
   fi
 fi
 
-# The new pane's claude loads only the installed plugin, which may lack this
-# version's agents/team-<role>.md and mod (agents/team-orchestrator.md is new in
-# 0.6): `--agent` then fails, the agent never becomes ready, and `herdr agent
-# start` times out. So hand the child the plugin this script came from. An
-# installed copy (under <profile>/plugins/cache) loads by itself and needs none.
-plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-plugin_args=()
-profile_dir="$(cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" 2>/dev/null && pwd -P || true)"
-case "$plugin_root" in
-  "${profile_dir:-/nonexistent}"/plugins/cache/*) ;;
-  *) plugin_args=(--plugin-dir "$plugin_root") ;;
-esac
+# Hand the new pane's claude the plugin this script came from (sets plugin_args).
+# shellcheck source=../lib/plugin-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/plugin-dir.sh"
 
 if [ -n "$dry_run" ]; then
   echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'${plugin_args[*]:+ ${plugin_args[*]}}"
