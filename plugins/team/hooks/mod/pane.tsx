@@ -1,5 +1,7 @@
 import type { Elements } from 'claude-code'
-import type { TeamAgentRow, TeamPlan, TeamPlanItem } from '../../types'
+import type { TeamAgentRow, TeamCard, TeamPlan, TeamPlanItem } from '../../types'
+import { queueGroups } from './cards'
+import type { QueueGroup } from './cards'
 import { fitPlan } from './plan'
 
 export const PANE = 'team-overview'
@@ -8,6 +10,7 @@ export const hiddenKey = (teamId: string) => `overviewHidden:${teamId}`
 export type PaneView = {
   agents: TeamAgentRow[]
   plan: TeamPlan | null
+  cards: TeamCard[]
   planPath: string
   tickAt: string
   error: string
@@ -23,7 +26,16 @@ const MARK = {
 export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>, view: PaneView,
   focus: (agent: TeamAgentRow) => void,
 ) {
-  const room = Math.max(view.rows - view.agents.length - 12, 3)
+  const groups = queueGroups(view.cards)
+  const unresolved = groups.flatMap(g => g.cards)
+  const urgent = unresolved.filter(c => c.urgent)
+  const tally = (cards: TeamCard[], status: 'open' | 'assumed') => cards.filter(c => c.status === status).length
+  const groupRow = (g: QueueGroup) =>
+    [g.tag, ...(['open', 'assumed'] as const)
+      .filter(s => tally(g.cards, s) > 0)
+      .map(s => `${tally(g.cards, s)} ${s}`)].join('  ')
+  const questionRows = (unresolved.length === 0 ? 1 : 1 + urgent.length + groups.length) + 1
+  const room = Math.max(view.rows - view.agents.length - 12 - questionRows, 3)
   const fitted = view.plan ? fitPlan(view.plan, room) : null
   const item = (i: TeamPlanItem) => (
     <Text wrap="truncate-end" dimColor={MARK[i.mark].dim}>
@@ -48,6 +60,20 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
         </Box>
       ) : (
         <Text dimColor wrap="truncate-end">no plan yet: {view.planPath}</Text>
+      )}
+      <Text> </Text>
+      {unresolved.length === 0 ? (
+        <Text dimColor>Questions: none open</Text>
+      ) : (
+        <Box flexDirection="column">
+          <Text bold>{`Questions (${tally(unresolved, 'open')} open, ${tally(unresolved, 'assumed')} assumed)`}</Text>
+          {urgent.map(c => (
+            <Text key={c.id} wrap="truncate-end">
+              <Text color="yellow">!</Text> {c.id} {c.from}: {c.question}
+            </Text>
+          ))}
+          {groups.map(g => <Text key={g.tag} wrap="truncate-end">{` ${groupRow(g)}`}</Text>)}
+        </Box>
       )}
       <Text> </Text>
       <Text bold>Agents</Text>

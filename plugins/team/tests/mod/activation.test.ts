@@ -36,6 +36,36 @@ describe('activation', () => {
     expect(w.sessionId()).toBe('sid-after-clear')
   })
 
+  test('follows the envoy session through its own /clear', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.writeJson(`${w.team}/config.json`, {
+      team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch',
+      orchestrator_session: 'sid-orch-worker', envoy_session: 'sid-orch',
+    })
+    await $.session.end({ reason: 'clear', sessionId: 'sid-orch', resume: { id: '' } } as never)
+    w.id = 'sid-envoy-2'
+    await w.clock.advance(15000)
+    expect(w.json(`${w.team}/config.json`)).toMatchObject({
+      envoy_session: 'sid-envoy-2', orchestrator_session: 'sid-orch-worker',
+    })
+  })
+
+  test('follows the orchestrator session through its /clear in an envoy team', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.writeJson(`${w.team}/config.json`, {
+      team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch',
+      orchestrator_session: 'sid-orch', envoy_session: 'sid-envoy',
+    })
+    await $.session.end({ reason: 'clear', sessionId: 'sid-orch', resume: { id: '' } } as never)
+    w.id = 'sid-orch-2'
+    await w.clock.advance(15000)
+    expect(w.json(`${w.team}/config.json`)).toMatchObject({
+      orchestrator_session: 'sid-orch-2', envoy_session: 'sid-envoy',
+    })
+  })
+
   test('/team-overview right after its own /clear still finds the team', async ($, on) => {
     const w = world(on)
     await start($)

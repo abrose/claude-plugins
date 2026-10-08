@@ -34,6 +34,7 @@ declare module 'claude-code' {
       active: boolean
       agents: TeamAgentRow[]
       plan: TeamPlan | null
+      cards: TeamCard[]
       planPath: string
       tickAt: string
       error: string

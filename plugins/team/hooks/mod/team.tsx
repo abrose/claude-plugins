@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
-import type { TeamAgentRow, TeamPlan } from '../../types'
+import type { TeamAgentRow, TeamCard, TeamPlan } from '../../types'
 import { activeConfig, noteClear } from './activation'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
 import type { Io } from './io'
@@ -8,13 +8,16 @@ import { herdrAgents, herdrFocus } from './herdr'
 import { drawPane, hiddenKey, PANE } from './pane'
 import { runDir, setCwd, teamDir } from './paths'
 import { parsePlan } from './plan'
-import { ASK_TOOL_SPEC, askTool } from './questions'
-import { agentRows, newReportLines, readRecords, watchTick } from './tick'
+import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
+import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
+import { pickDecisions } from './decisions'
+import { agentRows, newReportLines, readLedger, readRecords, watchTick } from './tick'
 
 export const TICK_MS = 15000
 const active = atom({ plugin: 'team', key: 'active' } as const, false)
 const agents = atom({ plugin: 'team', key: 'agents' } as const, [] as TeamAgentRow[])
 const plan = atom({ plugin: 'team', key: 'plan' } as const, null as TeamPlan | null)
+const cards = atom({ plugin: 'team', key: 'cards' } as const, [] as TeamCard[])
 const planPath = atom({ plugin: 'team', key: 'planPath' } as const, '')
 const tickAt = atom({ plugin: 'team', key: 'tickAt' } as const, '')
 const error = atom({ plugin: 'team', key: 'error' } as const, '')
@@ -84,6 +87,8 @@ async function tick($: EngineInterface, io: Io): Promise<void> {
   await update($, plan, () => (text === null ? null : parsePlan(text)))
 
   const teamdir = await teamDir(io)
+  const found = await readCards(io, teamdir)
+  await update($, cards, () => found)
   const listed = await herdrAgents(io)
   const records = await readRecords(io, teamdir)
   const rows = await agentRows(io, teamdir, records, listed)
@@ -94,10 +99,11 @@ async function tick($: EngineInterface, io: Io): Promise<void> {
   const now = await $.clock.now()
   const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), cfg.orchestrator_tab)
   const reports = await newReportLines(io, run, teamdir, records)
-  const lines = [...reports.lines, ...watch]
+  const decisions = pickDecisions(await readLedger(io, teamdir), reports.delivered._decision)
+  const lines = [...reports.lines, ...decisions.lines, ...watch]
   try {
     if (lines.length > 0) await $.prompt.submit({ text: lines.join('\n') })
-    await reports.commit()
+    await reports.commit({ _decision: decisions.mark })
   } catch (err) {
     await update($, error, () => `prompt not sent: ${String(err).slice(0, 160)}`)
   }
@@ -114,6 +120,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'team-overview', description: 'Show or hide the team overview pane' })
     await $.tool.register(BRIEF_TOOL_SPEC)
     await $.tool.register(ASK_TOOL_SPEC)
+    await $.tool.register(QUEUE_TOOL_SPEC)
+    await $.tool.register(DECIDE_TOOL_SPEC)
     tickTimer?.cancel()
     tickTimer = $.clock.every(TICK_MS, () => tick($, io))
     return next(e)
@@ -128,6 +136,10 @@ export const register: Register = on => {
     briefSend(makeIo($), String(e.name ?? ''), String(e.topic ?? '')))
 
   on('tool.call', { tool: 'mcp__team__ask' }, async ($, e) => askTool(makeIo($), e))
+
+  on('tool.call', { tool: 'mcp__team__queue' }, async ($, e) => queueTool(makeIo($), e))
+
+  on('tool.call', { tool: 'mcp__team__decide' }, async ($, e) => decideTool(makeIo($), e))
 
   on('command.run', { command: 'team-overview' }, async $ => {
     const cfg = await activeConfig(makeIo($))
@@ -157,6 +169,7 @@ export const register: Register = on => {
     return drawPane({ Box, Text, Button } as never, {
       agents: await read($, agents),
       plan: await read($, plan),
+      cards: await read($, cards),
       planPath: await read($, planPath),
       tickAt: await read($, tickAt),
       error: await read($, error),

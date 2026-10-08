@@ -1,4 +1,5 @@
 import type { TeamAgentRow } from '../../types'
+import type { DecisionEntry } from './decide'
 import { gatherFacts } from './facts'
 import type { AgentFacts } from './facts'
 import { bySession, herdrClose, herdrDialog, herdrPanes } from './herdr'
@@ -44,13 +45,35 @@ export async function reportFiles(io: Io, run: string, records: Record<string, T
   return files
 }
 
-/** REPORT lines new since the last tick; `commit` writes the marks once they are sent. */
+/**
+ * REPORT lines new since the last tick. `delivered` holds the marks as read;
+ * `commit` writes them once the lines are sent, with `extra` marks merged in.
+ */
 export async function newReportLines(io: Io, run: string, teamdir: string,
                                      records: Record<string, TeamRecord>,
-): Promise<{ lines: string[]; commit: () => Promise<void> }> {
+): Promise<{
+  lines: string[]
+  delivered: Record<string, number>
+  commit: (extra?: Record<string, number>) => Promise<void>
+}> {
   const path = `${teamdir}/delivered.json`
   const picked = pickReports(await reportFiles(io, run, records), await readJson<Record<string, number>>(io, path))
-  return { lines: picked.lines, commit: () => writeJson(io, path, picked.delivered) }
+  return {
+    lines: picked.lines,
+    delivered: picked.delivered,
+    commit: (extra = {}) => writeJson(io, path, { ...picked.delivered, ...extra }),
+  }
+}
+
+/** The ledger `decide` writes: one entry per decision under `<teamdir>/decisions/`. */
+export async function readLedger(io: Io, teamdir: string): Promise<DecisionEntry[]> {
+  const entries: DecisionEntry[] = []
+  for (const name of await io.list(`${teamdir}/decisions`)) {
+    if (!/^\d+\.json$/.test(name)) continue
+    const entry = await readJson<DecisionEntry>(io, `${teamdir}/decisions/${name}`)
+    if (entry) entries.push(entry)
+  }
+  return entries
 }
 
 const NO_REPORT_AFTER = 120

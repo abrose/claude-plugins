@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { agentRows, CWD, start, team, world } from './world'
+import { agentRows, card, CWD, start, team, world } from './world'
 
 async function activeTeam($: any, on: any) {
   const w = world(on)
@@ -76,6 +76,31 @@ describe('Team pane', () => {
     const buttons = await ui.findAll({ type: 'Button', text: /app-1-/ })
 
     expect(buttons.map((b: any) => b.props.hotkey)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', undefined])
+  })
+
+  test('shows the open queue by tag with urgent cards on top', async ($, on) => {
+    const w = await activeTeam($, on)
+    card(w, 1, { tag: 'fixtures' })
+    card(w, 2, { tag: 'fixtures', status: 'assumed' })
+    card(w, 3, { tag: 'auth', urgent: true, from: 'app-1-tester', question: 'Approve rm -rf build?' })
+    card(w, 4, { tag: 'auth', status: 'answered', decision: 1 })
+    await w.clock.advance(15000)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+    const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text)
+    const at = (re: RegExp) => texts.findIndex((t: string) => re.test(t))
+    expect(at(/^Questions \(2 open, 1 assumed\)$/)).toBeGreaterThan(-1)
+    expect(at(/! Q-3 app-1-tester: Approve rm -rf build\?/)).toBeLessThan(at(/fixtures +1 open +1 assumed/))
+    expect(at(/auth +1 open/)).toBeGreaterThan(-1)
+  })
+
+  test('says so when no card is open', async ($, on) => {
+    const w = await activeTeam($, on)
+    card(w, 1, { status: 'answered', decision: 1 })
+    await w.clock.advance(15000)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'team-overview', props: { bodyColumns: 80 } } as never)
+    expect(await ui.find({ type: 'Text', text: /Questions: none open/ })).toBeDefined()
   })
 
   test('a hidden overview stays hidden when the mod activates again', async ($, on) => {

@@ -27,6 +27,28 @@ export function checkAsk(input: unknown): string | null {
   return null
 }
 
+export type QueueGroup = { tag: string; count: number; cards: TeamCard[] }
+
+/** Most pressing first: urgent, one-way, open before assumed, then oldest. */
+const pressing = (a: TeamCard, b: TeamCard) =>
+  Number(b.urgent) - Number(a.urgent) ||
+  Number(b.door === 'one-way') - Number(a.door === 'one-way') ||
+  Number(a.status === 'assumed') - Number(b.status === 'assumed') ||
+  a.n - b.n
+
+/** The open and assumed cards grouped by tag, each group and the groups ordered most pressing first. */
+export function queueGroups(cards: TeamCard[], tag?: string): QueueGroup[] {
+  const byTag = new Map<string, TeamCard[]>()
+  for (const card of cards) {
+    if (card.status !== 'open' && card.status !== 'assumed') continue
+    if (tag !== undefined && card.tag !== tag) continue
+    byTag.set(card.tag, [...(byTag.get(card.tag) ?? []), card])
+  }
+  return [...byTag.entries()]
+    .map(([name, list]) => ({ tag: name, count: list.length, cards: list.sort(pressing) }))
+    .sort((a, b) => pressing(a.cards[0]!, b.cards[0]!))
+}
+
 export function buildCard(input: AskInput, n: number, from: string, tag: string, at: number): TeamCard {
   return {
     id: `Q-${n}`,

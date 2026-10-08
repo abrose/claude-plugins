@@ -21,6 +21,8 @@ export type World = {
   herdrFails: string | null
   /** The next prompt.submit throws, once. */
   submitFails: boolean
+  /** The next fs.write throws, once. */
+  writeFails: boolean
   /** Runs after each fs.read answered, to stand for a writer in another process. */
   afterRead?: (path: string) => void
   /** Directories made with mkdir, which have no file under them. */
@@ -119,6 +121,7 @@ export function world(on: On): World {
     panes: [],
     herdrFails: null,
     submitFails: false,
+    writeFails: false,
     dirs: new Set(),
     raceMkdir: new Set(),
     statuses: [],
@@ -154,6 +157,10 @@ export function world(on: On): World {
     return f ? { value: f.text } : { deny: `ENOENT: ${e.path}` }
   })
   on('fs.write', ($, e) => {
+    if (w.writeFails) {
+      w.writeFails = false
+      throw new Error('write refused')
+    }
     w.write(e.path, e.text)
     return { value: undefined }
   })
