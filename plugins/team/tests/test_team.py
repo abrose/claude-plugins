@@ -1091,6 +1091,49 @@ class TeamStatus(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch", "app-1-scout"])
 
+    def test_the_orchestrator_is_listed_once_when_config_and_record_name_it(self):
+        # Live run F-3: config.json and .team/<orchestrator>.json both name the session.
+        self.cfg()
+        self.write_record("app-1-orch", "orchestrator", session="oooo0000dddd")
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("team-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch", "app-1-scout"])
+        with open(self.sp(".team", "roster.md")) as fh:
+            self.assertEqual(len(fh.read().splitlines()), 2)
+
+    def test_an_agent_without_a_session_does_not_crash_a_config_without_one(self):
+        # N9: by_session gets the key None; no orchestrator_session looked it up.
+        self.envoy_cfg()
+        p = self.run_script("team-status", scenario="status_sessionless")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "")
+
+    def test_a_record_without_a_session_is_no_member(self):
+        # N9: a record `{}` has no session; it must not match the sessionless agent.
+        self.envoy_cfg()
+        write_text(self.sp(".team", "app-1-ghost.json"), "{}")
+        p = self.run_script("team-status", scenario="status_sessionless")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "")
+
+    def test_the_session_that_runs_it_is_never_on_the_roster(self):
+        # N11: /team:release all in this session must not find its own pane.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("team-status", "--json", scenario="status_two_teams",
+                            env_extra={"TEAM_SESSION_ID": "11111111aaaa"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch"])
+
+    def test_the_orchestrator_that_runs_it_is_left_off_its_own_roster(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("team-status", "--json", scenario="status_two_teams",
+                            env_extra={"TEAM_SESSION_ID": "oooo0000dddd"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-scout"])
+
     def test_record_without_a_live_session_is_left_out(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", session="gone0000")

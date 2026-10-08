@@ -133,6 +133,11 @@ case "$group $sub" in
           {"name":"app-1-scout","pane_id":"w2:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}},
           {"pane_id":"w2:pB","agent_status":"idle","agent_session":{"value":"c23a1be5eeee"}}
         ]}}' ;;
+      status_sessionless)
+        emit '{"result":{"agents":[
+          {"pane_id":"w3:p1","agent_status":"idle"},
+          {"name":"app-1-scout","pane_id":"w3:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}}
+        ]}}' ;;
       names_app1_taken)
         emit '{"result":{"agents":[
           {"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}},
