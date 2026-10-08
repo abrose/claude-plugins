@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Establish a team: team id, config, allowlist baseline, envoy tab record. This
-# session becomes the envoy; the orchestrator starts in a worker tab.
-# Exit codes: 0 ok, 1 refused (live agents, worktree in the way, or archive
-# failed), 2 bad arguments, 4 herdr error (or the orchestrator did not start).
+# Establish a team: team id, decisions and plan files, config, allowlist baseline,
+# envoy tab record. This session becomes the envoy; the orchestrator starts in a
+# worker tab.
+# Exit codes: 0 ok, 1 refused (live agents, worktree in the way, archive failed, a
+# template unreadable, or a decisions/plan file in the way or unwritable), 2 bad
+# arguments (also a ticket that is not a plain file-name part), 4 herdr error (or the
+# orchestrator did not start).
 set -euo pipefail
 
 usage_text="usage: team-init <ticket> [--envoy-pane <id>]"
@@ -25,7 +28,7 @@ print(d.get('$1', '') if isinstance(d, dict) else '')
 [ $# -ge 1 ] || usage
 case "$1" in
   -h|--help) echo "$usage_text"; exit 0 ;;
-  -*) echo "a ticket cannot start with '-': $1" >&2; usage ;;
+  -*) echo "bad ticket: a ticket cannot start with '-': $1" >&2; usage ;;
 esac
 ticket="$1"; shift
 envoy_pane=""
@@ -35,6 +38,15 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
+
+# The ticket is a part of two file names (decisions-<ticket>.md, progress-<ticket>.md) that the
+# mod and team-brief look up. Only a plain name is one part: the plain-name rule of team-forget.
+# This comes before the archive step, so a refused ticket leaves the previous run alone.
+TICKET="$ticket" python3 -c "
+import os, re, sys
+if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', os.environ['TICKET']):
+    sys.exit('bad ticket: %r is not one plain file-name part (letters, digits, . _ -, starting with a letter or digit)' % os.environ['TICKET'])
+" || usage
 
 [ -n "${TEAM_SESSION_ID:-}" ] || {
   echo "TEAM_SESSION_ID is unset: the team mod did not load in this session (Claude Code too old, or the team plugin disabled)" >&2
@@ -208,6 +220,35 @@ print(choice or base)
 PY
 )"
 orch="${team_id}-orch"
+
+# Write the decisions file and the plan file from the templates of this plugin root.
+# This comes before every step that can exit 4, so a run whose orchestrator did not
+# start still has both files. A file already there is never overwritten (exit 1).
+TICKET="$ticket" TEMPLATES="$here/../skills/team-orchestration/templates" RUN="$scratch" python3 - <<'PY' || exit 1
+import os, sys
+
+ticket, templates, run = os.environ["TICKET"], os.environ["TEMPLATES"], os.environ["RUN"]
+files = []
+for template, prefix in (("decisions.md", "decisions"), ("progress.md", "progress")):
+    path = os.path.join(templates, template)
+    try:
+        with open(path) as fh:
+            text = fh.read().replace("{{ticket}}", ticket)
+    except OSError as e:
+        sys.exit("cannot read template %s: %s" % (path, e))
+    files.append((os.path.join(run, "%s-%s.md" % (prefix, ticket)), text))
+for path, _ in files:
+    if os.path.lexists(path):
+        sys.exit("refusing to overwrite: %s" % path)
+for path, text in files:
+    try:
+        with open(path, "x") as fh:
+            fh.write(text)
+    except FileExistsError:
+        sys.exit("refusing to overwrite: %s" % path)
+    except OSError as e:
+        sys.exit("cannot write %s: %s" % (path, e))
+PY
 
 TICKET="$ticket" TEAM_ID="$team_id" ORCH="$orch" python3 - "$teamdir/config.json" <<'PY'
 import os, json, sys

@@ -21,12 +21,13 @@ named agent (or every agent when `all`):
 3. If the overlay defines `release_check` in `.claude/team/project.yaml`, run it
    to catch orphan processes.
 4. Close its pane with `herdr pane close <pane>`. Closing the last pane closes
-   the tab. Delete its session index entry:
-   `rm -f "${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}/<session>.json"`, with
-   `<session>` from its record.
+   the tab. Then run `team-forget <name>`. It deletes the session index entry
+   (the session comes from the record) and then the record. Do this last:
+   `team-forget` keeps the record of an agent that herdr still lists. If it
+   refuses, the agent is still live: list it as refused in the report.
 5. When releasing `all`, also remove `.team/tabs.json`, `.team/watch-state.json`,
-   `.team/layout-flags.json` and `.team/delivered.json`, all under
-   `${TEAM_SCRATCH:-scratchpad/current}`. The team mod stays active in this
-   session until `/team:init` starts another run.
+   `.team/layout-flags.json`, `.team/delivered.json`, `.team/toasted.json` and
+   `.team/last-relay.txt`, all under `${TEAM_SCRATCH:-scratchpad/current}`. The team
+   mod stays active in this session until `/team:init` starts another run.
 
 Report which agents were released and which were refused.

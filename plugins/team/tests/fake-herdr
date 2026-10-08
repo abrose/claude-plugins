@@ -29,6 +29,13 @@ if [ -n "${FAKE_MARKER_CHECK_GROUP:-}" ] && [ "$group $sub" = "$FAKE_MARKER_CHEC
   fi
 fi
 
+# Create a caller-named file when `agent list` runs, as a stand-in for a file that
+# appears between two steps of the script under test.
+if [ -n "${FAKE_CREATE_ON_AGENT_LIST:-}" ] && [ "$group $sub" = "agent list" ]; then
+  mkdir -p "$(dirname "$FAKE_CREATE_ON_AGENT_LIST")"
+  [ -e "$FAKE_CREATE_ON_AGENT_LIST" ] || printf 'mine\n' >"$FAKE_CREATE_ON_AGENT_LIST"
+fi
+
 emit() { printf '%s\n' "$1"; }
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 

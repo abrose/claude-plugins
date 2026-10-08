@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Delete the agent record .team/<name>.json of each named agent, and the session index
+# entry <index dir>/<session>.json of its session (session from the record). /team:release
+# runs it after it closed the agent's pane. Only a plain name is accepted, so only a record
+# in this run's .team/ can go; the state files of the mod are no records. Likewise only a
+# plain session id names an index entry. A record whose session herdr still lists is kept:
+# that agent is live. The index entry goes before the record; if it cannot, the record stays.
+# Exit codes: 0 ok, 1 refused (an agent still live, not a record file, or an index entry that
+# cannot go), 2 bad arguments, 4 herdr error.
+set -euo pipefail
+
+usage_text="usage: team-forget <name> [<name> ...]"
+usage() { echo "$usage_text" >&2; exit 2; }
+
+scratch="${TEAM_SCRATCH:-scratchpad/current}"
+teamdir="$scratch/.team"
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+
+[ $# -ge 1 ] || usage
+case "$1" in
+  -h|--help) echo "$usage_text"; exit 0 ;;
+esac
+
+list="$(herdr agent list)" || exit 4
+
+index="${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}"
+
+PYTHONPATH="$lib" TEAMDIR="$teamdir" INDEX="$index" LIST="$list" python3 - "$@" <<'PY'
+import json, os, re, sys
+from teamlib import NON_RECORD_FILES
+
+teamdir, index, names = os.environ["TEAMDIR"], os.environ["INDEX"], sys.argv[1:]
+
+# Every name is checked before one record goes.
+for name in names:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) or name + ".json" in NON_RECORD_FILES:
+        print("bad name: %r" % name, file=sys.stderr)
+        sys.exit(2)
+
+try:
+    agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
+    live = {a["agent_session"]["value"]: a.get("pane_id", "?") for a in agents
+            if isinstance(a.get("agent_session"), dict) and a["agent_session"].get("value")}
+except (ValueError, AttributeError, TypeError) as e:
+    print("bad output from herdr agent list: %s" % e, file=sys.stderr)
+    sys.exit(4)
+
+refused = False
+for name in names:
+    path = os.path.join(teamdir, name + ".json")
+    if not os.path.lexists(path):
+        print("no record: %s" % name)
+        continue
+    if os.path.isdir(path) and not os.path.islink(path):
+        print("%s is not a record file" % name, file=sys.stderr)
+        refused = True
+        continue
+    try:
+        with open(path) as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        rec = {}
+    session = rec.get("session") if isinstance(rec, dict) else None
+    if not isinstance(session, str) or not session:
+        session = None
+    if session in live:
+        print("%s is still live (%s): close its pane first" % (name, live[session]), file=sys.stderr)
+        refused = True
+        continue
+    # The session index entry goes first: it needs the session from the record, and the
+    # record stays when the entry cannot go, so a retry finds both. The record is not
+    # trusted: only a plain session id names a file, and only in the index directory.
+    if session is not None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", session):
+            print("%s: session %r is not a plain id, index entry kept" % (name, session), file=sys.stderr)
+        else:
+            entry = os.path.join(index, session + ".json")
+            try:
+                if os.path.isdir(entry) and not os.path.islink(entry):
+                    raise IsADirectoryError("is a directory")
+                if os.path.lexists(entry):
+                    os.remove(entry)  # a symlink goes, its target stays
+            except OSError as e:
+                print("%s: cannot delete the index entry %s: %s" % (name, entry, e), file=sys.stderr)
+                refused = True
+                continue
+    os.remove(path)  # a symlink goes, its target stays
+    print("forgot %s" % name)
+sys.exit(1 if refused else 0)
+PY

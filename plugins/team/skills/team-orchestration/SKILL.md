@@ -116,7 +116,7 @@ moment a worker stops with a REPORT line. These twenty rules bind everyone.
 
 The orchestrator drives agents through the plugin scripts on `PATH`:
 `team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`,
-`team-status`, `team-resurrect`, and the team mod's `brief_send` tool
+`team-status`, `team-resurrect`, `team-forget`, and the team mod's `brief_send` tool
 (`mcp__team__brief_send`), which sends a kick-off by session id. After a
 restart, run `/team:resurrect`. The scripts wrap the Herdr CLI; never restate a Herdr
 command in prose. For the Herdr CLI reference, run `herdr --skill`: that is

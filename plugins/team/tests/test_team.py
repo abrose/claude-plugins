@@ -1140,6 +1140,14 @@ class TeamStatus(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.splitlines(), ["app-1-orch (w2:p1, oooo0000) working - - -"])
 
+    def test_an_agent_whose_record_was_forgotten_is_not_on_the_roster(self):
+        # F-4: /team:release deletes the record; team-status then has nothing to join, and no error.
+        self.cfg()
+        p = self.run_script("team-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.splitlines(), ["app-1-orch (w2:p1, oooo0000) working - - -"])
+
     def test_json_reports_herdr_agent_status(self):
         self.cfg()
         self.write_record("app-1-scout", "investigator", topic="digest", session="11111111aaaa")
@@ -1617,6 +1625,229 @@ class TeamResurrect(Base):
         self.assertIn("healthy maker", p.stdout)
 
 
+class TeamForget(Base):
+    """F-4: /team:release deletes the record of each agent it released, with this script."""
+
+    def exists(self, name):
+        return os.path.lexists(self.sp(".team", name + ".json"))
+
+    def test_deletes_the_record_of_the_named_agent_only(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="sid-maker")
+        write_text(self.sp(".team", "config.json"), "{}")
+        write_text(self.sp(".team", "tabs.json"), "[]")
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout"])
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(self.exists("maker"))
+        self.assertTrue(self.exists("config"))
+        self.assertTrue(self.exists("tabs"))
+
+    def test_deletes_several_records(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="sid-maker")
+        p = self.run_script("team-forget", "scout", "maker")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout", "forgot maker"])
+        self.assertFalse(self.exists("scout") or self.exists("maker"))
+
+    def test_a_record_without_a_session_goes_too(self):
+        self.write_record("scout", "investigator")
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(self.exists("scout"))
+
+    def test_a_missing_record_is_said_not_failed(self):
+        # A second release of the same name, or an agent that never had a record.
+        os.makedirs(self.sp(".team"))
+        p = self.run_script("team-forget", "ghost")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["no record: ghost"])
+
+    def test_only_a_plain_name_is_accepted(self):
+        os.makedirs(self.sp(".team"))
+        write_text(self.sp("victim.json"), "{}")
+        for bad in ("../victim", "sub/victim", "/etc/passwd", ".hidden", "-x", "a b", ""):
+            with self.subTest(name=bad):
+                p = self.run_script("team-forget", bad)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("bad name", p.stderr)
+        self.assertTrue(os.path.exists(self.sp("victim.json")))
+
+    def test_a_state_file_is_no_record(self):
+        for name in ("config", "tabs", "watch-state", "layout-flags", "delivered", "toasted"):
+            with self.subTest(name=name):
+                os.makedirs(self.sp(".team"), exist_ok=True)
+                write_text(self.sp(".team", name + ".json"), "{}")
+                p = self.run_script("team-forget", name)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertTrue(self.exists(name))
+
+    def test_one_bad_name_deletes_nothing(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.run_script("team-forget", "scout", "../x")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertTrue(self.exists("scout"))
+
+    def test_no_name_is_bad_arguments(self):
+        p = self.run_script("team-forget")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("usage: team-forget", p.stderr)
+
+    def test_help_prints_usage(self):
+        p = self.run_script("team-forget", "--help")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("usage: team-forget <name>", p.stdout)
+
+    def test_a_live_agent_keeps_its_record(self):
+        # The pane is closed first; an agent herdr still lists is not released.
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="gone0000")
+        p = self.run_script("team-forget", "scout", "maker", scenario="resurrect")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scout is still live (w1:p5): close its pane first", p.stderr)
+        self.assertTrue(self.exists("scout"))
+        self.assertFalse(self.exists("maker"))
+        self.assertEqual(p.stdout.splitlines(), ["forgot maker"])
+
+    def test_a_herdr_error_deletes_nothing(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        for scenario in ("list_fails", "bad_list"):
+            with self.subTest(scenario=scenario):
+                p = self.run_script("team-forget", "scout", scenario=scenario)
+                self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+                self.assertTrue(self.exists("scout"))
+
+    def test_only_the_record_of_this_run_goes(self):
+        run = os.path.join("work", "run")
+        os.makedirs(os.path.join(self.proj, run, ".team"))
+        write_text(os.path.join(self.proj, run, ".team", "scout.json"), "{}")
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.run_script("team-forget", "scout", env_extra={"TEAM_SCRATCH": run})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, run, ".team", "scout.json")))
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_symlink_record_is_unlinked_not_followed(self):
+        outside = os.path.join(self.proj, "outside.json")
+        write_text(outside, "{}")
+        os.makedirs(self.sp(".team"))
+        os.symlink(outside, self.sp(".team", "scout.json"))
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(os.path.exists(outside))
+
+    def test_a_directory_is_no_record(self):
+        os.makedirs(self.sp(".team", "scout.json"))
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scout is not a record file", p.stderr)
+        self.assertTrue(os.path.isdir(self.sp(".team", "scout.json")))
+
+    # OQ7: the session index entry of a forgotten agent goes with its record, so /team:release
+    # needs no shell step with ${...} for it. The session comes from the record.
+    def index_path(self, session, base=None):
+        return os.path.join(base or os.path.join(self.proj, "_index"), session + ".json")
+
+    def write_index(self, session, name, base=None):
+        os.makedirs(os.path.dirname(self.index_path(session, base)), exist_ok=True)
+        write_text(self.index_path(session, base), json.dumps({"scratch": SCRATCH, "name": name}))
+
+    def test_the_index_entry_of_the_session_goes_with_the_record(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="sid-maker")
+        self.write_index("sid-scout", "scout")
+        self.write_index("sid-maker", "maker")
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout"])
+        self.assertFalse(os.path.lexists(self.index_path("sid-scout")))
+        self.assertTrue(os.path.exists(self.index_path("sid-maker")))
+        self.assertTrue(self.exists("maker"))
+
+    def test_a_record_without_an_index_entry_is_fine(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout"])
+
+    def test_a_record_without_a_session_leaves_the_index_alone(self):
+        self.write_record("scout", "investigator")
+        self.write_index("sid-other", "other")
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(os.path.exists(self.index_path("sid-other")))
+
+    def test_the_index_follows_the_profile_without_team_index_dir(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_index("sid-scout", "scout", base=self.profile_index())
+        p = self.run_script("team-forget", "scout", env_extra=self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(self.index_path("sid-scout", base=self.profile_index())))
+
+    def test_a_session_that_is_not_a_plain_id_deletes_no_file_outside_the_index(self):
+        # The record is not trusted: "../victim" would reach proj/victim.json.
+        victim = os.path.join(self.proj, "victim.json")
+        for bad in ("../victim", "sub/x", "/etc/passwd", ".hidden", "-x", "a b", "..", "."):
+            with self.subTest(session=bad):
+                write_text(victim, "{}")
+                self.write_record("scout", "investigator", session=bad)
+                p = self.run_script("team-forget", "scout")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("index entry kept", p.stderr)
+                self.assertFalse(self.exists("scout"))
+                self.assertTrue(os.path.exists(victim))
+
+    def test_a_non_string_session_leaves_the_index_alone(self):
+        self.write_index("sid-other", "other")
+        os.makedirs(self.sp(".team"), exist_ok=True)
+        write_text(self.sp(".team", "scout.json"), json.dumps({"session": ["sid-other"]}))
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(os.path.exists(self.index_path("sid-other")))
+
+    def test_a_live_agent_keeps_its_index_entry(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_index("sid-scout", "scout")
+        p = self.run_script("team-forget", "scout", scenario="resurrect")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(self.index_path("sid-scout")))
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_herdr_error_keeps_the_index_entry(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_index("sid-scout", "scout")
+        p = self.run_script("team-forget", "scout", scenario="list_fails")
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(self.index_path("sid-scout")))
+
+    def test_a_symlink_index_entry_is_unlinked_not_followed(self):
+        outside = os.path.join(self.proj, "outside.json")
+        write_text(outside, "{}")
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(os.path.join(self.proj, "_index"))
+        os.symlink(outside, self.index_path("sid-scout"))
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(self.index_path("sid-scout")))
+        self.assertTrue(os.path.exists(outside))
+
+    def test_an_index_entry_that_cannot_go_keeps_the_record(self):
+        # The record goes last, so a retry finds both.
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(self.index_path("sid-scout"))
+        p = self.run_script("team-forget", "scout")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scout: cannot delete the index entry", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(self.exists("scout"))
+        self.assertTrue(os.path.isdir(self.index_path("sid-scout")))
+
+
 class TeamId(Base):
     def test_slug_lowercases_and_dashes(self):
         p = self.run_script("team-id", "slug", "APP-5066")
@@ -1798,7 +2029,7 @@ class TeamInit(Base):
         p = self.init()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(read_text(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")), "old brief\n")
-        self.assertEqual(sorted(os.listdir(self.sp())), [".team"])
+        self.assertEqual(sorted(os.listdir(self.sp())), [".team", "decisions-APP-2.md", "progress-APP-2.md"])
         self.assertEqual(json.loads(read_text(self.sp(".team", "config.json")))["ticket"], "APP-2")
 
     def test_archive_name_gets_a_suffix_when_taken(self):
@@ -2067,6 +2298,101 @@ class TeamInit(Base):
         cfg = json.loads(read_text(self.sp(".team", "config.json")))
         self.assertEqual(cfg["team_id"], "app-1-2")
         self.assertEqual(cfg["orchestrator"], "app-1-2-orch")
+
+    # F-1: team-init writes the decisions and plan files itself, from the templates of
+    # its own plugin root, so an envoy whose plugin lives outside its working directory
+    # never has to read them.
+    def template(self, name, ticket, root=ROOT):
+        path = os.path.join(root, "skills", "team-orchestration", "templates", name)
+        return read_text(path).replace("{{ticket}}", ticket)
+
+    def run_copy(self, root, *args, **env_extra):
+        """Run team-init from a copy of the plugin at `root`."""
+        env = self.env(**{**self.bar_env("Opus 5.5", cwd=self.proj), **env_extra})
+        return subprocess.run([os.path.join(root, "bin", "team-init"), *args],
+                              capture_output=True, text=True, env=env, cwd=self.proj)
+
+    def copy_plugin(self):
+        root = os.path.join(self.proj, "copy", "team")
+        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns("__pycache__"))
+        return root
+
+    def test_writes_the_decisions_and_plan_files_from_the_templates(self):
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(self.sp("decisions-APP-1.md")), self.template("decisions.md", "APP-1"))
+        self.assertEqual(read_text(self.sp("progress-APP-1.md")), self.template("progress.md", "APP-1"))
+        self.assertNotIn("{{ticket}}", read_text(self.sp("decisions-APP-1.md")))
+        self.assertIn("# APP-1", read_text(self.sp("progress-APP-1.md")))
+
+    def test_the_files_exist_after_every_exit_4(self):
+        # Decision 38 F2: a failed orchestrator start still leaves both files.
+        cases = {
+            "start fails": dict(),
+            "tab lookup fails": dict(env_extra={"FAKE_PANE_GET_FAILS": "1"}),
+            "envoy pane lookup fails": dict(args=("--envoy-pane", "w1:p1"), env_extra={"FAKE_PANE_GET_FAILS": "1"}),
+        }
+        for label, case in cases.items():
+            with self.subTest(label):
+                shutil.rmtree(os.path.join(self.proj, "scratchpad"), ignore_errors=True)
+                env_extra = case.get("env_extra") or self.bar_env("Sonnet 5.5", cwd=self.proj)
+                p = self.run_script("team-init", "APP-1", *case.get("args", ()), env_extra=env_extra)
+                self.assertEqual(p.returncode, 4, p.stderr)
+                self.assertTrue(os.path.exists(self.sp("decisions-APP-1.md")))
+                self.assertTrue(os.path.exists(self.sp("progress-APP-1.md")))
+
+    def test_the_templates_come_from_the_plugin_root_of_the_script(self):
+        # Not from CLAUDE_PLUGIN_ROOT (the env points at the real plugin): the copy's own templates win.
+        root = self.copy_plugin()
+        write_text(os.path.join(root, "skills", "team-orchestration", "templates", "decisions.md"), "# copy {{ticket}}\n")
+        p = self.run_copy(root, "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(self.sp("decisions-APP-1.md")), "# copy APP-1\n")
+
+    def test_an_unreadable_template_is_a_refusal_before_anything_starts(self):
+        root = self.copy_plugin()
+        os.remove(os.path.join(root, "skills", "team-orchestration", "templates", "progress.md"))
+        p = self.run_copy(root, "APP-1")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("cannot read template", p.stderr)
+        self.assertIn("progress.md", p.stderr)
+        self.assertFalse(os.path.exists(self.sp("decisions-APP-1.md")))
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith(("tab create", "agent start"))])
+
+    def test_refuses_to_overwrite_an_existing_file(self):
+        # The archive step empties the run dir, so a file can only be in the way if it appears
+        # after that. The fake herdr creates it while team-init picks its team id.
+        mine = self.sp("decisions-APP-1.md")
+        p = self.run_script("team-init", "APP-1", env_extra={"FAKE_CREATE_ON_AGENT_LIST": mine})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("refusing to overwrite: " + os.path.join(SCRATCH, "decisions-APP-1.md"), p.stderr)
+        self.assertEqual(read_text(mine), "mine\n")
+        self.assertFalse(os.path.exists(self.sp("progress-APP-1.md")))
+        self.assertFalse(os.path.exists(self.sp(".team", "config.json")))
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith(("tab create", "agent start"))])
+
+    # OQ1: the ticket is part of two file names the mod looks for, so team-init refuses a ticket
+    # that is not one plain file-name part before it archives anything.
+    def test_a_ticket_that_is_not_a_plain_name_is_bad_args_and_archives_nothing(self):
+        self.old_run()
+        for ticket in ("team/ABC-1", "a/../b", "", ".", "..", ".hidden", "-x", "a b", "a\nb", "a\\b", "ABC-1/"):
+            with self.subTest(ticket=ticket):
+                p = self.init(ticket=ticket)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("bad ticket", p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertEqual(json.loads(read_text(self.sp(".team", "config.json")))["ticket"], "APP-1")
+                self.assertEqual(read_text(self.sp("brief-scout-digest.md")), "old brief\n")
+                self.assertFalse(os.path.exists(self.archive()))
+                self.assertEqual(self.herdr_calls(), [])
+
+    def test_real_ticket_keys_are_accepted(self):
+        for ticket in ("ABC-123", "team-envoy", "PROBE-1", "v1.2_x"):
+            with self.subTest(ticket=ticket):
+                shutil.rmtree(os.path.join(self.proj, "scratchpad"), ignore_errors=True)
+                p = self.init(ticket=ticket)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertTrue(os.path.exists(self.sp("decisions-%s.md" % ticket)))
 
 
 if __name__ == "__main__":

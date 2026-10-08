@@ -70,6 +70,7 @@ In the `Team` pane, click an agent row to jump to its herdr pane. With the keybo
 | `team-slice <branch> <parent>` | Create a worktree (with the repo's own `worktree_cmd` from the overlay; refuses without one) and a Herdr tab for one slice. |
 | `team-status` | Match `herdr agent list` to `.team/` records by session id into a roster. |
 | `team-resurrect` | Relaunch workers a herdr restore marked as restored, with their saved flags. A marked worker `/clear`ed before it ran is adopted: the session its recorded pane runs, when no record claims it, becomes its identity. |
+| `team-forget <name> ...` | Delete the session index entry and the record `.team/<name>.json` of each named agent, once its pane is closed (`/team:release` runs it). Keeps both for an agent herdr still lists, and accepts only plain names and plain session ids. |
 
 ## Roles
 

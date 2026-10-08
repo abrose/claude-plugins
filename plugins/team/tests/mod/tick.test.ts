@@ -48,6 +48,17 @@ describe('agent rows', () => {
     expect(w.submits).toEqual([])
   })
 
+  test('a record deleted by /team:release leaves no row, no flag, no write and no pane close', async ($, on) => {
+    const w = await team($, on)
+    w.agents = []
+    w.files.delete(`${w.team}/app-1-scout.json`)
+    await w.clock.advance(60000)
+    expect(await agentRows($)).toEqual([])
+    expect(w.files.has(`${w.team}/app-1-scout.json`)).toBe(false)
+    expect(w.submits).toEqual([])
+    expect(w.runs.filter(argv => argv.slice(1, 3).join(' ') === 'pane close')).toEqual([])
+  })
+
   test('uses HERDR_BIN_PATH when set', async ($, on) => {
     const w = await team($, on)
     w.env.set('HERDR_BIN_PATH', '/opt/homebrew/bin/herdr')
