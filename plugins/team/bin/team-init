@@ -2,10 +2,11 @@
 # Establish a team: team id, decisions and plan files, config, allowlist baseline,
 # envoy tab record. This session becomes the envoy; the orchestrator starts in a
 # worker tab.
-# Exit codes: 0 ok, 1 refused (live agents, worktree in the way, archive failed, a
-# template unreadable, or a decisions/plan file in the way or unwritable), 2 bad
-# arguments (also a ticket that is not a plain file-name part), 4 herdr error (or the
-# orchestrator did not start).
+# Exit codes: 0 ok, 1 refused (live agents, a failed herdr agent list in that
+# check, worktree in the way, archive failed, a template unreadable, or a
+# decisions/plan file in the way or unwritable), 2 bad arguments (also a ticket
+# that is not a plain file-name part), 4 the envoy pane lookup failed or the
+# orchestrator did not start. The team id choice ignores a herdr error.
 set -euo pipefail
 
 usage_text="usage: team-init <ticket> [--envoy-pane <id>]"

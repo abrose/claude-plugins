@@ -193,7 +193,7 @@ export const register: Register = on => {
     const io = makeIo($)
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     lastBadge = null
-    await $.command.register({ name: 'team-overview', description: 'Show or hide the team overview pane' })
+    await $.command.register({ name: 'team-overview', description: 'Show or hide the Team and Questions tabs' })
     await $.tool.register(BRIEF_TOOL_SPEC)
     await $.tool.register(ASK_TOOL_SPEC)
     await $.tool.register(QUEUE_TOOL_SPEC)
@@ -223,7 +223,8 @@ export const register: Register = on => {
   on('command.run', { command: 'team-overview' }, async $ => {
     const cfg = await envoyConfig(makeIo($))
     if (!cfg) return { text: 'No team run in this session.' }
-    const open = (await $.ui.panes()).map(p => p.id)
+    // A pane that is open but not placed (a herdr pane under 144 columns) is not drawn, so it counts as closed.
+    const open = (await $.ui.panes()).filter(p => p.isPlaced).map(p => p.id)
     if (open.includes(TEAM_PANE) || open.includes(QUESTIONS_PANE)) {
       await $.ui.close({ id: TEAM_PANE })
       await $.ui.close({ id: QUESTIONS_PANE })

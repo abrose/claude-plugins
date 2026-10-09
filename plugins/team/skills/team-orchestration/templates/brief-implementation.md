@@ -26,4 +26,5 @@ destructive command without stopping to report first.
 ## Output
 - The code change in the worktree, unstaged.
 - `scratchpad/current/impl-notes-{{topic}}.md`: what changed, the gate result, any
-  numbered open question you could not resolve.
+  numbered open question you could not resolve. If only the human can answer
+  one, also file a card via `ask` (rule 21) and name the card id in your REPORT.

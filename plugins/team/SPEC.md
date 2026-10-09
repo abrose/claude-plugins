@@ -6,7 +6,8 @@ Package the orchestration workflow practised on APP-5066 (one orchestrator
 session Alfred talks to, role agents in Herdr panes, briefs as files, a
 numbered decisions file) as a plugin in the `abrose-plugins` marketplace, so
 that any project on any profile can run it with `/plugin install` plus a small
-per-project overlay. The plugin is the **kernel**: project-agnostic process,
+per-project overlay. Since 0.6.0 the human talks to an envoy session and the
+orchestrator never speaks to the human; open questions are cards. The plugin is the **kernel**: project-agnostic process,
 role definitions, templates, commands, and the glue scripts around the Herdr
 CLI. Everything about a specific repository lives in that repository's overlay
 and is never part of the plugin.
@@ -82,11 +83,14 @@ claude-plugins/                          # marketplace repo (exists)
         │   │       └── report.md
         │   ├── team-role-investigator/SKILL.md
         │   ├── team-role-implementer/SKILL.md
-        │   └── team-role-tester/SKILL.md
+        │   ├── team-role-tester/SKILL.md
+        │   └── team-role-envoy/SKILL.md
         ├── agents/
         │   ├── team-investigator.md
         │   ├── team-implementer.md
-        │   └── team-tester.md
+        │   ├── team-tester.md
+        │   ├── team-orchestrator.md
+        │   └── team-envoy.md
         ├── commands/
         │   ├── init.md                  # /team:init
         │   ├── brief.md                 # /team:brief
@@ -100,6 +104,7 @@ claude-plugins/                          # marketplace repo (exists)
         │   └── mod/                     # the team mod (Claude Code function hooks)
         │       ├── team.tsx             # register: every hook, and the Io built over $
         │       ├── io.ts, paths.ts, activation.ts, herdr.ts, tick.ts, facts.ts, brief.ts
+        │       ├── cards.ts, questions.ts, decide.ts, decisions.ts, relay.ts, badge.ts
         │       └── plan.ts, pane.tsx, watch.ts, layout.ts, reports.ts   # pure
         ├── types/index.d.ts             # the mod's state contract
         ├── bin/
@@ -109,9 +114,11 @@ claude-plugins/                          # marketplace repo (exists)
         │   ├── team-brief
         │   ├── team-slice
         │   ├── team-status
-        │   └── team-resurrect
+        │   ├── team-resurrect
+        │   └── team-forget
         ├── lib/
-        │   └── teamlib.py               # records and agent state, shared by bin/
+        │   ├── teamlib.py               # records and agent state, shared by bin/
+        │   └── plugin-dir.sh            # --plugin-dir for team-start and team-resurrect
         └── tests/
             ├── test_team.py             # stdlib unittest, subprocess the scripts
             ├── fake-herdr               # PATH shim that records calls, returns canned JSON
@@ -129,7 +136,8 @@ dependencies. `chmod +x` before commit.
 
 Verbatim rules, kept to one page. Everything else is in `references/`.
 
-1. The orchestrator plans, briefs, reads reports, and decides with the human. It
+1. The orchestrator plans, briefs, reads reports, and decides with the human
+   through cards and the envoy, never in chat. It
    composes the team on demand: it starts an agent when a task needs one, and
    never asks the human up front which roles the run will use. It fits
    `team-start --model` and `--effort` to each job: `opus-5-5` for deep
@@ -143,34 +151,41 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
    doing, it briefs an agent to do it, even when the task looks quick and even
    when no agent is running yet (start one). When you notice yourself about to do
    the work, stop and brief an agent instead.
-   The orchestrator does only these things with its own hands: talk to the human;
+   The orchestrator does only these things with its own hands: file cards with
+   `ask`; act on RELAY lines;
    read the decisions file, briefs, reports, and delivered files; run the
    `team-*` scripts; read one file or run one read-only command to get a single
    fact a brief needs or to verify one claim of a report; git fast-forward its
    own worktree. Reading to brief or to verify is never a licence to start
    investigating - one read, then delegate.
-2. The human decides. The orchestrator recommends with one sentence of reasoning
-   and names the option it leans to.
+2. The human decides, through the envoy. A card recommends one option with one
+   sentence of reasoning.
 3. Briefs are files in `scratchpad/current/`. Prompts are one line pointing at the brief.
    Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
-   suffix (3a).
-5. Agents report by name: `REPORT <name> <topic>: <summary>`. A worker writes that
+   suffix (3a). After `team-init` creates the file, the envoy is its only
+   writer, through the `decide` tool; nobody edits it by hand.
+5. Agents report by name: `REPORT <name> <topic>: <summary>`. A REPORT names the
+   cards its agent filed: `REPORT tester fixtures: 2 questions open (Q-12, Q-13)`.
+   A worker writes that
    line as plain text and stops; the Stop hook writes the report file and the
-   team mod in the orchestrator session delivers the line within 15 s. The
+   team mod in the orchestrator session delivers the line to the orchestrator
+   within 15 s. The
    deliverable is always a file. The report is a summary of at most ten lines. The
    orchestrator reads the file before discussing.
-6. Reports are discussed one at a time in arrival order. If a later report
-   reframes an open one, say so and ask to combine.
-7. Every mention of an agent to the human carries `name (pane, session)`. With
-   more than two agents alive, every status message starts with the roster.
+6. Reports reach the human only as cards. The envoy presents one group of cards
+   at a time, chosen by the human or proposed by the envoy. A DECISION line tells
+   the orchestrator what was decided; it passes the answer to the waiting worker
+   and schedules any rework an overridden assumption causes.
+7. Every mention of an agent in a card carries `name (pane, session)`.
 8. Idle is not done. A worker that goes idle without a REPORT is often waiting
    on its own subagents: leave it alone. When the team mod flags
    `idle, no report`, `agent read` that worker's pane. A `done` wait without a REPORT
    means read the screen.
-9. Only source-backed facts in every artifact. Unknowns become numbered open
-   questions, never guesses. Verify one load-bearing claim of every report
+9. Only source-backed facts in every artifact. An unknown stays a numbered open
+   question, never a guess; one that only the human can answer also becomes a
+   card via `ask` (rule 21). Verify one load-bearing claim of every report
    before relaying it.
 10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
     count in every status. A fourth round is the human's explicit exception.
@@ -191,31 +206,30 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     The human's decisions stay in the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
-14. The team mod runs in your own session. Every 15 s it flags an agent that
+14. The team mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
     turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
     layout within budget. Other state changes show only in the `Team` pane.
     Never sit blind: act on `WATCH` lines.
-15. Pane budgets: the orchestrator tab is yours (the `Team` overview is a pane
-    inside your session, not a herdr pane); a worker tab holds at most 6, tiled as a
+15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
+    tabs are panes inside the envoy session, not herdr panes); the orchestrator
+    runs in its own worker tab, which layout hygiene leaves alone; any other
+    worker tab holds at most 6, tiled as a
     2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
     empty pane closes automatically only when a team record names it (an
     agent that exited); a pane no record names, such as one a human opened by
     hand, is left alone. Open a worker tab only with `team-start --new-tab`,
-    which puts the first agent in the tab's root pane in your own workspace;
+    which puts the first agent in the tab's root pane in the caller's workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
-16. Quiet acks. A notice that needs nothing from the human gets a one-line
-    reply (the status bar alone, if you keep one): an idle notice without a
-    REPORT, a progress note. No analysis, no early findings, no word on what
-    you will ignore. Speak to the human only for a REPORT to discuss, a
-    decision, a blocked agent, or a flag you acted on.
+16. The orchestrator never speaks to the human. The envoy speaks only when the
+    human pulls; urgent cards show as a status line and a toast in the envoy
+    session, never as a turn.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
     role in parentheses, `fix round 2 (impl)`. The mark alone sets where the
     pane shows an item: flip the mark in place, never move lines between the
     DONE, RUNNING and NEXT headings. Update it after every REPORT, before
-    every `brief_send`, and whenever you ask the human to act (a
-    `- [ ] you: <action>` item, marked `[x]` when the human confirms).
+    every `brief_send`, and whenever a card asks the human to act.
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `team-slice`, which uses the repo's own
@@ -230,6 +244,10 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     dash can be typed literally), including em dash scans. If a command still
     prompts, find a simpler form instead of waiting. Such commands trigger
     permission prompts that stall the run.
+21. Every card states door (one-way or two-way) and rework (a concrete
+    estimate). Park a two-way card with about an hour of rework or less: file it
+    with `parked: true`, record the assumption in your work, and continue. Wait
+    on every other card; its `blocks` field names what waits.
 
 ---
 
@@ -246,6 +264,8 @@ Fable included, is refused with exit 2.
 | investigator | `team-investigator` | Opus 5.5 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
 | implementer | `team-implementer` | Sonnet 5.5 | medium | auto | no | code in a worktree, fix rounds, MR creation on go, Jira writes on go |
 | tester | `team-tester` | Sonnet 5.5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
+| orchestrator | `team-orchestrator` | Opus 5.5 | medium | auto | by rule 1 (no tool filter) | runs the team from a worker tab: briefs, reads reports, acts on RELAY and DECISION lines; started by `team-init`, never talks to the human |
+| envoy | `team-envoy` | Opus 5.5 in a fresh `claude --agent team-envoy` session; the human's own model otherwise | - | the session's own | In a fresh `claude --agent team-envoy` session: yes (`Edit`, `MultiEdit`, `NotebookEdit`, `Write` blocked). In the human's own session after `/team:init`: no, it keeps every tool and only the prose rule of `team-role-envoy` guards it | the human's session after `/team:init` (it only loads the `team-orchestration` and `team-role-envoy` skills), or a fresh session started with `claude --agent team-envoy`; presents cards, records decisions, relays requests |
 
 Reviewer and Mechanic are not separate agent files: a reviewer is
 `team-investigator` with `brief-review.md`; a mechanical job runs on
@@ -280,6 +300,14 @@ run the gate greps before reporting, `/spdd-sync` last when the overlay flags
 spdd). `team-tester` disallows `Edit`/`Write` outside `tests/` and scenario
 files by rule (tool filters cannot express paths; the role skill states it).
 
+`team-orchestrator` preloads only `team-orchestration`; its prompt says it never
+talks to the human in chat, files anything it needs from the human with `ask`,
+and acts on RELAY, REPORT, DECISION and WATCH lines. `team-envoy` preloads
+`team-orchestration` and `team-role-envoy` and blocks `Edit`, `MultiEdit`,
+`NotebookEdit` and `Write`: it records decisions with the `decide` tool, never
+by editing the decisions file. `team-start` knows the roles `investigator`,
+`implementer`, `tester` and `orchestrator`; the envoy is never started by it.
+
 The Investigator's read-only guarantee for code holds through two halves:
 `disallowedTools` blocks `Edit`/`MultiEdit`/`NotebookEdit` so it can never
 change an existing file, and `Write` stays available but scoped by
@@ -301,12 +329,20 @@ creates and reads these; the overlay never does.
 
 | File | Written by | Purpose |
 |---|---|---|
-| `decisions-<ticket>.md` | orchestrator | numbered, binding; header from `templates/decisions.md` |
-| `orchestration-decisions.md` | orchestrator | own calls while Alfred is away |
+| `decisions-<ticket>.md` | `team-init` (header from `templates/decisions.md`), then the `decide` tool | numbered, binding; one paragraph per decision `<n>. (<date>) <answer> Why: <rationale> Cards: <ids>.` |
+| `progress-<ticket>.md` | `team-init` (from `templates/progress.md`), then the orchestrator | the plan the `Team` pane shows |
+| `orchestration-decisions.md` | orchestrator | own calls while the human is away (rule 12; whether cards replace it is a follow-up, decision 55) |
 | `brief-<name>-<topic>.md` | `team-brief compose` | the assignment; `-revN` for follow-ups |
 | `reports/<name>-<topic>.md` | agent (via hook) | deliverable summary, deterministic path |
-| `.team/<name>.json` | `team-start`, `team-brief` | `{role, topic, brief, pane, started, cwd}` |
-| `.team/roster.md` | `team-status` | last rendered roster, for pasting into status messages |
+| `.team/config.json` | `team-init` | `{team_id, ticket, orchestrator, envoy_session, envoy_tab, orchestrator_session, orchestrator_tab}`; `envoy_tab` only with `--envoy-pane`; `orchestrator_session` and `orchestrator_tab` once the orchestrator is up. The team mod also rewrites `orchestrator_session` or `envoy_session` when that session runs `/clear` (`hooks/mod/activation.ts`); nothing else follows a new session id |
+| `.team/<name>.json` | `team-start`, `team-brief`, `brief_send`; deleted by `team-forget` | `{role, topic, brief, pane, started, cwd, session, model, effort, mode}`; `brief_send` adds `brief_sent_session` (the `SessionStart` hook removes it on `/compact`) |
+| `.team/roster.md` | `team-status` | last rendered roster, which the envoy shows on `/team:status` |
+| `.team/questions/Q-<n>.json` | the `ask` tool | one card |
+| `.team/questions/claims/<n>` | the `ask` tool | a directory per claimed card number |
+| `.team/decisions/<n>.json` | the `decide` tool | the ledger the orchestrator's tick reads, one entry per decision |
+| `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number |
+| `.team/toasted.json` | the envoy's tick | ids of urgent cards seen or toasted |
+| `.team/last-relay.txt` | the `relay` tool | the orchestrator session on the first line, then the last `RELAY` text sent to it |
 
 ### `team-start`
 
@@ -316,7 +352,8 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
            [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]
 ```
 
-1. Resolve `<role>` to the agent file, default model and default effort from
+1. Resolve `<role>` (`investigator`, `implementer`, `tester` or `orchestrator`)
+   to the agent file, default model and default effort from
    the role table. Refuse with exit 2 a model outside the allowlist, an
    effort claude does not know, or Haiku with `--mode auto`. The mode
    defaults to `auto`, or to `accept-edits` for Haiku. `accept-edits` goes
@@ -341,10 +378,17 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    Code profile), stamp it the same way: a pane's shell takes its env from the
    herdr server, so without it the worker runs in the default profile.
    `team-resurrect` adds it to its export too.
-4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --model <model id> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}'`.
+4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --session-id <uuid> --model <model id> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}' [--plugin-dir <plugin root>]`.
    `--name` gives `claude` the same resolved name Herdr knows it by, so
    `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
    cross-session messages so a peer question is never held pending approval.
+   `--plugin-dir` (from `lib/plugin-dir.sh`, which `team-resurrect` sources
+   too) hands the new `claude` the plugin this script came from: a `claude` that
+   Herdr starts in a pane loads only the installed plugin, which may lack this
+   version's `agents/team-<role>.md` and mod, and then `--agent` fails and
+   `herdr agent start` times out. The flag is left out when the script runs from
+   an installed copy (a path under `<profile>/plugins/cache/`), which loads by
+   itself. The `--dry-run` echo shows it.
 5. Pre-flight, in order: if start fails with `agent_not_ready` (an error on
    stderr, exit 1), the agent is at a startup dialog (folder trust, MCP
    servers). Never answer it: it is a security decision for the human. Abort
@@ -361,7 +405,9 @@ left; the `agent_not_ready` exit 3 above leaves its pane open, since the
 message above tells the human to answer the dialog there. Then verify the status
    bar once: model family (Opus, Sonnet, Haiku), mode (`auto` or
    `accept edits`), cwd. Abort with exit 3 and the screen text if any of the
-   three is wrong.
+   three is wrong; abort with exit 4 if the status bar cannot be read. Both
+   aborts close the pane this run created (never a caller-provided `--pane`),
+   because the agent is live and no record names its pane yet.
 6. Write `.team/<name>.json` with role, pane, started, the resolved `cwd`
    (absolute, so `team-brief prepare` can tell a worktree agent from a
    main-repo one), `session` (the uuid passed as `--session-id`), and the
@@ -449,18 +495,99 @@ every `idle`/`done` agent without a report file newer than its brief gets an
 `agent read --source recent-unwrapped --lines 8` and the last line is
 appended, so rule 8 is a glance. Writes `.team/roster.md`.
 
+The roster lists each session at most once, and it leaves out two sessions: the
+envoy (`envoy_session` in the config) and the session that runs the script
+(`TEAM_SESSION_ID`, set by the team mod). `/team:release` closes the pane of
+each agent it names (every agent on the roster with `all`), so it never closes
+its own pane or the envoy's. An agent without a session id cannot match and is
+skipped. The state files of the mod (`config.json`, `watch-state.json`,
+`tabs.json`, `layout-flags.json`, `delivered.json`, `toasted.json`) are no
+records, by name (`lib/teamlib.py`). A file under `.team/` that holds a JSON
+list or scalar is state too, not a record. The
+"before team 0.5.0" warning prints only for a config with neither
+`orchestrator_session` nor `envoy_session`.
+
+### `team-init`
+
+```
+team-init <ticket> [--envoy-pane <id>]
+```
+
+Runs in the human's session, which becomes the envoy. Needs `TEAM_SESSION_ID`
+(set by the team mod) and Claude Code 2.1.292 or newer, else exit 1. In order:
+
+1. Refuse a ticket that is not one plain file-name part (letters, digits, `.`,
+   `_`, `-`, starting with a letter or digit; the rule `team-forget` uses for
+   names) with exit 2. A ticket starting with `-` gets its own message. This
+   comes before anything is archived, so a refused ticket leaves the previous
+   run alone. `-h`/`--help` prints the usage and exits 0.
+2. Refuse (exit 1) while a previous team's agents are live, naming them. Then
+   archive the previous run and loose scratchpad entries to
+   `scratchpad/.archive/` (see Increment 2026-09-27).
+3. Choose a team id whose `<team_id>-*` name namespace is free among live
+   agents (Increment 2026-09-18).
+4. Write `decisions-<ticket>.md` and `progress-<ticket>.md` into the run dir
+   from `templates/decisions.md` and `templates/progress.md` of the plugin root
+   the script came from, with `{{ticket}}` replaced. Neither is ever
+   overwritten: an existing file, an unreadable template or an unwritable path
+   is exit 1. This comes before every step that can exit 4, so a run whose
+   orchestrator did not start still has both files, and `/team:init` needs no
+   template read of its own (a template outside the working directory is a
+   permission dialog).
+5. Write `.team/config.json` with `team_id`, `ticket`, `orchestrator`
+   (`<team_id>-orch`) and `envoy_session` (this session), and seed the safe
+   permission allowlist (`SendMessage` included).
+6. With `--envoy-pane`, record that pane's tab in `.team/tabs.json` and as
+   `envoy_tab` in the config.
+7. Start the orchestrator: `team-start orch orchestrator --new-tab --label orch
+   --cwd <current dir>` in a worker tab. If that fails, exit 4 with `orchestrator did not start:
+   <reason>`, and, for a startup dialog, the advice to answer it, close that
+   pane and run `/team:init` again. The config then holds `envoy_session`
+   only: the envoy tools work, the orchestrator half stays off.
+8. Write the orchestrator's session into the config as `orchestrator_session`,
+   then look up its tab and write it as `orchestrator_tab`. If the lookup
+   fails, exit 4 with `orchestrator started, tab lookup failed: <reason>`; the
+   orchestrator runs, without a recorded tab.
+9. Drop session index entries whose record is gone or names another session.
+10. Print `team_id=<id> config=<path>`.
+
+Exit codes: 0 ok, 1 refused (a failed `herdr agent list` in the live-agent
+check of step 2 included), 2 bad arguments (a bad ticket included), 4 the
+envoy pane lookup of step 6 failed or the orchestrator did not start (steps 7
+and 8). Step 3 ignores a herdr error.
+
+### `team-forget`
+
+```
+team-forget <name> [<name> ...]
+```
+
+Deletes the record `.team/<name>.json` of each named agent and its session
+index entry `${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-~/.claude}/team/sessions}/<session>.json`
+(session taken from the record), once its pane is closed. `/team:release` runs
+it as the last step per agent. Only a plain name is accepted (the rule of
+`team-init`'s ticket; the state files of the mod are no records), so only a
+record of this run's `.team/` can go. Likewise only a plain session id names an
+index entry; any other value skips the entry with a message, and the record
+still goes. Every name is checked before one record goes. An agent whose
+session `herdr agent list` still shows is live: both files stay and the exit is
+1. The index entry goes first; if it cannot (a directory, a permission error),
+the record stays so a retry finds both, exit 1. A symlink is removed, never
+followed. A name with no record prints `no record: <name>`. Exit codes: 0 ok, 1
+refused, 2 bad arguments, 4 herdr error.
+
 ### Commands
 
 Markdown files under `commands/`; each loads only the SKILL section it needs.
 
 | Command | Does |
 |---|---|
-| `/team:init <ticket>` | Never asks which roles (agents start on demand). Runs `team-init` (archives the previous run, records this session as `orchestrator_session`; `--help` prints its usage, and a ticket starting with `-` is refused before anything is archived), writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, writes the first roster. The team mod activates on its next tick. |
-| `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then the `brief_send` tool, then reports the status line to Alfred. |
-| `/team:status` | `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. |
-| `/team:release [name ...|all]` | For each agent: check for a report, `agent prompt <pane> "/clear"` (pane found by session id), run the overlay's `release_check` command if defined (orphan processes), close the pane (closing the last pane closes the tab), delete its session index entry. With `all`, also removes the mod's state files. Refuses to release an agent that is `working`. |
-| `/team:resurrect` | `team-resurrect`, then reports which workers it relaunched, which were healthy, and which are missing. |
-| `/team-overview` | A mod command: hides or shows the `Team` pane; the choice is kept per team. |
+| `/team:init <ticket>` | Runs in the session the human talks to, which becomes the envoy: loads the `team-orchestration` and `team-role-envoy` skills. Never asks which roles (agents start on demand). Runs `team-init <ticket> --envoy-pane <this pane>` (see [`team-init`](#team-init): it archives the previous run, writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, records this session as `envoy_session` and starts the orchestrator in a worker tab; a ticket that is not a plain name is refused with exit 2 before anything is archived; `--help` prints its usage). After exit 4 the command still tells the human the file paths, and it tells apart a failed tab lookup (the orchestrator runs: carry on), a startup dialog (answer it, close the pane, run `/team:init` again; never `team-start` by hand) and any other failed start. After a successful start, `team-status` writes the first roster, and the envoy asks the human what the orchestrator should start with and sends the answer with `relay`. After any exit 4 the command still runs `team-status`; after a failed start it skips the question and the `relay`. The `Team` and `Questions` tabs open on the mod's next tick. |
+| `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then the `brief_send` tool, then notes the status line in `progress-<ticket>.md`. The orchestrator runs it and never reports to the human (rule 16). |
+| `/team:status` | Runs in the envoy session. `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. The roster lists the orchestrator and the workers; it leaves out the envoy and the calling session. |
+| `/team:release [name ...|all]` | `all` (the end of a session) runs in the envoy session; a named release runs in the orchestrator or the envoy session. For each agent `team-status` lists (never the envoy, never the session it runs in, also for `all`): check for a report, `agent prompt <pane> "/clear"` (pane found by session id), run the overlay's `release_check` command if defined (orphan processes), close the pane (closing the last pane closes the tab), then `team-forget <name>`, which deletes its session index entry and its record. With `all`, also removes `.team/tabs.json`, `watch-state.json`, `layout-flags.json`, `toasted.json` and `last-relay.txt`, and keeps `delivered.json` (its `_decision` mark stops the next orchestrator tick from sending every DECISION line of the run again). Refuses to release an agent that is `working`, and lists as refused an agent `team-forget` keeps because herdr still shows it. |
+| `/team:resurrect` | Runs in the envoy session. `team-resurrect` relaunches the orchestrator and the workers whose `.team/restored/` mark the `SessionStart` hook set, then the command reports which it relaunched, which were healthy, and which are missing. It starts no agent that has no record. |
+| `/team-overview` | A mod command: hides or shows both envoy tabs, `Team` and `Questions`; the choice is kept per team. |
 
 ### Report hook
 
@@ -502,36 +629,71 @@ silently.
 
 ### The team mod
 
-`hooks/mod/` (TypeScript, Claude Code function hooks, Claude Code 2.1.287 or
+`hooks/mod/` (TypeScript, Claude Code function hooks, Claude Code 2.1.292 or
 newer). The engine follows `$` only into functions declared in the hooks
 module file itself, so `team.tsx` holds every hook and builds one `Io` object
 of closures over `$`; every other module takes `io` and never sees `$`.
 
-- Activation: on `session.start` it sets `TEAM_SESSION_ID` (which `team-init`
-  writes into the config) and starts a 15 s tick. A tick is a no-op unless
-  `.team/config.json`'s `orchestrator_session` is this session. On
-  `session.end` with `reason: clear` it remembers the old id; the next tick
-  writes the new id into the config when the old one was `orchestrator_session`.
-- Tick: reads the plan file, maps records to herdr agents by session id
-  (writing moved pane ids back), runs the watch rules, closes empty
-  record-named panes in worker tabs (never a pending one, never in the
-  orchestrator's own tab: the tab herdr shows its session in, and
-  `orchestrator_tab` from the config, which `team-init` records for the time
-  herdr does not know the session yet), picks up new report files (marks in
-  `.team/delivered.json`; a missing file is a baseline), and sends every
-  REPORT line, then every WATCH line, as one `$.prompt.submit`. herdr down ->
-  one `WATCH herdr unreachable: <reason>` until it is back.
-- Pane `team-overview`, title `Team`: plan (DONE, RUNNING, NEXT as glyph rows,
-  bucketed by mark, not by heading, in file order; items count only under
-  those three headings; DONE gives up its oldest items when short), agents,
-  last error, tick time.
-  Opened on activation unless hidden; `/team-overview` toggles it and keeps the
-  choice in `$.store` under `overviewHidden:<team_id>`; a close by the person
-  counts as hiding. Each agent row is a Button: a click, or its hotkey `1`-`9`
-  while the pane holds the focus (ctrl+x tab), runs `herdr agent focus <pane>`;
-  a failure shows as `focus <name>: <reason>` until the next tick.
+- Activation, per role (`roleOf`): a session holds the **orchestrator** role
+  when `.team/config.json`'s `orchestrator_session` is this session, and the
+  **envoy** role when `envoy_session` is this session. A config without
+  `envoy_session` (a run from before the envoy, kept for good) gives the
+  orchestrator session both roles. The envoy role needs no
+  `orchestrator_session`, so the envoy tools work also after a failed
+  orchestrator start. On `session.start` the mod sets `TEAM_SESSION_ID` (which
+  `team-init` writes into the config), registers the `team-overview` command and
+  the tools below, and starts a 15 s tick. A tick is a no-op for a session with
+  no role; a session that loses its role has its team status line cleared. On
+  `session.end` with `reason: clear` it remembers the old id; the next tick (or
+  a tool call or command right after the `/clear`) writes the new id into the
+  config for whichever of `orchestrator_session` and `envoy_session` held the old
+  one.
+- Tick, orchestrator half: maps records to herdr agents by session id (writing
+  moved pane ids back), runs the watch rules, closes empty record-named panes
+  in worker tabs (never a pending one, never in the orchestrator's own tab: the
+  tab herdr shows its session in, `orchestrator_tab` and `envoy_tab` from the
+  config, which `team-init` records for the time herdr does not know the
+  session yet), picks up new report files (marks in `.team/delivered.json`; a
+  missing file is a baseline) and new decisions (the ledger under
+  `.team/decisions/`, past the `_decision` mark in `delivered.json`, a missing
+  mark being 0), and sends every REPORT line, then every DECISION line, then
+  every WATCH line, as one `$.prompt.submit`. A record with role `orchestrator`
+  is skipped by report pickup and the watch rules. herdr down -> one
+  `WATCH herdr unreachable: <reason>` until it is back. Line formats:
+  `REPORT <name> <topic>: <summary>`; `DECISION <n> (Q-12 tester/fixtures, Q-13
+  tester/fixtures): <answer>`, with ` - overrides assumption Q-12` added when the
+  envoy named assumed cards the answer changes; `RELAY <message>` (below). A
+  failed submit shows as `prompt not sent: <reason>` in the `Team` pane's error
+  line, and, when another session is the envoy and no pane shows it, in the
+  session's status line until a submit succeeds.
+- Tick, envoy half: reads the plan file, the cards and the agent rows the panes
+  draw, and keeps the urgent badge (below). It sends no prompt, so in a
+  separate envoy session the mod never starts a turn. (In the single-session
+  fallback the orchestrator half of the same session still submits its lines.)
+- Panes, in the envoy session. `team` (title `Team`): the plan (DONE, RUNNING,
+  NEXT as glyph rows, bucketed by mark, not by heading, in file order; items
+  count only under those three headings; DONE gives up its oldest items when
+  short), the open questions (urgent cards first, then a row per tag with its
+  open and assumed counts), agents, last error, tick time. `questions` (title
+  `Questions`): the question log, every card of the run newest first, one row
+  `Q-<n> <status> [#<decision>] <door> <from>/<tag>: <question>`. The engine
+  draws the two as tabs in one frame; the person picks the shown tab, and an
+  urgent card never switches it. Both open on the first activation of the envoy
+  role unless hidden; `/team-overview` toggles both and keeps the choice in
+  `$.store` under `overviewHidden:<team_id>`; a close of either tab by the
+  person closes both and counts as hiding (a close by a plugin or on unload does
+  not). In a herdr pane narrower than 144 columns an open waits undrawn;
+  `/team-overview` is the way in. Each agent row is a Button: a click, or its
+  hotkey `1`-`9` while the pane holds the focus (ctrl+x tab), runs `herdr agent
+  focus <pane>`; a failure shows as `focus <name>: <reason>` until the next
+  tick.
+- Urgent badge, envoy half. The status line shows `<n> urgent: <oldest id>
+  <from>: <question>` while an `urgent` card is open or assumed, and is cleared
+  when none is. Each new urgent card gets one toast, `URGENT Q-<n> <from>:
+  <question>`; the marks are in `.team/toasted.json`, and the first run only
+  sets them (a baseline, no toast). Neither starts a model turn.
 - Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): refuses
-  outside the session that runs the team; runs
+  outside the orchestrator session; runs
   `team-brief prepare`, sends the printed kick-off with
   `$.session.send({ to: { sessionId } })`, writes `brief_sent_session`, and
   returns `<name>: <state>`. When the record's `brief_sent_session` equals its
@@ -542,6 +704,53 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   verdict, so `team-init` seeds `SendMessage` into `permissions.allow`
   (`.claude/settings.local.json`); an allow rule decides it without the
   classifier.
+- Tool `ask` (`mcp__team__ask`; an agent whose record names this session, or the
+  orchestrator; the envoy session only in a run with one session). Input: `context`, `question`, `options`
+  (each `{ option, cost }`), `recommendation`, `blocks`, `door` (`one-way` or
+  `two-way`), `rework` (a concrete estimate), `parked`, and optionally `urgent`
+  and `refs`. The mod fills `id`, `from` and `tag` (the agent's brief topic, or
+  `general` when it has none, and for the orchestrator), writes one card to
+  `.team/questions/Q-<n>.json` and returns `Q-<n>`. `parked: true` gives the card
+  status `assumed`, else `open`. It refuses, with the field named: outside a
+  team session; a missing text field; no option; a `door` that is neither value;
+  a `parked` that is not a boolean; a one-way card that is parked; no free card
+  number after 20 tries. Numbers are
+  claimed by `mkdir` of `.team/questions/claims/<n>`, so two callers never get
+  the same one.
+- Tool `queue` (`mcp__team__queue`, `{ tag? }`, envoy role only): returns
+  `{ "groups": [{ tag, count, cards }] }` for the open and assumed cards. Order
+  inside a group: urgent, one-way, open before assumed, oldest first; the groups
+  follow their first card. The optional `tag` keeps one group.
+- Tool `decide` (`mcp__team__decide`, envoy role only). Input
+  `{ cards, answer, rationale, overrides? }`, or `{ cards, obsolete: true,
+  reason }`. It reads the decisions file, takes 1 + its highest number
+  (amendments such as `3a` count under their number), appends
+  `<n>. (<date>) <answer> Why: <rationale> Cards: <ids>.`, writes the ledger
+  entry `.team/decisions/<n>.json`, marks each card `answered` with that number
+  and returns `Decision <n>`. The writes are not atomic and run in that order;
+  calls run one at a time. `overrides` lists the assumed cards the answer
+  changes; the mod cannot judge that itself. The obsolete form marks the cards
+  `obsolete` with the reason, writes no decision, and sends the orchestrator
+  nothing. It refuses: outside the envoy role; an empty or malformed `cards`
+  list; a missing `answer`, `rationale` or `reason`; a CR, LF, U+2028 or U+2029
+  in `answer` or `rationale` (the paragraph must stay one line); a card that
+  does not exist, is already answered or is already obsolete; an `overrides` id
+  that is not an assumed card of this decision; an `overrides` entry that is
+  not a `Q-<n>` id (`overrides must list Q-<n> ids`); a missing decisions file.
+- Tool `relay` (`mcp__team__relay`, `{ message }`, envoy role only): sends
+  `RELAY <message>` to `orchestrator_session` with `$.session.send` and returns
+  `sent`. Line breaks in the message (CR, LF, U+2028, U+2029) become newlines
+  and every line after the first is indented by two spaces, so no relayed line
+  starts with `REPORT`, `DECISION` or `WATCH`. It refuses: a config without
+  `envoy_session` (the session also runs the orchestrator); a config without
+  `orchestrator_session`; an empty message; a text equal to the last text sent
+  to this orchestrator session (`relay refused: same text as the last relay`,
+  because Claude Code drops a peer message identical to the previous one yet
+  reports it as sent); a message that was not delivered (`not delivered:
+  <reason>`, and it does not count as the last one). The last text is kept in
+  `.team/last-relay.txt`, with the orchestrator session on the first line, so it
+  survives an envoy `/clear` and a mod reload, and a different orchestrator
+  session never matches an old text.
 
 Resolved: Herdr's `agent_session.value` is Claude Code's `session_id` (checked
 2026-10-05 on Claude Code 2.1.287). `team-start` assigns it with
@@ -557,7 +766,7 @@ README and warns once per session for each missing file it would have used.
 
 | Path | Used by | Content |
 |---|---|---|
-| `.claude/team/project.yaml` | `team-slice`, `/team:release`, brief compose | `stacked`, `spdd`, `crit`, `tracker`, `worktree_cmd`, `release_check`, `gate_cmd` |
+| `.claude/team/project.yaml` | `team-slice`, `/team:release`, brief compose | `stacked`, `spdd`, `crit`, `tracker`, `worktree_cmd` (required by `team-slice`), `worktree_dir` (required by `team-slice`; `{branch}` placeholder), `release_check`, `gate_cmd` |
 | `.claude/team/env.md` | brief compose (section "Environment") | how to run and test locally; which worktree runs the dev server; external dependencies and who owns their logins; what never to kill or restart; a "Slice kick-off" checklist |
 | `.claude/team/gate.md` | brief compose (section "Gate") | test command, lint, the greps a delivery must pass (dash characters, decision numbers, ticket keys in comments), what is exempt |
 | `.claude/team/tracker.md` | analysis and post-notes briefs | ticket system, hygiene rules, who may write, dry-run rule |
@@ -596,13 +805,13 @@ You must NOT: <role fragment fills this>.
 
 ## Report back
 End your final turn with this line as plain text, then stop:
-REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers>
+REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers, card ids>
 Do not run any command to send it. Stopping saves your whole message to the report
 file and delivers the REPORT line to {{orchestrator}}.
 
 ## Rules
 - Shell discipline: see rule 20 of the team-orchestration skill.
-- Source-backed facts only; unknowns become numbered open questions.
+- Source-backed facts only; an unknown stays a numbered open question, never a guess; one only the human can answer also becomes a card via `ask` (rule 21).
 - No em dashes. No agent-attribution trailers in commits.
 - One thing at a time; stop after reporting.
 - If your session shows plan mode, say so immediately instead of working.
@@ -628,10 +837,11 @@ one first, no summary verdict).
 ```
 # Decisions {{ticket}}
 Numbered, dated, one paragraph each. Amendments: 3a replaces 3, 5a amends 5.
-Every brief reads this file first. Mirror to every active worktree after each append.
-
-1. (YYYY-MM-DD) ...
+Every brief reads this file first. Only the envoy writes it, through the `decide` tool.
 ```
+
+`team-init` writes the file with this header and no numbered line; the `decide`
+tool appends every decision.
 
 `templates/report.md` is the header the hook writes; agents do not fill it.
 
@@ -668,7 +878,13 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
 8b. The team mod (`claude plugin test plugins/team`, an in-memory world in
    `tests/mod/world.ts`): activation and following `/clear`, the pane and
    `/team-overview`, agent rows and pane healing, report pickup and the
-   baseline, the watch and layout rules, `brief_send`.
+   baseline, the watch and layout rules, `brief_send`, the roles
+   (`roleOf`, activation per role), `ask`, `queue`, `decide` and `relay` with
+   their refusals, the DECISION line and its mark, the urgent badge and toast.
+8c. `team-init` (ticket rule, run files, `envoy_session`, orchestrator start and
+   its exit 4 paths), `team-forget` (record, index entry, safety), `team-status`
+   (one line per session, envoy and caller skipped), `--plugin-dir` in
+   `team-start` and `team-resurrect`.
 9. A hook error (unreadable transcript) exits 0 and logs one line.
 
 ---
@@ -678,7 +894,7 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
 ```json
 {
   "name": "team",
-  "description": "Orchestrator-plus-team-agents workflow for Claude Code with Herdr: one session you talk to, role agents in panes, briefs as files, a numbered decisions file, reports by hook. Kernel only; each project adds a small overlay.",
+  "description": "Envoy-and-orchestrator workflow for Claude Code with Herdr: one envoy session you talk to, an orchestrator that runs role agents in panes, briefs as files, open questions as cards, a numbered decisions file, reports by hook. Kernel only; each project adds a small overlay.",
   "source": "./plugins/team",
   "category": "productivity"
 }
@@ -1091,3 +1307,64 @@ outside the session that runs the team, so a worker cannot brief a peer.
 `team-init` records the orchestrator's tab as `orchestrator_tab` in the
 config, and the mod exempts it from layout hygiene even while herdr does not
 know the orchestrator's session yet (just after its `/clear`).
+
+## Increment 2026-10-07
+
+Design: `docs/superpowers/specs/2026-10-07-team-envoy-and-question-queue-design.md`.
+Plan: `docs/superpowers/plans/2026-10-07-team-envoy-and-question-queue.md`.
+Version 0.6.0. Requires Claude Code 2.1.292.
+
+Open questions are cards in `.team/questions/`, filed by the orchestrator and
+the workers (the envoy session cannot, except in a run with one session) with
+the `ask` tool and closed by the `decide` tool, which numbers the
+decision, appends it to the decisions file and keeps a ledger. The human's
+session becomes the envoy: `team-init` records it as `envoy_session` and
+starts the orchestrator as a worker in its own tab. The mod runs per role:
+the orchestrator half sends REPORT, DECISION and WATCH lines; the envoy half
+draws the `Team` and `Questions` tabs, keeps an urgent badge in the status
+line, toasts each new urgent card, and serves `queue`, `decide` and `relay`.
+A team dir without `envoy_session` runs both halves in the orchestrator
+session.
+
+Changes made after the plan, while the envoy was built and live-checked:
+
+- `team-start` and `team-resurrect` pass `--plugin-dir <plugin root>` to the
+  `claude` they launch in a pane (`lib/plugin-dir.sh`), unless the script runs
+  from an installed copy. Before, the child loaded only the installed plugin,
+  which could lack this version's agent file, and `herdr agent start` timed out.
+- `team-start` closes the pane it created itself on its status bar exits (exit 3
+  for a status bar mismatch, exit 4 for a status bar it cannot read), as it
+  already did when `agent start` failed. The `agent_not_ready` exit 3 leaves the
+  pane open on purpose, so the human can answer the dialog. A pane or name that was
+  live before the call is never closed.
+- `team-init` writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the
+  plugin templates itself and never overwrites them, so `/team:init` reads no
+  template (a template outside the working directory is a permission dialog). It
+  writes `orchestrator_session` before it looks up the orchestrator's tab. It
+  refuses a ticket that is not one plain file-name part with exit 2, before the
+  archive step.
+- `relay` refuses a text equal to the last one it sent to the same orchestrator
+  session (`.team/last-relay.txt`), because Claude Code drops such a message
+  silently. Lines after the first of a relayed message are indented, and U+2028
+  and U+2029 count as line breaks.
+- `decide` refuses a CR, LF, U+2028 or U+2029 in `answer` and `rationale`.
+- `team-status` lists each session once, never the envoy and never the calling
+  session, skips an agent without a session id, and ignores a state file that
+  is a JSON list or scalar (`toasted.json` was the file that crashed it; the
+  named state files `tabs.json` and `layout-flags.json` were skipped already); the "before team 0.5.0" warning no longer fires
+  for a run with an `envoy_session`. `/team:release` walks this roster, so it
+  never closes the envoy's pane or its own.
+- New script `team-forget`: it deletes an agent's record and session index
+  entry once its pane is closed, and keeps both for an agent herdr still
+  lists. `/team:release` runs it after it closes each pane, and with `all` it
+  also removes `toasted.json` and `last-relay.txt`; it keeps `delivered.json`,
+  so the `_decision` mark survives and the orchestrator gets no old DECISION
+  line again.
+- `brief_send` refuses outside the orchestrator session with a message that
+  says so.
+- The human talks only to the envoy, so `/team:resurrect`, `/team:status` and
+  `/team:release all` run in the envoy session; `/team:release <name>` runs in
+  the orchestrator or the envoy session.
+- `/team-overview` counts a pane that is open but not placed (`isPlaced` false,
+  a herdr pane narrower than 144 columns) as not open, so the first call shows
+  the panes instead of hiding them.

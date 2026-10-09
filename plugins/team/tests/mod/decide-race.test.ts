@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { call, card, envoyTeam } from './world'
 
-const HEAD = '# Decisions APP-1\nNumbered, dated, one paragraph each. Amendments: 3a replaces 3, 5a amends 5.\nEvery brief reads this file first. Mirror to every active worktree after each append.\n'
+const HEAD = '# Decisions APP-1\nNumbered, dated, one paragraph each. Amendments: 3a replaces 3, 5a amends 5.\nEvery brief reads this file first. Only the envoy writes it, through the `decide` tool.\n'
 const file = (w: any) => `${w.cwd}/scratchpad/current/decisions-APP-1.md`
 
 describe('decide in parallel', () => {

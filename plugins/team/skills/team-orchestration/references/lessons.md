@@ -22,8 +22,10 @@ never here.
   down and numbered, it did not happen.
 - Number one-word answers too. "Yes" to a numbered question is itself a
   decision and gets its own number.
-- Mirror the decisions file into each active worktree after every append, so an
-  agent in a worktree reads the same truth.
+- The `decide` tool does not mirror the decisions file. `team-brief prepare`
+  copies the decisions file into the worktree of each agent it briefs, and the
+  orchestrator passes each DECISION line on to the waiting worker (rule 6), so
+  an agent in a worktree reads the same truth.
 - For a review or diff run, pin the exact range in the decisions file up front:
   `parent = merge-base = <sha>, head = <sha>`. Every report then cites the same
   parent, so you never reconcile "origin/main" against a merge-base label.
@@ -46,7 +48,8 @@ never here.
   REPORT summary never goes into the deliverable file. An agent that writes its
   closing summary to the deliverable path overwrites the deliverable. The summary
   can look healthy while the file holds 21 lines of a 587-line catalogue.
-- Reference every agent as `name (pane, session)` so the human can find it.
+- Reference every agent in a card as `name (pane, session)` so the human can
+  find it.
 - `team-status` lists only the agents whose session ids your `.team/` records
   hold, so agents from other sessions on this machine never show up there.
 - Names are unique by construction. `team-init` skips a `<team_id>-*` namespace
@@ -78,32 +81,35 @@ never here.
 
 ## Team mod
 
-- The watcher and the overview are the team mod in the orchestrator session:
-  nothing to start or restart. It activates within 15 s of `/team:init`, and
-  again by itself when the session comes back after a restart. The `Team`
+- The watcher is the team mod in the orchestrator session and in the envoy
+  session: nothing to start or restart. The overview and the `Questions` pane
+  show in the envoy session. The mod activates within 15 s of `/team:init`,
+  and again by itself when a session comes back after a restart. The `Team`
   pane's footer shows the last tick; a tick older than a minute means the mod
   is not running (check the Claude Code version, and that the plugin is
   enabled).
-- `/team-overview` hides or shows the `Team` pane. Closing it with ✕ or Esc
-  hides it too; the choice is kept per team.
+- `/team-overview` hides or shows both the `Team` and the `Questions` pane.
+  Closing one with ✕ or Esc hides it too; the choice is kept per team.
 - The mod flags a tab "consider release" only when the tab holds a briefed
   agent. A freshly spawned, un-briefed agent looks idle but is not a release
   candidate.
 - `team-start` marks a pane it creates as pending until its agent is live, and
   registers a spilled tab only after that. The mod never closes a pending pane
   or an empty root pane of a fresh tab.
-- The orchestrator tab is the human's own workspace. The mod never closes or
-  budget-flags panes there. Pane hygiene applies to worker tabs only.
+- The envoy tab is the human's own workspace, and the orchestrator runs in its
+  own worker tab. The mod never closes or budget-flags panes in either tab.
+  Pane hygiene applies to the other worker tabs only.
 
 ## Restarts
 
 - herdr restores panes and resumes each Claude session with the same session
   id, but not herdr names, pane env, or the team launch flags. Agents are
-  addressed by session id, so reports and briefs keep flowing; run
-  `/team:resurrect` to relaunch workers that came back without their flags
-  (otherwise briefs may wait for approval at the worker).
-- Run `/team:resurrect` before you `/clear` a restored worker. If you cleared it
-  first, resurrect adopts the session its pane now runs; check the
+  addressed by session id, so reports and briefs keep flowing. After a restart,
+  the human runs `/team:resurrect` in the envoy session. It relaunches the
+  orchestrator and the workers that came back without their flags (otherwise
+  briefs may wait for approval at the worker).
+- The human runs `/team:resurrect` before you `/clear` a restored worker. If you
+  cleared it first, resurrect adopts the session its pane now runs; check the
   `adopted session` line before the next brief.
 
 ## The absent human
@@ -122,9 +128,9 @@ use them.
   implementer keeps the own-commit invariant described in
   `templates/brief-implementation.md` and `team-role-implementer/SKILL.md`:
   it commits only what it is responsible for on its own branch, never
-  reaching up or down the stack. Mirroring the decisions file into every
-  active worktree (see "Decisions" above) matters most here, where more than
-  one worktree is live at once.
+  reaching up or down the stack. Carrying every decision to each worktree
+  (see "Decisions" above) matters most here, where more than one worktree is
+  live at once.
 - Reviewer and post-notes work: briefs on `team-investigator` using the
   `brief-review.md` and `brief-post-notes.md` templates.
 - The `spdd`, `crit`, and `tracker` keys in `project.yaml` and their

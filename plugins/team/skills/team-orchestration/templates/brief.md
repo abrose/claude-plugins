@@ -19,13 +19,13 @@ You must NOT: <role fragment fills this>.
 
 ## Report back
 End your final turn with this line as plain text, then stop:
-REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers>
+REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers, card ids>
 Do not run any command to send it. Stopping saves your whole message to the report
 file and delivers the REPORT line to {{orchestrator}}.
 
 ## Rules
 - Shell discipline: see rule 20 of the team-orchestration skill.
-- Source-backed facts only; unknowns become numbered open questions.
+- Source-backed facts only; an unknown stays a numbered open question, never a guess; one only the human can answer also becomes a card via `ask` (rule 21).
 - No em dashes. No agent-attribution trailers in commits.
 - One thing at a time; stop after reporting.
 - If your session shows plan mode, say so immediately instead of working.

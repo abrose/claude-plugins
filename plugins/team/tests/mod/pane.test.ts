@@ -57,6 +57,27 @@ describe('Team pane', () => {
     expect(w.store.get('overviewHidden:app-1')).toBe(false)
   })
 
+  test('/team-overview shows panes that are open but not placed, instead of hiding them', async ($, on) => {
+    const w = world(on)
+    w.unplaced.add('team')
+    w.unplaced.add('questions')
+    await start($)
+    w.writeJson(`${w.team}/config.json`, {
+      team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch', orchestrator_session: w.id,
+    })
+    await w.clock.advance(15000)
+    expect(w.opened).toEqual(['team', 'questions'])
+    expect(await $.command.run({ command: 'team-overview' } as never)).toMatchObject({ text: 'Team overview shown.' })
+    expect(w.closed).toEqual([])
+    expect(w.opened).toEqual(['team', 'questions', 'team', 'questions'])
+    expect(w.store.get('overviewHidden:app-1')).toBe(false)
+    // An asked open is placed at any width, so the panes are placed now and the next call hides them.
+    w.unplaced.clear()
+    expect(await $.command.run({ command: 'team-overview' } as never)).toMatchObject({ text: 'Team overview hidden.' })
+    expect([...w.closed].sort()).toEqual(['questions', 'team'])
+    expect(w.store.get('overviewHidden:app-1')).toBe(true)
+  })
+
   test('each tab opens under its own title', async ($, on) => {
     const w = await activeTeam($, on)
     expect(w.titles.get('team')).toBe('Team')

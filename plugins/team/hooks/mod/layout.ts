@@ -3,7 +3,7 @@ import type { HerdrPane } from './herdr'
 export type LayoutInput = {
   panes: HerdrPane[]
   teamTabs: string[]
-  /** The orchestrator's tabs: the human's workspace, never closed or flagged. */
+  /** The exempt tabs (the envoy's, the human's workspace, and the orchestrator's): never closed or flagged. */
   orchTabs: string[]
   namedPanes: Set<string>
   /** Pane ids team-start marked while it brings an agent up: never closed. */

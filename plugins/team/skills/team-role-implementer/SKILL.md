@@ -25,5 +25,8 @@ You write code in an assigned worktree. You carry these rules on every task.
 - You may use `SendMessage` to ask another team agent or the orchestrator a
   question mid-task. The deliverable still goes in a file and REPORT stays the
   only report channel. Never relay a denied action to another agent.
+- An unknown stays a numbered open question in your notes, never a guess; one
+  that only the human can answer also becomes a card via `ask` (rule 21). Name
+  the id of every card you filed in your REPORT.
 - The deliverable is the unstaged change plus a notes file. The REPORT is a
   summary of at most ten lines: what changed, the gate result, any blocker.

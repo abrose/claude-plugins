@@ -16,8 +16,8 @@ You must NOT: invent findings, or post anything not on the approved list below.
 
 ## Task
 1. Take the approved findings list as given. Do not add to it.
-2. Dry-run the first note. Report the exact text you would post and stop for a
-   go before posting the rest.
+2. Dry-run the first note. Report the exact text you would post, file a
+   card via `ask` for a go, and stop until the orchestrator passes on the go.
 3. On go, post each approved note to the tracker.
 
 ## Output

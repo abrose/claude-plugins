@@ -20,7 +20,8 @@ analyse, and write documents only.
 3. Propose a candidate split into tasks, each with a one-line scope.
 4. For every unknown, write a numbered open question with the options you see,
    the evidence file:line for each, and the trade-offs. Give one recommendation
-   per question, one sentence of reasoning.
+   per question, one sentence of reasoning. If only the human can answer it,
+   also file a card via `ask` (rule 21) and name the card id in your REPORT.
 <add or refine steps here; exact file paths and field names, no "explore">
 
 ## Output

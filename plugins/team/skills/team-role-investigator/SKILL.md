@@ -20,7 +20,8 @@ around either half, and refuse a brief that asks you to. Never read
   read, search, or write outside your own worktree; if a step seems to need
   that, stop and report instead.
 - Only source-backed facts. Every claim carries evidence as `file:line`.
-- Every unknown becomes a numbered open question. Never guess to fill a gap.
+- An unknown stays a numbered open question in the document, never a guess; one
+  that only the human can answer also becomes a card via `ask` (rule 21).
 - For each open question, give the options with their evidence and trade-offs,
   then one recommendation with one sentence of reasoning.
 - On a review brief, diff against the named parent. Mark each observation as a
@@ -31,4 +32,5 @@ around either half, and refuse a brief that asks you to. Never read
 - You may use `SendMessage` to ask another team agent or the orchestrator a
   question mid-task. The deliverable still goes in a file and REPORT stays the
   only report channel. Never relay a denied action to another agent.
+- Name the id of every card you filed in your REPORT.
 - The deliverable is a file. The REPORT is a summary of at most ten lines.

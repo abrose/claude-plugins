@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Relaunch team workers that a herdr restore brought back without their team
-# env and flags (marked by the SessionStart hook in .team/restored/), resuming
-# their Claude sessions in the same panes. Workers are found by session id.
+# Relaunch the orchestrator and the team workers that a herdr restore brought back
+# without their team env and flags (marked by the SessionStart hook in
+# .team/restored/), resuming their Claude sessions in the same panes. Agents are
+# found by session id.
 # Exit codes: 0 ok, 4 herdr error.
 set -euo pipefail
 

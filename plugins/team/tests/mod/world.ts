@@ -34,6 +34,8 @@ export type World = {
   /** session.send answers not delivered, with this reason. */
   sendFails: string | null
   titles: Map<string, string>
+  /** Pane ids that open but stay undrawn (isPlaced false), like in a herdr pane under 144 columns. */
+  unplaced: Set<string>
   runs: string[][]
   submits: string[]
   sends: { to: unknown; text: string }[]
@@ -128,6 +130,7 @@ export function world(on: On): World {
     toasts: [],
     sendFails: null,
     titles: new Map(),
+    unplaced: new Set(),
     runs: [],
     submits: [],
     sends: [],
@@ -247,6 +250,7 @@ export function world(on: On): World {
     w.opened.push(e.id)
     shown.add(e.id)
     w.titles.set(e.id, e.title ?? 'Team')
+    if (w.unplaced.has(e.id)) return { value: { isPlaced: false, reason: 'narrow terminal' } }
     return { value: { isPlaced: true } }
   })
   on('ui.close', ($, e) => {
@@ -255,7 +259,7 @@ export function world(on: On): World {
     return { value: undefined }
   })
   on('ui.panes', () => ({
-    value: [...shown].map(id => ({ id, title: w.titles.get(id) ?? 'Team', isShown: true, isFocused: false, isPlaced: true })),
+    value: [...shown].map(id => ({ id, title: w.titles.get(id) ?? 'Team', isShown: true, isFocused: false, isPlaced: !w.unplaced.has(id) })),
   }))
   return w
 }

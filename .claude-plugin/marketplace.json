@@ -26,7 +26,7 @@
     },
     {
       "name": "team",
-      "description": "Orchestrator-plus-team-agents workflow for Claude Code with Herdr: one session you talk to, role agents in panes, briefs as files, a numbered decisions file, reports by hook. Kernel only; each project adds a small overlay.",
+      "description": "Envoy-and-orchestrator workflow for Claude Code with Herdr: one envoy session you talk to, an orchestrator that runs role agents in panes, briefs as files, open questions as cards, a numbered decisions file, reports by hook. Kernel only; each project adds a small overlay.",
       "source": "./plugins/team",
       "category": "productivity"
     }

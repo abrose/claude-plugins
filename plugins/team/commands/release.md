@@ -4,8 +4,9 @@ argument-hint: [name ...|all]
 ---
 Release agents: $ARGUMENTS
 
-Load the `team-orchestration` skill first. Release only agents that `team-status`
-lists. Never close the pane of the session you run in, and never the envoy's pane
+Load the `team-orchestration` skill first. Run `/team:release all` (the end of
+a session) in the envoy session. Run `/team:release <name>` in the orchestrator
+session or in the envoy session. Release only agents that `team-status` lists. Never close the pane of the session you run in, and never the envoy's pane
 (`envoy_session` and `envoy_tab` in `.team/config.json`), also for `all`. If
 `team-status` fails, stop and report its error: do not pick panes by hand. For each
 named agent (or every agent when `all`):
@@ -26,8 +27,10 @@ named agent (or every agent when `all`):
    `team-forget` keeps the record of an agent that herdr still lists. If it
    refuses, the agent is still live: list it as refused in the report.
 5. When releasing `all`, also remove `.team/tabs.json`, `.team/watch-state.json`,
-   `.team/layout-flags.json`, `.team/delivered.json`, `.team/toasted.json` and
-   `.team/last-relay.txt`, all under `${TEAM_SCRATCH:-scratchpad/current}`. The team
-   mod stays active in this session until `/team:init` starts another run.
+   `.team/layout-flags.json`, `.team/toasted.json` and `.team/last-relay.txt`,
+   all under `${TEAM_SCRATCH:-scratchpad/current}`. Keep `.team/delivered.json`:
+   its `_decision` mark stops the orchestrator from getting every DECISION line
+   of the run again. The team mod stays active in the envoy session until
+   `/team:init` starts another run.
 
 Report which agents were released and which were refused.

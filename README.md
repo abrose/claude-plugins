@@ -7,7 +7,7 @@ Alfred Brose's personal Claude Code **marketplace** (`abrose-plugins`).
 | [`adhd-friendly-simple-technical-english`](plugins/adhd-friendly-simple-technical-english/) | Output style | Combines Simplified Technical English (ASD-STE100) short, direct sentences with an ADHD action-first shape (numbered, skimmable, no fluff) and keeps the depth (the "why"). Code is exempt. Select it from `/config`. |
 | [`chebu-ui`](plugins/chebu-ui/) | Mod (function hooks) | Personal UI tweaks. Bold, numbered prompts (`/prompt-style`), a `/prompts` pane with a toggle button, a separator after each turn, quiet tool rows, dim narration and framed answers. |
 | [`quota-statusline`](plugins/quota-statusline/) | `bin/` executable | A quota-spend projection engine (`quota-statusline`). Reads the Claude Code rate-limit payload, logs a rolling per-profile usage sample, and prints a JSON verdict per window (5h/7d): on pace to blow the limit before it resets, or coasting under it? The weekly projection counts active hours, not 24/7. Bring your own rendering. |
-| [`team`](plugins/team/) | Skills + agents + commands + hook + `bin/` | Orchestrator-plus-team-agents workflow with Herdr. One session you talk to, role agents in panes, briefs as files, a numbered decisions file, reports by a Stop hook. Kernel only; each project adds a small overlay. |
+| [`team`](plugins/team/) | Skills + agents + commands + hook + `bin/` | Envoy-and-orchestrator workflow with Herdr. One envoy session you talk to, an orchestrator that runs role agents in panes, briefs as files, open questions as cards, a numbered decisions file, reports by a Stop hook. Kernel only; each project adds a small overlay. |
 
 ## Install
 
@@ -74,11 +74,11 @@ plugins/quota-statusline/                        # bin/ executable plugin
 plugins/team/                                    # orchestration workflow plugin
 ├── .claude-plugin/plugin.json                  # plugin manifest
 ├── skills/                                      # protocol + role rules + templates
-├── agents/                                      # team-investigator, -implementer, -tester
-├── commands/                                     # /team:init, brief, status, release
-├── hooks/                                        # Stop hook: forwards reports
-├── bin/                                          # team-init, team-start, team-brief, team-watch, team-overview, ...
-├── lib/                                          # shared python: teamlib.py, overview.py
+├── agents/                                      # team-envoy, -orchestrator, -investigator, -implementer, -tester
+├── commands/                                     # /team:init, brief, status, release, resurrect
+├── hooks/                                        # Stop and SessionStart hooks and the team mod (hooks/mod/)
+├── bin/                                          # team-init, team-start, team-brief, team-status, team-forget, ...
+├── lib/                                          # shared: teamlib.py, plugin-dir.sh
 ├── tests/test_team.py                            # behaviour tests against fake CLIs
 ├── README.md
 └── LICENSE

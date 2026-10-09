@@ -1,5 +1,5 @@
 ---
-description: Compose a brief for an agent, fill its task section, send the kick-off, and report the status line.
+description: Compose a brief for an agent, fill its task section, send the kick-off, and note the status line in the plan file.
 argument-hint: <name> <topic> [--template <t>]
 ---
 Brief an agent: $ARGUMENTS
@@ -18,9 +18,11 @@ Load the `team-orchestration` skill first. Then:
 3. Call the `mcp__team__brief_send` tool with `{ name, topic }`. It sends the
    kick-off to the agent's Claude session and returns `<name>: <state>`. An
    error result names the reason (no record, not cleared or compacted since its last brief,
-   not delivered); report it to the human and do not re-send. A `blocked`
-   state means a dialog: inspect it and ask the human.
-4. Report the status line to the human as `name (pane, session) ...`.
+   not delivered); do not re-send. Fix the cause, or file a card via `ask` if
+   only the human can fix it. A `blocked` state means a dialog: inspect it, and
+   file a card via `ask` if only the human can answer it.
+4. Note the status line in `progress-<ticket>.md` as `name (pane, session) ...`
+   (rule 17). The orchestrator never speaks to the human (rule 16).
 
 Agent names are `<team_id>-<label>`. Pass the full name to `team-brief`, not
 the bare label.
