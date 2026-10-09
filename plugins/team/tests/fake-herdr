@@ -185,7 +185,19 @@ case "$group $sub" in
         emit '{"result":{"agents":[]}}' ;;
     esac ;;
   "pane list")
+    if [ -n "${FAKE_PANE_LIST_FAILS:-}" ]; then
+      fail '{"error":{"code":"server_unavailable"}}'
+    fi
     case "$scenario" in
+      guard)
+        # w1:tO orchestrator tab, w1:tE envoy tab, w1:tW worker tab with a live
+        # agent, w1:tG worker tab with one empty pane.
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:o1","tab_id":"w1:tO","agent_status":"working"},
+          {"pane_id":"w1:e1","tab_id":"w1:tE","agent_status":"idle"},
+          {"pane_id":"w1:w1","tab_id":"w1:tW","agent_status":"working"},
+          {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"unknown"}
+        ]}}' ;;
       panes_overbudget)
         emit '{"result":{"panes":[
           {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"working"},
@@ -227,7 +239,8 @@ case "$group $sub" in
           {"pane_id":"w1:g4","tab_id":"w1:tG","agent_status":"working"}
         ]}}' ;;
       *)
-        emit '{"result":{"panes":[]}}' ;;
+        # One empty shell pane, the w1:p2 that tests pass to --pane.
+        emit '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t1","agent_status":"unknown"}]}}' ;;
     esac ;;
   *)
     emit '{"result":{"ok":true}}' ;;

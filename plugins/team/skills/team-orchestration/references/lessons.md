@@ -116,8 +116,10 @@ never here.
   registers a spilled tab only after that. The mod never closes a pending pane
   or an empty root pane of a fresh tab.
 - The envoy tab is the human's own workspace, and the orchestrator runs in its
-  own worker tab. The mod never closes or budget-flags panes in either tab.
-  Pane hygiene applies to the other worker tabs only.
+  own worker tab, alone. The mod never closes or budget-flags panes in either
+  tab, and `team-start` refuses (exit 2) `--into-tab`, `--split` or `--pane`
+  into either tab, and `--pane` on a pane with a live agent. Pane hygiene
+  applies to the other worker tabs only.
 
 ## Restarts
 

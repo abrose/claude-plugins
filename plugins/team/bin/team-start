@@ -77,6 +77,53 @@ fi
 [ -z "$tab_label" ] || [ -n "$new_tab" ] || { echo "--label needs --new-tab" >&2; exit 2; }
 case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
 
+# The run dir, absolute. A relative TEAM_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+scratch_abs="$(team_run_dir)"
+teamcfg="$scratch_abs/.team/config.json"
+
+# Tab guard (rule 15): the orchestrator runs alone in its tab, and the envoy's
+# tab is the human's. Refuse a placement into either, and a --pane that already
+# runs a live agent, before any herdr call creates or changes a pane. Without a
+# run config there is no team yet, so nothing to guard. One `herdr pane list`
+# read answers --split and --pane; if herdr cannot answer, refuse.
+if [ -f "$teamcfg" ] && [ -z "$new_tab" ]; then
+  panes_json=""
+  if [ -n "$pane" ] || [ -n "$split_pane" ]; then
+    panes_json="$(herdr pane list 2>/dev/null)" || panes_json=""
+  fi
+  PANES_JSON="$panes_json" INTO_TAB="$into_tab" PANE="$pane" SPLIT_PANE="$split_pane" python3 - "$teamcfg" <<'PY' || exit 2
+import json, os, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    cfg = {}
+guarded = {cfg.get(k): k for k in ("orchestrator_tab", "envoy_tab") if cfg.get(k)}
+into_tab, pane, split = os.environ["INTO_TAB"], os.environ["PANE"], os.environ["SPLIT_PANE"]
+
+def refuse(msg):
+    print("team-start: " + msg, file=sys.stderr)
+    sys.exit(2)
+
+if into_tab in guarded:
+    refuse("refusing --into-tab %s: it is the %s. The orchestrator runs alone in its tab and the envoy's tab is the human's; use --new-tab." % (into_tab, guarded[into_tab].replace("_tab", "'s tab")))
+target = pane or split
+if target:
+    try:
+        panes = json.loads(os.environ["PANES_JSON"])["result"]["panes"]
+    except Exception:
+        refuse("refusing placement at %s: herdr pane list gave no readable answer, so the pane's tab and state are unknown." % target)
+    found = next((p for p in panes if p.get("pane_id") == target), None)
+    if found is None:
+        refuse("refusing placement at %s: herdr does not list that pane." % target)
+    if found.get("tab_id") in guarded:
+        refuse("refusing placement at %s: it sits in the %s (%s). The orchestrator runs alone in its tab and the envoy's tab is the human's; use --new-tab." % (target, guarded[found["tab_id"]].replace("_tab", "'s tab"), found["tab_id"]))
+    if pane and found.get("agent_status", "unknown") in ("idle", "working", "blocked", "done"):
+        refuse("refusing --pane %s: a live agent runs there (%s)." % (pane, found["agent_status"]))
+PY
+fi
+
 # A caller-provided --pane with no --cwd: read the pane's real cwd from Herdr
 # instead of defaulting to this script's own $PWD, which is wrong whenever the
 # caller runs team-start from a different directory than the pane it targets.
@@ -85,13 +132,7 @@ if [ -z "$cwd" ] && [ -n "$pane" ]; then
 fi
 [ -n "$cwd" ] || cwd="$PWD"
 
-# The run dir, absolute. A relative TEAM_SCRATCH is the project root's, not this $PWD's.
-# shellcheck source=../lib/run-dir.sh
-. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
-scratch_abs="$(team_run_dir)"
-
 label="$name"
-teamcfg="$scratch_abs/.team/config.json"
 if [ -f "$teamcfg" ]; then
   team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
   if [ -n "${team_id:-}" ]; then

@@ -214,8 +214,9 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator
-    runs in its own worker tab, which layout hygiene leaves alone; any other
-    worker tab holds at most 6, tiled as a
+    runs alone in its own worker tab, which layout hygiene leaves alone, and
+    `team-start` refuses to place another agent there or in the envoy's tab;
+    any other worker tab holds at most 6, tiled as a
     2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
     empty pane closes automatically only when a team record names it (an
     agent that exited); a pane no record names, such as one a human opened by
@@ -372,6 +373,14 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
    refuse with exit 3 if the live `herdr agent list` already holds that name: a
    name a live agent owns is not restartable without seizing its pane.
+   Tab guard (rule 15), before any herdr call that creates or changes a pane,
+   when `.team/config.json` exists: refuse with exit 2 `--into-tab` equal to
+   `orchestrator_tab` or `envoy_tab`; `--split` or `--pane` on a pane whose
+   `tab_id` is either tab; and `--pane` on a pane whose `agent_status` is
+   `idle`, `working`, `blocked` or `done`. One `herdr pane list` read
+   (`result.panes[].pane_id`, `tab_id`, `agent_status`) answers the last two. If
+   herdr gives no readable answer, or does not list the pane, refuse too.
+   `--new-tab` and a missing config are never refused.
 2. Resolve `--cwd`. If it was not given: for `--pane`, read the pane's real
    cwd from `herdr pane get <id>` (`result.pane.cwd`), never this script's own
    `$PWD`; for every other placement, default to `$PWD` as before.

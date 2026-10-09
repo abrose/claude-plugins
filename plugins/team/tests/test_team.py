@@ -817,6 +817,100 @@ class TeamStart(Base):
         self.assertIn("pane run w1:g1 export TEAM_NAME=scout TEAM_SCRATCH=%s" % self.abs_scratch(), calls)
         self.assertTrue(any("agent start scout --kind claude --pane w1:g1" in c for c in calls), calls)
 
+    # Tab guard: scenario "guard" lists the orchestrator's tab (w1:tO), the
+    # envoy's tab (w1:tE), a worker tab with a live agent (w1:w1 in w1:tW) and
+    # a worker tab with one empty pane (w1:g1 in w1:tG).
+    def guard_config(self, orchestrator_tab="w1:tO", envoy_tab="w1:tE"):
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        cfg = {}
+        if orchestrator_tab:
+            cfg["orchestrator_tab"] = orchestrator_tab
+        if envoy_tab:
+            cfg["envoy_tab"] = envoy_tab
+        write_text(os.path.join(d, "config.json"), json.dumps(cfg))
+
+    def guarded(self, *placement, env_extra=None):
+        return self.run_script("team-start", "maker", "implementer", *placement,
+                               "--cwd", self.proj, scenario="guard",
+                               env_extra={**self.bar_env("Sonnet 5.5"), **(env_extra or {})})
+
+    def assert_refused(self, p):
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertTrue(p.stderr.strip(), "a refusal says why")
+        creating = ("agent start ", "pane split", "tab create", "pane run", "pane close")
+        self.assertFalse(any(c.startswith(creating) for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_guard_refuses_into_tab_of_the_orchestrator(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--into-tab", "w1:tO"))
+
+    def test_guard_refuses_into_tab_of_the_envoy(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--into-tab", "w1:tE"))
+
+    def test_guard_refuses_split_of_a_pane_in_the_orchestrator_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--split", "w1:o1", "right"))
+
+    def test_guard_refuses_split_of_a_pane_in_the_envoy_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--split", "w1:e1", "down"))
+
+    def test_guard_refuses_pane_in_the_orchestrator_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:o1"))
+
+    def test_guard_refuses_pane_in_the_envoy_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:e1"))
+
+    def test_guard_refuses_pane_that_runs_a_live_agent(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:w1"))
+
+    def test_guard_refuses_when_herdr_cannot_name_the_pane(self):
+        self.guard_config()
+        p = self.guarded("--pane", "w1:g1", env_extra={"FAKE_PANE_LIST_FAILS": "1"})
+        self.assert_refused(p)
+        p = self.guarded("--split", "w1:g1", "right", env_extra={"FAKE_PANE_LIST_FAILS": "1"})
+        self.assert_refused(p)
+
+    def test_guard_refuses_a_pane_herdr_does_not_list(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:nope"))
+
+    def test_guard_allows_new_tab(self):
+        self.guard_config()
+        p = self.guarded("--new-tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_allows_into_tab_of_another_worker_tab(self):
+        self.guard_config()
+        p = self.guarded("--into-tab", "w1:tG")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_allows_split_of_a_pane_in_a_worker_tab(self):
+        self.guard_config()
+        p = self.guarded("--split", "w1:g1", "right")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_allows_pane_that_is_empty_in_a_worker_tab(self):
+        # The team-slice path: an empty pane in a fresh worker tab.
+        self.guard_config()
+        p = self.guarded("--pane", "w1:g1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_does_nothing_without_a_run_config(self):
+        p = self.guarded("--into-tab", "w1:tG")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = self.guarded("--pane", "w1:o1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_works_with_only_one_tab_recorded(self):
+        self.guard_config(envoy_tab=None)
+        self.assert_refused(self.guarded("--into-tab", "w1:tO"))
+
 
 class AgentFiles(unittest.TestCase):
     def frontmatter(self, name):
