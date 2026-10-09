@@ -207,7 +207,10 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     decisions only.
 14. The team mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
     turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
-    layout within budget. Other state changes show only in the `Team` pane.
+    layout within budget. Other state changes show only in the `Team` pane,
+    which also lists an idle worker tab as `consider release`. The orchestrator's
+    mod releases an agent by itself after 30 minutes idle with a fresh REPORT and
+    no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator
@@ -661,19 +664,47 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `WATCH herdr unreachable: <reason>` until it is back. Line formats:
   `REPORT <name> <topic>: <summary>`; `DECISION <n> (Q-12 tester/fixtures, Q-13
   tester/fixtures): <answer>`, with ` - overrides assumption Q-12` added when the
-  envoy named assumed cards the answer changes; `RELAY <message>` (below). A
+  envoy named assumed cards the answer changes; `RELAY <message>` (below);
+  `released <name> (<pane>) after 30 min idle` (the auto-release, below). A
   failed submit shows as `prompt not sent: <reason>` in the `Team` pane's error
   line, and, when another session is the envoy and no pane shows it, in the
   session's status line until a submit succeeds.
+- Auto-release, orchestrator half. `watch-state.json` keeps `_release_since`: per
+  agent, since when herdr showed it `idle` or `done` with a fresh report (a
+  `REPORT` line, not older than the brief), without a break. `working`,
+  `blocked`, a lost report or herdr going down resets it. After
+  `RELEASE_AFTER_MIN` (30) minutes the mod releases the agent, only when it has
+  no open or assumed card (`from` is its name), its pane is in a team tab (one
+  listed in `tabs.json`, the tabs a team start made, as for the idle rows) that
+  is not exempt (the orchestrator's own, `orchestrator_tab`, `envoy_tab`), and
+  it is not the mod's own session. An agent placed with `team-start --pane` or
+  `--split` in a tab `tabs.json` does not list is never released. An agent without a report is never released:
+  the `idle, no report` flag stays. The steps are those of `/team:release
+  <name>`, once each, in order: `herdr agent prompt <pane> /clear --wait`
+  (`agent_prompt_stalled` is the expected answer), `herdr pane close <pane>`,
+  then `team-forget <name>` (the session index entry, then the record). The
+  release is marked tried in `_release_tried` before the first step, so a tick
+  that overlaps, or a step that fails, never starts it twice. A failed step
+  stops the release and sends `WATCH <name>: auto-release failed at <step>:
+  <reason>` (`clear`, `close pane` or `team-forget`); the tried mark stays
+  while the agent stays idle or done with its report, and clears when it
+  worked, blocked or lost its report, or when herdr was down in between (the
+  tick clears every timer and mark then); the agent is then tried again after
+  a fresh 30 minutes. A release that went through
+  sends `released <name> (<pane>) after 30 min idle`. The overlay's
+  `release_check` does not run in the mod.
 - Tick, envoy half: reads the plan file, the cards and the agent rows the panes
-  draw, and keeps the urgent badge (below). It sends no prompt, so in a
+  draw, the idle worker tabs, and keeps the urgent badge (below). It sends no prompt, so in a
   separate envoy session the mod never starts a turn. (In the single-session
   fallback the orchestrator half of the same session still submits its lines.)
 - Panes, in the envoy session. `team` (title `Team`): the plan (DONE, RUNNING,
   NEXT as glyph rows, bucketed by mark, not by heading, in file order; items
   count only under those three headings; DONE gives up its oldest items when
   short), the open questions (urgent cards first, then a row per tag with its
-  open and assumed counts), agents, last error, tick time. `questions` (title
+  open and assumed counts), agents, one row per idle worker tab (`tab w4:t19
+  idle, consider release (w4:p3K done)`: every pane there idle or done, every
+  briefed agent with a fresh report, the pane statuses seen; it is no WATCH
+  line), last error, tick time. `questions` (title
   `Questions`): the question log, every card of the run newest first, one row
   `Q-<n> <status> [#<decision>] <door> <from>/<tag>: <question>`. The engine
   draws the two as tabs in one frame; the person picks the shown tab, and an
@@ -1367,3 +1398,30 @@ Changes made after the plan, while the envoy was built and live-checked:
 - `/team-overview` counts a pane that is open but not placed (`isPlaced` false,
   a herdr pane narrower than 144 columns) as not open, so the first call shows
   the panes instead of hiding them.
+
+## Increment 2026-10-09
+
+The false `WATCH layout: tab <id> idle, consider release` flag (decisions 16,
+63 and 64). Cause: the flag had no time term, so it fired within one 15 s tick
+of every REPORT of a briefed agent, while rule 11 reuses such agents with
+`/compact` and a new brief; a line read later named a tab whose agent worked
+again. It also carried no evidence of what the mod saw.
+
+- The tab-level `idle, consider release` is no WATCH line. The `Team` pane lists
+  it, with the pane statuses seen: `tab w4:t19 idle, consider release (w4:p3K
+  done)`. The rule is unchanged: every pane of a worker tab is idle or done and
+  every briefed agent there has a fresh report. The envoy half computes the
+  rows itself from herdr and the report files, so a row never outlives the
+  state it shows.
+- The orchestrator half releases an agent by itself after 30 minutes
+  (`RELEASE_AFTER_MIN`, `release.ts`) of continuous `idle` or `done` with a
+  fresh report, when it has no open or assumed card and its pane is in a team
+  tab (`tabs.json`) that is not exempt. The timer is `_release_since` in `watch-state.json`, the same
+  pattern as `_idle_since`. The steps are those of `/team:release <name>`:
+  `/clear`, close the pane, `team-forget`. The mod sends `released <name>
+  (<pane>) after 30 min idle` after each, and `WATCH <name>: auto-release
+  failed at <step>: <reason>` when a step fails; it never retries in a loop
+  (`_release_tried`; the mark clears when the agent worked, blocked or lost its
+  report, or herdr was down).
+- Not done in the mod: the overlay's `release_check`, and the check that the
+  context gauge reads 0 percent after the `/clear`.

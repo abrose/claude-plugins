@@ -16,12 +16,13 @@ import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './deci
 import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
 import { pickDecisions } from './decisions'
-import { agentRows, newReportLines, readLedger, readRecords, syncPanes, watchTick } from './tick'
+import { agentRows, idleTabRows, newReportLines, readLedger, readRecords, syncPanes, watchTick } from './tick'
 import type { TeamRecord } from './tick'
 
 export const TICK_MS = 15000
 const active = atom({ plugin: 'team', key: 'active' } as const, false)
 const agents = atom({ plugin: 'team', key: 'agents' } as const, [] as TeamAgentRow[])
+const idle = atom({ plugin: 'team', key: 'idleTabs' } as const, [] as string[])
 const plan = atom({ plugin: 'team', key: 'plan' } as const, null as TeamPlan | null)
 const cards = atom({ plugin: 'team', key: 'cards' } as const, [] as TeamCard[])
 const urgent = atom({ plugin: 'team', key: 'urgent' } as const, 0)
@@ -102,6 +103,9 @@ async function showPanes($: EngineInterface, teamId: string): Promise<void> {
 
 const NOT_SENT = 'prompt not sent: '
 
+/** The tabs layout hygiene and the release leave alone, besides the tab of the session itself. */
+const exemptTabs = (cfg: TeamConfig) => [cfg.orchestrator_tab, cfg.envoy_tab].filter((t): t is string => !!t)
+
 /** Sets the status line when its text differs from the one this module set last. */
 async function setStatus($: EngineInterface, text: string | undefined): Promise<void> {
   if (text === lastBadge) return
@@ -120,8 +124,10 @@ async function orchestratorHalf(
   await syncPanes(io, teamdir, records, listed)
   const run = await runDir(io)
   const now = await $.clock.now()
-  const exempt = [cfg.orchestrator_tab, cfg.envoy_tab].filter((t): t is string => !!t)
-  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exempt)
+  // A card still waiting for the human (open, or parked and so assumed) holds its sender's release back.
+  const waiting = new Set((await readCards(io, teamdir))
+    .filter(c => c.status === 'open' || c.status === 'assumed').map(c => c.from))
+  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exemptTabs(cfg), waiting)
   const reports = await newReportLines(io, run, teamdir, records)
   const decisions = pickDecisions(await readLedger(io, teamdir), reports.delivered._decision)
   const lines = [...reports.lines, ...decisions.lines, ...watch]
@@ -149,6 +155,8 @@ async function envoyHalf(
   await update($, cards, () => found)
   const rows = agentRows(records, listed)
   await update($, agents, () => rows)
+  const idleRows = await idleTabRows(io, await runDir(io), teamdir, records, listed, await $.session.id(), exemptTabs(cfg))
+  await update($, idle, () => idleRows)
   await update($, error, () => (listed.ok ? '' : `herdr: ${listed.reason}`))
   await urgentBadge($, io, teamdir, found)
 }
@@ -257,6 +265,7 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     return drawPane({ Box, Text, Button } as never, {
       agents: await read($, agents),
+      idle: await read($, idle),
       plan: await read($, plan),
       cards: await read($, cards),
       planPath: await read($, planPath),

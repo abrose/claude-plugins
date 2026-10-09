@@ -33,6 +33,7 @@ declare module 'claude-code' {
     team: {
       active: boolean
       agents: TeamAgentRow[]
+      idleTabs: string[]
       plan: TeamPlan | null
       cards: TeamCard[]
       urgent: number

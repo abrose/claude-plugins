@@ -4,6 +4,10 @@ export type WatchMemory = {
   agents: Record<string, string>
   _flagged: Record<string, boolean>
   _idle_since: Record<string, number>
+  /** Since when each agent has been idle or done with a fresh report, without a break. The auto-release timer. */
+  _release_since?: Record<string, number>
+  /** Agents whose release was tried and stopped: not tried again until they work, block or lose their report. */
+  _release_tried?: Record<string, boolean>
   herdr_down?: boolean
 }
 
@@ -14,11 +18,17 @@ export function watchLines(
   now: number,
   after: number,
 ): { blocked: string[]; lines: string[]; mem: WatchMemory } {
-  const next: WatchMemory = { agents: {}, _flagged: {}, _idle_since: {}, herdr_down: mem.herdr_down }
+  const next: WatchMemory = {
+    agents: {}, _flagged: {}, _idle_since: {}, _release_since: {}, _release_tried: {}, herdr_down: mem.herdr_down,
+  }
   const blocked: string[] = []
   const lines: string[] = []
   for (const f of facts) {
     next.agents[f.name] = f.state
+    if ((f.state === 'idle' || f.state === 'done') && f.hasFreshReport) {
+      next._release_since![f.name] = mem._release_since?.[f.name] ?? now
+      if (mem._release_tried?.[f.name]) next._release_tried![f.name] = true
+    }
     const old = mem.agents[f.name]
     if (old !== undefined && old !== f.state && f.state === 'blocked') {
       blocked.push(f.name)

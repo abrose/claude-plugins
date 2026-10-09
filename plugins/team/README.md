@@ -131,7 +131,9 @@ envoy half in the one it names as `envoy_session`. A config without
 
 Every 15 s the **envoy half** reads the plan, the cards and the agent rows for
 the `Team` and `Questions` tabs, sets the status line to `<n> urgent: ...` while
-an urgent card waits, and toasts each new urgent card once. It sends no prompt.
+an urgent card waits, and toasts each new urgent card once. It also lists each
+idle worker tab in the `Team` tab as `tab <id> idle, consider release (<pane>
+<status>, ...)`. It sends no prompt.
 
 Every 15 s the **orchestrator half**:
 
@@ -149,12 +151,21 @@ Every 15 s the **orchestrator half**:
   names that pane and `team-start` has not marked it pending; never touches the
   orchestrator's own tab (the one herdr shows it in, and `orchestrator_tab` in
   the config) or the envoy's (`envoy_tab`), which `team-init` records;
-- flags a tab over its pane budget, and a worker tab whose agents are all idle
-  or done with fresh reports, as a release candidate;
+- flags a tab over its pane budget;
+- releases an agent that stayed `idle` or `done` with a fresh report for 30
+  minutes (the timer resets on `working` or `blocked`), when it has no open or
+  assumed card and its pane is in a team tab (one `team-start` made, listed in
+  `tabs.json`) that is not the orchestrator's, the envoy's or the human's. It
+  runs the steps of `/team:release <name>` (`/clear`, close the pane,
+  `team-forget`), then sends `released <name> (<pane>) after 30 min idle`.
+  A step that fails sends `WATCH <name>: auto-release failed at <step>: <reason>`
+  and is not tried again until the agent worked, blocked or lost its report, or
+  herdr was down (then after a fresh 30 minutes). An agent without a report
+  is never released;
 - sends one `WATCH herdr unreachable: <reason>` while herdr is down.
 
 All lines of one tick go out as one prompt (`REPORT` lines first, then
-`DECISION`, then `WATCH`), which waits until the orchestrator is idle and never
+`DECISION`, then `WATCH` and the `released` lines), which waits until the orchestrator is idle and never
 touches a draft you are typing.
 
 The `brief_send` tool (`mcp__team__brief_send`) sends a kick-off by session id.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { layoutActions } from '../../hooks/mod/layout'
+import { idleTabs, layoutActions } from '../../hooks/mod/layout'
 import { watchLines } from '../../hooks/mod/watch'
 import { team } from './world'
 
@@ -64,15 +64,38 @@ describe('layoutActions', () => {
     r = layoutActions({ ...base, panes, prevFlags: r.flags })
     expect(r.fresh).toEqual([])
   })
-  test('a never-briefed idle tab gets no release suggestion', () => {
+  test('an idle tab with a fresh report is no WATCH flag any more', () => {
     const panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
-    expect(layoutActions({ ...base, panes }).fresh).toEqual([])
+    const r = layoutActions({ ...base, panes, briefed: new Map([['w1:p2', true]]) })
+    expect(r.flags).toEqual([])
+    expect(r.fresh).toEqual([])
   })
-  test('suggests release only when every briefed agent there has a fresh report', () => {
-    const panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
-    expect(layoutActions({ ...base, panes, briefed: new Map([['w1:p2', false]]) }).fresh).toEqual([])
-    expect(layoutActions({ ...base, panes, briefed: new Map([['w1:p2', true]]) }).fresh)
-      .toEqual(['layout: tab w1:t2 idle, consider release'])
+})
+
+describe('idleTabs', () => {
+  const base = {
+    teamTabs: ['w1:t2'], orchTabs: ['w1:t1'], namedPanes: new Set(['w1:p2', 'w1:p3']),
+    pending: new Set<string>(), briefed: new Map<string, boolean>(), prevFlags: [] as string[],
+  }
+  const idle = (id: string, status = 'idle') => ({ pane_id: id, tab_id: 'w1:t2', agent_status: status })
+  test('a never-briefed idle tab is not listed', () => {
+    expect(idleTabs({ ...base, panes: [idle('w1:p2')] })).toEqual([])
+  })
+  test('lists a tab only when every briefed agent there has a fresh report, with the pane statuses seen', () => {
+    const panes = [idle('w1:p2'), idle('w1:p3', 'done')]
+    expect(idleTabs({ ...base, panes, briefed: new Map([['w1:p2', true], ['w1:p3', false]]) })).toEqual([])
+    expect(idleTabs({ ...base, panes, briefed: new Map([['w1:p2', true], ['w1:p3', true]]) }))
+      .toEqual(['tab w1:t2 idle, consider release (w1:p2 idle, w1:p3 done)'])
+  })
+  test('a working or blocked pane keeps the tab out', () => {
+    const briefed = new Map([['w1:p2', true], ['w1:p3', true]])
+    expect(idleTabs({ ...base, panes: [idle('w1:p2'), idle('w1:p3', 'working')], briefed })).toEqual([])
+    expect(idleTabs({ ...base, panes: [idle('w1:p2'), idle('w1:p3', 'blocked')], briefed })).toEqual([])
+  })
+  test('an exempt tab and a tab no team start made are not listed', () => {
+    const briefed = new Map([['w1:p2', true]])
+    expect(idleTabs({ ...base, orchTabs: ['w1:t2'], panes: [idle('w1:p2')], briefed })).toEqual([])
+    expect(idleTabs({ ...base, teamTabs: [], panes: [idle('w1:p2')], briefed })).toEqual([])
   })
 })
 
@@ -164,6 +187,45 @@ describe('watch in the tick', () => {
     w.panes = Array.from({ length: 7 }, (_, i) => ({ pane_id: `w1:x${i}`, tab_id: 'w1:t1', agent_status: 'working' }))
     await w.clock.advance(15000)
     expect(w.submits.filter(s => s.includes('layout'))).toEqual([])
+  })
+
+  describe('an idle tab with fresh reports', () => {
+    async function idleTab($: any, on: any) {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])
+      w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: 'b', pane: 'w1:p2', session: 'sid-scout' })
+      w.write(`${w.cwd}/scratchpad/current/reports/app-1-scout-dig.md`, 'REPORT app-1-scout dig: done\n', 1000)
+      w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+      w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
+      return w
+    }
+    const teamPane = ($: any) => $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                              requestId: 'team', props: { bodyColumns: 80 } } as never)
+
+    test('sends no WATCH line', async ($, on) => {
+      const w = await idleTab($, on)
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+      expect(w.submits.join('\n')).not.toContain('consider release')
+    })
+
+    test('shows in the Team pane with the pane statuses seen', async ($, on) => {
+      const w = await idleTab($, on)
+      await w.clock.advance(15000)
+      const ui = await teamPane($)
+      expect(await ui.find({ type: 'Text', text: 'tab w1:t2 idle, consider release (w1:p2 idle)' })).toBeDefined()
+    })
+
+    test('leaves the Team pane when an agent there works again', async ($, on) => {
+      const w = await idleTab($, on)
+      await w.clock.advance(15000)
+      w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'working' }]
+      w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+      await w.clock.advance(15000)
+      const ui = await teamPane($)
+      expect(await ui.find({ type: 'Text', text: /consider release/ })).toBeUndefined()
+    })
   })
 
   test('a report file without a REPORT line still counts as no report', async ($, on) => {

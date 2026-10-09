@@ -82,7 +82,10 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     decisions only.
 14. The team mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
     turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
-    layout within budget. Other state changes show only in the `Team` pane.
+    layout within budget. Other state changes show only in the `Team` pane,
+    which also lists an idle worker tab as `consider release`. The orchestrator's
+    mod releases an agent by itself after 30 minutes idle with a fresh REPORT and
+    no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator

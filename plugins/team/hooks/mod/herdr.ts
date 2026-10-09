@@ -49,8 +49,20 @@ export async function herdrFocus(io: Io, pane: string): Promise<string> {
   return r.exitCode === 0 ? '' : failure(r)
 }
 
-export async function herdrClose(io: Io, pane: string): Promise<void> {
-  await herdr(io, ['pane', 'close', pane])
+/** Closes the pane; the failure reason, or '' when it worked. */
+export async function herdrClose(io: Io, pane: string): Promise<string> {
+  const r = await herdr(io, ['pane', 'close', pane])
+  return r.exitCode === 0 ? '' : failure(r)
+}
+
+/**
+ * Sends /clear to the agent in the pane; the failure reason, or '' when it worked. /clear never starts a
+ * turn, so herdr always answers `agent_prompt_stalled`: that is the expected answer here, not a failure.
+ */
+export async function herdrClear(io: Io, pane: string): Promise<string> {
+  const r = await herdr(io, ['agent', 'prompt', pane, '/clear', '--wait'])
+  if (r.exitCode === 0 || `${r.stderr}${r.stdout}`.includes('agent_prompt_stalled')) return ''
+  return failure(r)
 }
 
 export function bySession(list: HerdrAgent[]): Map<string, HerdrAgent> {

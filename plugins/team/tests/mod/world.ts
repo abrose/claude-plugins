@@ -19,6 +19,8 @@ export type World = {
   agents: HerdrAgent[]
   panes: HerdrPane[]
   herdrFails: string | null
+  /** Calls that fail with this stderr, by "agent prompt", "pane close" or "team-forget". */
+  fails: Map<string, string>
   /** The next prompt.submit throws, once. */
   submitFails: boolean
   /** The next fs.write throws, once. */
@@ -122,6 +124,7 @@ export function world(on: On): World {
     agents: [],
     panes: [],
     herdrFails: null,
+    fails: new Map(),
     submitFails: false,
     writeFails: false,
     dirs: new Set(),
@@ -211,11 +214,29 @@ export function world(on: On): World {
     if (bin.endsWith('/bin/team-brief')) {
       return out(`Read scratchpad/current/brief-${argv[2]}-${argv[4]}.md and execute it fully.\n`)
     }
+    if (bin.endsWith('/bin/team-forget')) {
+      const name = argv[1] ?? ''
+      const failure = w.fails.get('team-forget')
+      if (failure) return out('', 1, failure)
+      const session = (w.files.has(`${w.team}/${name}.json`) ? w.json(`${w.team}/${name}.json`) : {}).session
+      if (w.agents.some(a => a.agent_session?.value === session)) return out('', 1, `${name} is still live: close its pane first`)
+      w.files.delete(`${w.team}/${name}.json`)
+      return out(`forgot ${name}\n`)
+    }
     if (w.herdrFails) return out('', 1, w.herdrFails)
     const sub = argv.slice(1, 3).join(' ')
     if (sub === 'agent list') return out(JSON.stringify({ result: { agents: w.agents } }))
     if (sub === 'pane list') return out(JSON.stringify({ result: { panes: w.panes } }))
     if (sub === 'agent read') return out('Allow Bash(rm -rf build)? [y/n]\n')
+    // /clear never starts a turn, so herdr answers a prompt of it with agent_prompt_stalled.
+    if (sub === 'agent prompt') return out('', 1, w.fails.get(sub) ?? 'agent_prompt_stalled')
+    if (sub === 'pane close') {
+      const failure = w.fails.get(sub)
+      if (failure) return out('', 1, failure)
+      w.agents = w.agents.filter(a => a.pane_id !== argv[3])
+      w.panes = w.panes.filter(p => p.pane_id !== argv[3])
+      return out('{"result":{"ok":true}}')
+    }
     return out('{"result":{"ok":true}}')
   })
   on('env.get', ($, e) => ({ value: w.env.get(e.name) }))

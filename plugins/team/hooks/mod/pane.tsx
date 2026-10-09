@@ -12,6 +12,8 @@ export const closeHides = (origin: { kind: string }) => origin.kind === 'person'
 
 export type PaneView = {
   agents: TeamAgentRow[]
+  /** Rows of idle team tabs, with the pane statuses seen: "tab w4:t19 idle, consider release (w4:p3K done)". */
+  idle: string[]
   plan: TeamPlan | null
   cards: TeamCard[]
   planPath: string
@@ -38,7 +40,7 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
       .filter(s => tally(g.cards, s) > 0)
       .map(s => `${tally(g.cards, s)} ${s}`)].join('  ')
   const questionRows = (unresolved.length === 0 ? 1 : 1 + urgent.length + groups.length) + 1
-  const room = Math.max(view.rows - view.agents.length - 12 - questionRows, 3)
+  const room = Math.max(view.rows - view.agents.length - view.idle.length - 12 - questionRows, 3)
   const fitted = view.plan ? fitPlan(view.plan, room) : null
   const item = (i: TeamPlanItem) => (
     <Text wrap="truncate-end" dimColor={MARK[i.mark].dim}>
@@ -86,6 +88,7 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
           {`${a.state.padEnd(8)} ${a.name} ${a.pane}`}
         </Button>
       ))}
+      {view.idle.map(row => <Text key={row} dimColor wrap="truncate-end">{row}</Text>)}
       {view.error !== '' && <Text color="red" wrap="truncate-end">{view.error}</Text>}
       <Text dimColor>tick {view.tickAt || '-'}</Text>
     </Box>

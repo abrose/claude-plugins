@@ -90,9 +90,19 @@ never here.
   enabled).
 - `/team-overview` hides or shows both the `Team` and the `Questions` pane.
   Closing one with ✕ or Esc hides it too; the choice is kept per team.
-- The mod flags a tab "consider release" only when the tab holds a briefed
-  agent. A freshly spawned, un-briefed agent looks idle but is not a release
-  candidate.
+- The `Team` pane lists a tab as "consider release" only when the tab holds a
+  briefed agent and every briefed agent there has a fresh report. A freshly
+  spawned, un-briefed agent looks idle but is not a release candidate. The row
+  is no WATCH line and names the pane statuses seen. An agent that stays idle
+  with a fresh report and no open or assumed card for 30 minutes is released by the mod
+  itself (`/clear`, close the pane, forget the record), but only in a team tab
+  (one `team-start` made, listed in `tabs.json`); it then sends
+  `released <name> (<pane>) after 30 min idle`. To keep an agent past that, give
+  it its next brief within 30 minutes, or leave a card of it open. A
+  `WATCH <name>: auto-release failed at <step>` line means the mod stopped at
+  that step and will not try again until the agent worked, blocked or lost its
+  report, or herdr was down (then after a fresh 30 minutes): finish the
+  release by hand with `/team:release <name>`.
 - `team-start` marks a pane it creates as pending until its agent is live, and
   registers a spilled tab only after that. The mod never closes a pending pane
   or an empty root pane of a fresh tab.

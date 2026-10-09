@@ -25,21 +25,27 @@ function lastTurnAt(tail: string): number | null {
   return last
 }
 
+/** A report counts as fresh when it holds a REPORT line and is not older than the agent's brief. */
+export async function reportIsFresh(io: Io, run: string, name: string, rec: TeamRecord): Promise<boolean> {
+  const reportPath = `${run}/reports/${name}-${rec.topic}.md`
+  const briefAt = await io.mtime(`${run}/brief-${name}-${rec.topic}.md`)
+  const reportAt = await io.mtime(reportPath)
+  const text = reportAt === null ? null : await io.readText(reportPath)
+  return reportAt !== null && text !== null && reportLine(text) !== null
+    && !(briefAt !== null && reportAt < briefAt)
+}
+
 /**
- * What the watch rules need about one agent. A report counts as fresh when it
- * holds a REPORT line and is not older than the agent's brief. A stop counts
- * as quiet when it is `after` seconds old, newer than the brief, and no turn
- * started since.
+ * What the watch rules need about one agent. A report counts as fresh as in
+ * `reportIsFresh`. A stop counts as quiet when it is `after` seconds old,
+ * newer than the brief, and no turn started since.
  */
 export async function gatherFacts(
   io: Io, run: string, name: string, rec: TeamRecord, state: string, now: number, after: number,
 ): Promise<AgentFacts> {
   const reportPath = `${run}/reports/${name}-${rec.topic}.md`
   const briefAt = await io.mtime(`${run}/brief-${name}-${rec.topic}.md`)
-  const reportAt = await io.mtime(reportPath)
-  const text = reportAt === null ? null : await io.readText(reportPath)
-  const hasFreshReport = reportAt !== null && text !== null && reportLine(text) !== null
-    && !(briefAt !== null && reportAt < briefAt)
+  const hasFreshReport = await reportIsFresh(io, run, name, rec)
 
   let quietSinceStop = false
   const stop = await readJson<{ transcript: string; at: number }>(io, `${run}/.team/stops/${name}.json`)

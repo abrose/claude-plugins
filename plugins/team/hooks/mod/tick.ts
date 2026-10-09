@@ -1,10 +1,12 @@
 import type { TeamAgentRow } from '../../types'
 import type { DecisionEntry } from './decide'
-import { gatherFacts } from './facts'
+import { gatherFacts, reportIsFresh } from './facts'
 import type { AgentFacts } from './facts'
 import { bySession, herdrClose, herdrDialog, herdrPanes } from './herdr'
-import type { HerdrAgent, HerdrListing } from './herdr'
-import { layoutActions } from './layout'
+import type { HerdrAgent, HerdrListing, HerdrPane } from './herdr'
+import { idleTabs, layoutActions } from './layout'
+import type { LayoutInput } from './layout'
+import { releasedLine, releaseAgent, releaseDue, releaseFailedLine } from './release'
 import { watchLines } from './watch'
 import type { WatchMemory } from './watch'
 import { readJson, writeJson } from './io'
@@ -79,19 +81,42 @@ export async function readLedger(io: Io, teamdir: string): Promise<DecisionEntry
 
 const NO_REPORT_AFTER = 120
 
+/** The input of the layout rules from the records and herdr's two listings; `myId` is this session's id. */
+async function layoutInput(
+  io: Io, teamdir: string, records: Record<string, TeamRecord>, agents: HerdrAgent[], panes: HerdrPane[],
+  briefed: Map<string, boolean>, myId: string, exemptTabs: string[],
+): Promise<LayoutInput> {
+  const marked = new Set(await io.list(`${teamdir}/pending`))
+  const pendingFile = (pane: string) => pane.replace(/[:/]/g, '_')
+  return {
+    panes,
+    teamTabs: (await readJson<string[]>(io, `${teamdir}/tabs.json`)) ?? [],
+    orchTabs: [agents.find(a => a.agent_session?.value === myId)?.tab_id, ...exemptTabs]
+      .filter((t): t is string => !!t),
+    namedPanes: new Set(Object.values(records).map(r => r.pane)),
+    pending: new Set(panes.map(p => p.pane_id).filter(id => marked.has(pendingFile(id)))),
+    briefed,
+    prevFlags: (await readJson<string[]>(io, `${teamdir}/layout-flags.json`)) ?? [],
+  }
+}
+
 /**
  * WATCH lines for this tick: blocked turns (with their dialog), missing
  * reports, layout flags, and herdr going down. Closes empty panes a record
- * names. Remembers what it flagged in watch-state.json and layout-flags.json.
+ * names. Releases an agent that stayed idle with a fresh report for
+ * RELEASE_AFTER_MIN, and adds one line for it. Remembers what it flagged in
+ * watch-state.json and layout-flags.json. `openCards` names the agents with
+ * a card still open.
  */
 export async function watchTick(
   io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
-  listed: HerdrListing, now: number, myId: string, exemptTabs: string[],
+  listed: HerdrListing, now: number, myId: string, exemptTabs: string[], openCards: Set<string>,
 ): Promise<string[]> {
   const memPath = `${teamdir}/watch-state.json`
   const mem = (await readJson<WatchMemory>(io, memPath)) ?? { agents: {}, _flagged: {}, _idle_since: {} }
   if (!listed.ok) {
-    await writeJson(io, memPath, { ...mem, herdr_down: true })
+    // A timer must not run across a gap in what herdr shows: the agent may have worked in it.
+    await writeJson(io, memPath, { ...mem, _release_since: {}, _release_tried: {}, herdr_down: true })
     return mem.herdr_down ? [] : [`WATCH herdr unreachable: ${listed.reason}`]
   }
 
@@ -103,6 +128,26 @@ export async function watchTick(
     if (agent) facts.push(await gatherFacts(io, run, name, rec, agent.agent_status, now, NO_REPORT_AFTER))
   }
   const result = watchLines(facts, { ...mem, herdr_down: false }, now, NO_REPORT_AFTER)
+  const panes = await herdrPanes(io)
+  const layout = panes
+    ? await layoutInput(io, teamdir, records, listed.agents,
+        panes, new Map(facts.filter(f => records[f.name]?.brief).map(f => [f.pane, f.hasFreshReport])), myId, exemptTabs)
+    : null
+  // Never the agent of this session. A release not yet tried is marked tried before its steps run, so an
+  // overlapping tick, or a step that fails, cannot start it a second time.
+  const due = layout && panes
+    ? releaseDue({
+        facts: facts.filter(f => records[f.name]?.session !== myId),
+        since: result.mem._release_since ?? {},
+        tried: result.mem._release_tried ?? {},
+        paneTab: new Map(panes.map(p => [p.pane_id, p.tab_id])),
+        teamTabs: layout.teamTabs,
+        orchTabs: layout.orchTabs,
+        openCards,
+        now,
+      })
+    : []
+  for (const name of due) result.mem._release_tried![name] = true
   await writeJson(io, memPath, result.mem)
   const out: string[] = []
   for (const line of result.lines) {
@@ -112,26 +157,41 @@ export async function watchTick(
     out.push(dialog ? `${line}: ${dialog}` : line)
   }
 
-  const panes = await herdrPanes(io)
-  if (panes) {
-    const flagsPath = `${teamdir}/layout-flags.json`
-    const marked = new Set(await io.list(`${teamdir}/pending`))
-    const pendingFile = (pane: string) => pane.replace(/[:/]/g, '_')
-    const layout = layoutActions({
-      panes,
-      teamTabs: (await readJson<string[]>(io, `${teamdir}/tabs.json`)) ?? [],
-      orchTabs: [listed.agents.find(a => a.agent_session?.value === myId)?.tab_id, ...exemptTabs]
-        .filter((t): t is string => !!t),
-      namedPanes: new Set(Object.values(records).map(r => r.pane)),
-      pending: new Set(panes.map(p => p.pane_id).filter(id => marked.has(pendingFile(id)))),
-      briefed: new Map(facts.filter(f => records[f.name]?.brief).map(f => [f.pane, f.hasFreshReport])),
-      prevFlags: (await readJson<string[]>(io, flagsPath)) ?? [],
-    })
-    for (const pane of layout.closes) await herdrClose(io, pane)
-    await writeJson(io, flagsPath, layout.flags)
-    out.push(...layout.fresh.map(f => `WATCH ${f}`))
+  if (layout) {
+    const actions = layoutActions(layout)
+    for (const pane of actions.closes) await herdrClose(io, pane)
+    await writeJson(io, `${teamdir}/layout-flags.json`, actions.flags)
+    out.push(...actions.fresh.map(f => `WATCH ${f}`))
+  }
+  for (const name of due) {
+    const pane = facts.find(f => f.name === name)?.pane ?? ''
+    const released = await releaseAgent(io, name, pane)
+    out.push(released.ok ? releasedLine(name, pane) : releaseFailedLine(name, released.step, released.reason))
   }
   return out
+}
+
+/**
+ * The rows of idle team tabs for the Team overview, with the pane statuses seen. Read-only: the envoy session
+ * draws them. The orchestrator's mod releases an agent after RELEASE_AFTER_MIN only in a team tab (tabs.json),
+ * the same tabs as these rows, and not in an exempt tab; this list adds the rule that every briefed agent in
+ * the tab has reported.
+ */
+export async function idleTabRows(
+  io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
+  listed: HerdrListing, myId: string, exemptTabs: string[],
+): Promise<string[]> {
+  if (!listed.ok) return []
+  const panes = await herdrPanes(io)
+  if (!panes) return []
+  const sessions = bySession(listed.agents)
+  const briefed = new Map<string, boolean>()
+  for (const [name, rec] of Object.entries(records)) {
+    if (rec.role === 'orchestrator' || !rec.brief) continue
+    const agent = rec.session ? sessions.get(rec.session) : undefined
+    if (agent) briefed.set(agent.pane_id, await reportIsFresh(io, run, name, rec))
+  }
+  return idleTabs(await layoutInput(io, teamdir, records, listed.agents, panes, briefed, myId, exemptTabs))
 }
 
 /** A pane id herdr moved is written back to the record, and into `records` for the rest of the tick. */
