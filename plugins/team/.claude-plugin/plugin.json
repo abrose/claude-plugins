@@ -1,6 +1,6 @@
 {
   "name": "team",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Envoy-and-orchestrator workflow for Claude Code with Herdr: one envoy session you talk to, an orchestrator that runs role agents in panes, briefs as files, open questions as cards, a numbered decisions file, reports by hook. Kernel only; each project adds a small overlay.",
   "author": {
     "name": "Alfred Brose"
