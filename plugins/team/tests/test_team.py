@@ -1012,6 +1012,29 @@ class TeamSlice(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(read_text(os.path.join(self.proj, "feat", "scratchpad", "current", "specs", "a.md")), "spec\n")
 
+    def test_generated_types_land_at_the_same_relative_path(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        for plugin in ("team", "other"):
+            types = os.path.join(self.proj, "plugins", plugin, ".claude-plugin", "types")
+            os.makedirs(os.path.join(types, "claude-code"))
+            write_text(os.path.join(types, "tsconfig.json"), "{%s}\n" % plugin)
+            write_text(os.path.join(types, "claude-code", "index.d.ts"), "// %s\n" % plugin)
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for plugin in ("team", "other"):
+            base = os.path.join(self.proj, "feat", "plugins", plugin, ".claude-plugin", "types")
+            self.assertEqual(read_text(os.path.join(base, "tsconfig.json")), "{%s}\n" % plugin)
+            self.assertEqual(read_text(os.path.join(base, "claude-code", "index.d.ts")), "// %s\n" % plugin)
+
+    def test_a_missing_types_folder_is_skipped(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "plugins", "team", ".claude-plugin"))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "feat", "plugins")))
+
     def test_rejects_unsafe_git_ref(self):
         p = self.run_script("team-slice", "evil;rm -rf x", "main", "--label", "T1 X y", env_extra=self.WS)
         self.assertEqual(p.returncode, 2)

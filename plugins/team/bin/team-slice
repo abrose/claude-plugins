@@ -69,6 +69,14 @@ if [ "${#copies[@]}" -gt 0 ]; then
   [ "$(yget spdd)" = "true" ] && echo "warning: untracked spdd files under a copied dir do not travel" >&2
 fi
 
+# Generated mod types are git-ignored, so a new worktree lacks them. Copy each
+# plugins/*/.claude-plugin/types from this checkout to the same path in the worktree.
+for src in plugins/*/.claude-plugin/types; do
+  [ -d "$src" ] || continue
+  mkdir -p "$wt/$(dirname "$src")"
+  cp -R "$src" "$wt/$(dirname "$src")/"
+done
+
 # herdr resolves a relative --cwd against its own process, not this script's
 # caller cwd, so hand it the absolute path.
 wt_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$wt")"

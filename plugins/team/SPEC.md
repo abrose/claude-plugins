@@ -494,7 +494,13 @@ team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--cop
    in the new worktree.
 3. Copy every `--copy` directory (design folder, decisions, mockups) into the
    new worktree's `scratchpad/current/`. Warn about untracked spdd files that
-   will not travel.
+   will not travel. `--copy` targets the run dir by design, never the
+   worktree's source tree.
+   Also copy every `plugins/*/.claude-plugin/types/` folder from the checkout
+   the script runs in to the same relative path in the new worktree. These
+   generated mod types are git-ignored, so a new worktree lacks them, and
+   `claude plugin test` and editors need them. A missing folder is skipped,
+   not an error. No flag and no `project.yaml` key controls this.
 4. `herdr tab create --workspace <live workspace> --cwd <worktree> --label "<label>" --no-focus`
    and one pane, where the live workspace comes from `herdr pane current
    --current` (never the stale spawn-time `$HERDR_WORKSPACE_ID`); print
