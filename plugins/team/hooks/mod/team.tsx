@@ -10,7 +10,7 @@ import type { Io } from './io'
 import { herdrAgents, herdrFocus } from './herdr'
 import type { HerdrListing } from './herdr'
 import { closeHides, drawPane, drawQuestions, hiddenKey, QUESTIONS_PANE, TEAM_PANE } from './pane'
-import { runDir, setCwd, teamDir } from './paths'
+import { mainCheckout, runDir, teamDir } from './paths'
 import { parsePlan } from './plan'
 import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
 import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
@@ -34,9 +34,30 @@ let tickTimer: Timer | null = null
 // The status text this module set last; null until a session sets one, so its first tick always sets the line.
 let lastBadge: string | undefined | null = null
 
+// The main checkout, resolved once per session root: the 15 s tick must not spawn git every time.
+// Keyed by the session root, which moves on a /cd. A git that could not run is not cached.
+let mainRoot: { from: string; path: string } | null = null
+
+async function projectRoot($: EngineInterface): Promise<string> {
+  const from = await $.session.root()
+  if (mainRoot?.from === from) return mainRoot.path
+  const path = await mainCheckout(from, async args => {
+    try {
+      const r = await $.process.run(['git', 'rev-parse', ...args], { cwd: from, timeoutMs: 5000 })
+      return r.exitCode === 0 ? r.stdout.trim() : ''
+    } catch {
+      return null
+    }
+  })
+  if (path === null) return from
+  mainRoot = { from, path }
+  return path
+}
+
 function makeIo($: EngineInterface): Io {
   return {
     sessionId: () => $.session.id(),
+    root: () => projectRoot($),
     envGet: async name =>
       name === 'TEAM_SCRATCH' ? $.env.get('TEAM_SCRATCH') : $.env.get('HERDR_BIN_PATH'),
     setSessionEnv: id => $.env.set('TEAM_SESSION_ID', id),
@@ -196,8 +217,8 @@ async function tick($: EngineInterface, io: Io): Promise<void> {
 }
 
 export const register: Register = on => {
+  mainRoot = null
   on('session.start', async ($, e, next) => {
-    setCwd(e.cwd)
     const io = makeIo($)
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     lastBadge = null

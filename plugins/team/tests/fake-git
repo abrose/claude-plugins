@@ -4,6 +4,12 @@
 # argument so a following `cd <worktree>` works without a real worktree.
 set -euo pipefail
 printf '%s\n' "$*" >>"${FAKE_GIT_LOG:?FAKE_GIT_LOG unset}"
+# `git rev-parse --show-toplevel` answers $FAKE_GIT_TOPLEVEL (the project root, wherever the
+# caller stands); unset, it prints nothing, like any other fake call.
+if [ "${1:-}" = "rev-parse" ] && [ "${2:-}" = "--show-toplevel" ] && [ -n "${FAKE_GIT_TOPLEVEL:-}" ]; then
+  printf '%s\n' "$FAKE_GIT_TOPLEVEL"
+  exit 0
+fi
 if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
   shift 2
   while [ $# -gt 0 ]; do

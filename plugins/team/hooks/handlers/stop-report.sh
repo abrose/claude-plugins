@@ -8,12 +8,32 @@ set -uo pipefail
 payload="$(cat)"
 
 PAYLOAD="$payload" python3 - <<'PY' || true
-import os, json, datetime, sys, re, time
+import os, json, datetime, sys, re, time, subprocess
+
+def run_dir(cwd):
+    """The run dir. An absolute TEAM_SCRATCH wins. A relative one (or none) is the main checkout's,
+    never the payload cwd's: the agent may have moved its cwd with a shell cd or into a worktree."""
+    scratch = os.environ.get("TEAM_SCRATCH") or "scratchpad/current"
+    if os.path.isabs(scratch):
+        return scratch
+    def git(*args):
+        try:
+            return subprocess.run(["git", "rev-parse", *args], cwd=cwd,
+                                  capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            return ""
+    # The main checkout (parent of the common git dir) is the same from a linked worktree.
+    common = git("--path-format=absolute", "--git-common-dir")
+    if os.path.isabs(common) and os.path.basename(common) == ".git":
+        top = os.path.dirname(common)
+    else:
+        top = git("--show-toplevel")
+    return os.path.join(top or cwd, scratch)
 
 def log(msg):
     try:
         cwd = json.loads(os.environ.get("PAYLOAD", "{}")).get("cwd", ".")
-        d = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad/current"), ".team")
+        d = os.path.join(run_dir(cwd), ".team")
         os.makedirs(d, exist_ok=True)
         open(os.path.join(d, "hook.log"), "a").write(msg + "\n")
     except Exception:
@@ -54,7 +74,7 @@ try:
     # session index, which follows /clear, names it by session id.
     def by_env():
         name = os.environ.get("TEAM_NAME", "")
-        scratch = os.path.join(cwd, os.environ.get("TEAM_SCRATCH", "scratchpad/current"))
+        scratch = run_dir(cwd)
         return (name, os.path.join(scratch, ".team")) if name else None
 
     def by_session():

@@ -6,10 +6,12 @@
 # Exit codes: 0 ok, 4 herdr error.
 set -euo pipefail
 
-scratch="${TEAM_SCRATCH:-scratchpad/current}"
-teamdir="$scratch/.team"
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
-scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$scratch")"
+# The run dir, absolute. A relative TEAM_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$lib/run-dir.sh"
+scratch_abs="$(team_run_dir)"
+teamdir="$scratch_abs/.team"
 index_dir="${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}"
 # A restored pane's shell has the herdr server's env, not this session's
 # Claude profile, so the relaunch passes the profile on.

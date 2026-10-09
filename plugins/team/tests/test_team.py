@@ -698,6 +698,31 @@ class TeamStart(Base):
                             and "--env TEAM_SCRATCH=%s " % self.abs_scratch() in c
                             for c in self.herdr_calls()), self.herdr_calls())
 
+    def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
+        # The caller stands in a sub directory (a shell cd). The stamped TEAM_SCRATCH and the
+        # agent record still use the project root's run dir.
+        sub = os.path.join(self.proj, "sub", "dir")
+        os.makedirs(sub)
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, cwd=sub,
+                            env_extra={**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export TEAM_NAME=scout TEAM_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
+        self.assertTrue(os.path.exists(self.sp(".team", "scout.json")))
+        self.assertFalse(os.path.exists(os.path.join(sub, SCRATCH)))
+
+    def test_absolute_scratch_is_stamped_as_is_after_a_cd(self):
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, cwd=sub,
+                            env_extra={**self.bar_env("Opus 5.5"), "TEAM_SCRATCH": self.sp()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export TEAM_NAME=scout TEAM_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
+        self.assertTrue(os.path.exists(self.sp(".team", "scout.json")))
+
     def test_namespaced_name_exported_to_pane(self):
         self.config(team_id="app-1", orch="app-1-orch")
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
@@ -1295,6 +1320,33 @@ class StopHook(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
 
+    def test_relative_scratch_resolves_from_the_project_root_not_the_payload_cwd(self):
+        # No absolute TEAM_SCRATCH (a session that predates the stamp). The payload cwd moved
+        # into a sub directory; the run dir stays under the project root.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        sub = os.path.join(self.proj, "sub", "dir")
+        os.makedirs(sub)
+
+        p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": sub},
+                          TEAM_NAME="scout", TEAM_SCRATCH=SCRATCH, FAKE_GIT_TOPLEVEL=self.proj)
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
+        self.assertFalse(os.path.exists(os.path.join(sub, SCRATCH)))
+
+    def test_absolute_scratch_wins_over_the_project_root(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+
+        p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": sub},
+                          TEAM_NAME="scout", TEAM_SCRATCH=self.sp(), FAKE_GIT_TOPLEVEL=sub)
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
+
     def test_no_team_name_is_silent(self):
         self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("REPORT scout digest: done")
@@ -1500,6 +1552,17 @@ class TeamResurrect(Base):
             % os.path.realpath(ROOT), calls)
         self.assertFalse(os.path.exists(self.sp(".team", "restored", "scout")))
         self.assertIn("relaunched scout (w1:p5)", p.stdout)
+
+    def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
+        self.setup_team()
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        p = self.run_script("team-resurrect", scenario="resurrect", cwd=sub,
+                            env_extra={"FAKE_GIT_TOPLEVEL": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p5 export TEAM_NAME=scout TEAM_SCRATCH=%s" % os.path.realpath(self.sp()),
+                      self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".team", "restored", "scout")))
 
     def resurrect_argv(self, p, name="scout"):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -1877,6 +1940,85 @@ class TeamId(Base):
         self.assertEqual(p.returncode, 2)
 
 
+class LinkedWorktreeRoot(Base):
+    """Real git, no fake-git. In a linked worktree `git rev-parse --show-toplevel` is the worktree,
+    but the run dir belongs to the main checkout (the parent of the common git dir)."""
+
+    def setUp(self):
+        super().setUp()
+        self.main = os.path.realpath(os.path.join(self.proj, "main"))
+        os.makedirs(self.main)
+        self.wt = os.path.join(self.proj, "wt")
+        for args in (["init", "-q"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+                     ["worktree", "add", "-q", self.wt]):
+            subprocess.run(["git", *args], cwd=self.main, check=True, capture_output=True)
+        self.wt = os.path.realpath(self.wt)
+        self.want = os.path.join(self.main, SCRATCH)
+        # fake-herdr and fake-claude on PATH, real git behind them.
+        self.herdr_shim = os.path.join(self.proj, "_herdr_shim")
+        os.makedirs(self.herdr_shim)
+        for tool in ("herdr", "claude"):
+            os.symlink(os.path.join(HERE, "fake-" + tool), os.path.join(self.herdr_shim, tool))
+
+    def real_env(self, **extra):
+        e = self.env(TEAM_SCRATCH=None, **extra)
+        e["PATH"] = self.herdr_shim + os.pathsep + os.environ["PATH"]
+        return e
+
+    def run_dir_from(self, cwd):
+        src = os.path.join(ROOT, "lib", "run-dir.sh")
+        return subprocess.run(["bash", "-c", '. "$1"; team_run_dir', "bash", src],
+                              capture_output=True, text=True, env=self.real_env(), cwd=cwd)
+
+    def test_run_dir_from_inside_a_linked_worktree_is_the_main_checkouts(self):
+        p = self.run_dir_from(self.wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), self.want)
+
+    def test_run_dir_from_a_sub_directory_of_a_linked_worktree_is_the_main_checkouts(self):
+        sub = os.path.join(self.wt, "a", "b")
+        os.makedirs(sub)
+        self.assertEqual(self.run_dir_from(sub).stdout.strip(), self.want)
+
+    def test_run_dir_from_the_main_checkout_is_unchanged(self):
+        sub = os.path.join(self.main, "a")
+        os.makedirs(sub)
+        self.assertEqual(self.run_dir_from(self.main).stdout.strip(), self.want)
+        self.assertEqual(self.run_dir_from(sub).stdout.strip(), self.want)
+
+    def test_run_dir_outside_any_repo_falls_back_to_pwd(self):
+        plain = os.path.join(self.proj, "plain")
+        os.makedirs(plain)
+        self.assertEqual(self.run_dir_from(plain).stdout.strip(), os.path.join(os.path.realpath(plain), SCRATCH))
+
+    def test_stop_hook_from_inside_a_linked_worktree_reports_to_the_main_checkout(self):
+        os.makedirs(os.path.join(self.want, ".team"))
+        write_text(os.path.join(self.want, ".team", "scout.json"), json.dumps(
+            {"role": "investigator", "topic": "digest", "brief": "b", "pane": "w1:p2", "session": "s"}))
+        tr = os.path.join(self.proj, "tr.jsonl")
+        write_text(tr, json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "REPORT scout digest: done"}]}}) + "\n")
+        p = subprocess.run(
+            ["bash", os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")],
+            input=json.dumps({"session_id": "s", "transcript_path": tr, "cwd": self.wt}),
+            capture_output=True, text=True, env=self.real_env(TEAM_NAME="scout"), cwd=self.wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.want, "reports", "scout-digest.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
+
+    def test_team_init_from_inside_a_linked_worktree_uses_the_main_checkout(self):
+        env = self.real_env(**self.bar_env("Opus 5.5", cwd=self.main))
+        p = subprocess.run([os.path.join(BIN, "team-init"), "APP-1"],
+                           capture_output=True, text=True, env=env, cwd=self.wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.want, "decisions-APP-1.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.main, ".claude", "settings.local.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".claude")))
+        self.assertIn("TEAM_SCRATCH=%s" % self.want, " ".join(self.herdr_calls()))
+
+
 class TeamInit(Base):
     ALLOW = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
 
@@ -2004,6 +2146,19 @@ class TeamInit(Base):
 
     def archive(self, *parts):
         return os.path.join(self.proj, "scratchpad", ".archive", *parts)
+
+    def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
+        # The envoy session ran a shell cd. The run dir, the settings file and the orchestrator's
+        # stamped TEAM_SCRATCH all belong to the project root, not the sub directory.
+        sub = os.path.join(self.proj, "sub", "dir")
+        os.makedirs(sub)
+        p = self.run_script("team-init", "APP-1", cwd=sub, env_extra={"FAKE_GIT_TOPLEVEL": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp("decisions-APP-1.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, ".claude", "settings.local.json")))
+        self.assertFalse(os.path.exists(os.path.join(sub, "scratchpad")))
+        self.assertFalse(os.path.exists(os.path.join(sub, ".claude")))
+        self.assertIn("TEAM_SCRATCH=%s" % os.path.realpath(self.sp()), " ".join(self.herdr_calls()))
 
     def test_help_prints_usage_and_touches_nothing(self):
         self.old_run()

@@ -387,6 +387,17 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    caller-provided `--pane`. When the caller has `CLAUDE_CONFIG_DIR` (a Claude
    Code profile), stamp it the same way: a pane's shell takes its env from the
    herdr server, so without it the worker runs in the default profile.
+   The stamped `TEAM_SCRATCH` is `team_run_dir` of `lib/run-dir.sh`, shared by
+   `team-init`, `team-start` and `team-resurrect`: an absolute `TEAM_SCRATCH`
+   as given, else the value (default `scratchpad/current`) under the project
+   root of the caller, symlinks resolved. The project root is the main
+   checkout: the parent of `git rev-parse --path-format=absolute
+   --git-common-dir` (the same from a linked worktree, where `--show-toplevel`
+   would give the worktree), else the git top level, else `$PWD`. It is never
+   taken from the caller's `$PWD` alone, since a shell `cd` moves that.
+   `team-init` also stands in that project root before it writes anything, so
+   the run dir, `.claude/settings.local.json` and the orchestrator's cwd agree
+   after a `cd`.
    `team-resurrect` adds it to its export too.
 4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --session-id <uuid> --model <model id> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}' [--plugin-dir <plugin root>]`.
    `--name` gives `claude` the same resolved name Herdr knows it by, so
@@ -611,7 +622,10 @@ enabled, so it must be silent and cheap when it does not apply:
    `transcript_path`, `cwd`, `session_id`).
 2. Find the agent: `TEAM_NAME` and `TEAM_SCRATCH` from the environment
    (`team-start` stamps both onto the pane; `TEAM_SCRATCH` is absolute; both
-   survive `/clear`, not a restart), else the payload's `session_id` through the
+   survive `/clear`, not a restart; an absolute value wins, and a relative or
+   missing one is taken under the main checkout of the payload `cwd` (parent
+   of the common git dir, else the git top level), never the payload `cwd`
+   itself, which a shell `cd` moves), else the payload's `session_id` through the
    session index, then the record, whose `session` must match. Neither, a
    malformed name, or no record -> exit 0.
 3. Take the last assistant message from the payload's
@@ -658,6 +672,22 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   a tool call or command right after the `/clear`) writes the new id into the
   config for whichever of `orchestrator_session` and `envoy_session` held the old
   one.
+- Run directory: `paths.ts` is the only place that builds it. `runDir` is
+  `$TEAM_SCRATCH` when that is absolute, else `$TEAM_SCRATCH` (default
+  `scratchpad/current`) under the main checkout of `$.session.root()`, read on
+  every call through `io.root`. The main checkout is the same rule as
+  `team_project_root` in `lib/run-dir.sh`: the parent of
+  `git rev-parse --path-format=absolute --git-common-dir` when that ends in
+  `/.git` (the same from a linked worktree), else `git rev-parse --show-toplevel`,
+  else `$.session.root()`. The mod runs git through `$.process.run` with the
+  session root as cwd, only for a relative value; an absolute `TEAM_SCRATCH`
+  runs no git. The answer is cached in `team.tsx` (`mainRoot`, keyed by the
+  session root), so the 15 s tick does not spawn git; a git that could not run
+  is not cached. The session's project root does not move on a shell `cd`; the
+  mod never uses the session's cwd for this. `teamDir` is `<runDir>/.team`. The
+  project root can move on `/cd` or a worktree move; the mod then follows it
+  (a new cache key), so an absolute `TEAM_SCRATCH` (which `team-start` and
+  `team-resurrect` stamp onto agent panes) is the fixed choice.
 - Tick, orchestrator half: maps records to herdr agents by session id (writing
   moved pane ids back), runs the watch rules, closes empty record-named panes
   in worker tabs (never a pending one, never in the orchestrator's own tab: the

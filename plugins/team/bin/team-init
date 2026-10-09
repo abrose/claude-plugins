@@ -13,6 +13,14 @@ usage_text="usage: team-init <ticket> [--envoy-pane <id>]"
 usage() { echo "$usage_text" >&2; exit 2; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/run-dir.sh
+. "$here/../lib/run-dir.sh"
+# A relative run dir belongs to the project root. Stand there, so that every path below
+# (run dir, .claude/settings.local.json, the orchestrator's cwd) is the same after a shell cd.
+case "${TEAM_SCRATCH:-scratchpad/current}" in
+  /*) ;;
+  *) cd "$(team_project_root)" ;;
+esac
 scratch="${TEAM_SCRATCH:-scratchpad/current}"
 while [[ "$scratch" == */ ]]; do scratch="${scratch%/}"; done
 teamdir="$scratch/.team"

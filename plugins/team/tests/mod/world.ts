@@ -13,7 +13,10 @@ export type HerdrPane = { pane_id: string; tab_id: string; agent_status: string 
 export type World = {
   store: Map<string, unknown>
   id: string
+  /** The session's current directory. A test moves it to stand for a shell `cd`. */
   cwd: string
+  /** The session's project root: a shell `cd` does not move it. */
+  root: string
   team: string
   files: Map<string, { text: string; mtimeMs: number }>
   agents: HerdrAgent[]
@@ -39,6 +42,10 @@ export type World = {
   /** Pane ids that open but stay undrawn (isPlaced false), like in a herdr pane under 144 columns. */
   unplaced: Set<string>
   runs: string[][]
+  /** What `git rev-parse` answers: the common git dir and the top level. null means "not a repo" (exit 128). */
+  git: { common: string | null; top: string | null }
+  /** The cwd of each git call, in order. */
+  gitCwds: (string | undefined)[]
   submits: string[]
   sends: { to: unknown; text: string }[]
   env: Map<string, string>
@@ -119,6 +126,7 @@ export function world(on: On): World {
     store: new Map(),
     id: 'sid-orch',
     cwd: CWD,
+    root: CWD,
     team: `${CWD}/scratchpad/current/.team`,
     files: new Map(),
     agents: [],
@@ -135,6 +143,8 @@ export function world(on: On): World {
     titles: new Map(),
     unplaced: new Set(),
     runs: [],
+    git: { common: null, top: null },
+    gitCwds: [],
     submits: [],
     sends: [],
     env: new Map(),
@@ -148,6 +158,8 @@ export function world(on: On): World {
   }
 
   on('session.id', () => ({ value: w.id }))
+  on('session.cwd', () => ({ value: w.cwd }))
+  on('session.root', () => ({ value: w.root }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__team__${e.name}` } }))
   on('store.get', ($, e) => ({ value: w.store.get(e.key) }))
@@ -199,6 +211,11 @@ export function world(on: On): World {
       value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
     })
     const bin = argv[0] ?? ''
+    if (bin === 'git') {
+      w.gitCwds.push(e.init?.cwd)
+      const answer = argv.includes('--git-common-dir') ? w.git.common : w.git.top
+      return answer === null ? out('', 128, 'fatal: not a git repository') : out(`${answer}\n`)
+    }
     if (bin === 'tail') return out(w.files.get(argv[argv.length - 1] ?? '')?.text ?? '')
     if (bin === 'mkdir') {
       const p = argv[argv.length - 1] ?? ''

@@ -85,8 +85,13 @@ if [ -z "$cwd" ] && [ -n "$pane" ]; then
 fi
 [ -n "$cwd" ] || cwd="$PWD"
 
+# The run dir, absolute. A relative TEAM_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+scratch_abs="$(team_run_dir)"
+
 label="$name"
-teamcfg="${TEAM_SCRATCH:-scratchpad/current}/.team/config.json"
+teamcfg="$scratch_abs/.team/config.json"
 if [ -f "$teamcfg" ]; then
   team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
   if [ -n "${team_id:-}" ]; then
@@ -124,7 +129,6 @@ fi
 
 # The agent and its Stop hook identify themselves from this env. TEAM_SCRATCH is
 # absolute so the hook finds the team dir wherever the agent moves its cwd.
-scratch_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "${TEAM_SCRATCH:-scratchpad/current}")"
 team_env=(--env "TEAM_NAME=$name" --env "TEAM_SCRATCH=$scratch_abs")
 # A herdr pane's shell takes its env from the herdr server, not from this
 # session, so the worker runs in this session's Claude profile only if passed.
@@ -137,7 +141,7 @@ fi
 # The pending marker shields a pane from the team mod's empty-pane cleanup.
 # Mark a created pane right after herdr hands it back, before any other herdr
 # call touches it, so the mod can never see it unmarked.
-pending_dir="${TEAM_SCRATCH:-scratchpad/current}/.team/pending"
+pending_dir="$scratch_abs/.team/pending"
 pending_file_for() { printf '%s/%s' "$pending_dir" "$(printf '%s' "$1" | tr ':/' '__')"; }
 mark_pending() { mkdir -p "$pending_dir"; : > "$(pending_file_for "$1")"; }
 
@@ -300,7 +304,7 @@ fi
 session="${session_id:0:8}"
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-teamdir="${TEAM_SCRATCH:-scratchpad/current}/.team"
+teamdir="$scratch_abs/.team"
 mkdir -p "$teamdir"
 
 # Register a created tab now that its agent is live and its root pane occupied.

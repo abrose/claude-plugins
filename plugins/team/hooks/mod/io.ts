@@ -5,6 +5,11 @@ export type ToolResult = { result: string; isError?: true }
 /** Everything the mod's logic needs from the engine, built over `$` in team.tsx. */
 export type Io = {
   sessionId: () => Promise<string>
+  /**
+   * The project root, absolute: the main checkout of the session's root (the same from a linked
+   * worktree). A shell `cd` does not move it. Cached per session root, so git runs once.
+   */
+  root: () => Promise<string>
   envGet: (name: 'TEAM_SCRATCH' | 'HERDR_BIN_PATH') => Promise<string | undefined>
   setSessionEnv: (id: string) => Promise<void>
   readText: (path: string) => Promise<string | null>
