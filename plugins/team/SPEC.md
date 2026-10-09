@@ -219,8 +219,9 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
     empty pane closes automatically only when a team record names it (an
     agent that exited); a pane no record names, such as one a human opened by
-    hand, is left alone. Open a worker tab only with `team-start --new-tab`,
-    which puts the first agent in the tab's root pane in the caller's workspace;
+    hand, is left alone. Open a worker tab only with `team-start --new-tab`
+    or `team-slice`; both register it as a team tab. `team-start --new-tab`
+    puts the first agent in the tab's root pane in the caller's workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
 16. The orchestrator never speaks to the human. The envoy speaks only when the
     human pulls; urgent cards show as a status line and a toast in the envoy

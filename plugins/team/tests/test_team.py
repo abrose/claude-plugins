@@ -1035,6 +1035,64 @@ class TeamSlice(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.proj, "feat", "plugins")))
 
+    SLICE_OVERLAY = 'worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n'
+
+    def test_slice_tab_is_registered(self):
+        # The mod releases agents only in tabs listed in tabs.json, so the
+        # tab team-slice creates must be listed (fake herdr makes w1:t9).
+        self.overlay(self.SLICE_OVERLAY)
+        os.makedirs(self.sp(".team"))
+        write_text(self.sp(".team", "tabs.json"), json.dumps(["w1:t1"]))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".team", "tabs.json"))), ["w1:t1", "w1:t9"])
+
+    def test_slice_tab_registered_once(self):
+        self.overlay(self.SLICE_OVERLAY)
+        os.makedirs(self.sp(".team"))
+        write_text(self.sp(".team", "tabs.json"), json.dumps(["w1:t9"]))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".team", "tabs.json"))), ["w1:t9"])
+
+    def test_slice_without_a_team_dir_still_works_and_creates_it(self):
+        # No run dir yet (no team-init): like team-start, team-slice makes
+        # .team and starts tabs.json instead of failing on the missing file.
+        self.overlay(self.SLICE_OVERLAY)
+        self.assertFalse(os.path.exists(self.sp(".team")))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout.splitlines()[0])["tab"], "w1:t9")
+        self.assertEqual(json.loads(read_text(self.sp(".team", "tabs.json"))), ["w1:t9"])
+
+    def test_slice_failed_tab_create_exits_nonzero_and_leaves_tabs_json_alone(self):
+        self.overlay(self.SLICE_OVERLAY)
+        os.makedirs(self.sp(".team"))
+        write_text(self.sp(".team", "tabs.json"), json.dumps(["w1:t1"]))
+        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            scenario="tab_create_fails", env_extra=self.WS)
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".team", "tabs.json"))), ["w1:t1"])
+
+    def test_slice_failed_tab_create_writes_no_tabs_json(self):
+        self.overlay(self.SLICE_OVERLAY)
+        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            scenario="tab_create_fails", env_extra=self.WS)
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".team", "tabs.json")))
+
+    def test_slice_absolute_team_scratch_registers_under_it_not_under_cwd(self):
+        self.overlay(self.SLICE_OVERLAY)
+        abs_scratch = os.path.join(self.proj, "elsewhere", "run")
+        os.makedirs(os.path.join(abs_scratch, ".team"))
+        write_text(os.path.join(abs_scratch, ".team", "tabs.json"), json.dumps(["w1:t1"]))
+        p = self.run_script("team-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            env_extra={**self.WS, "TEAM_SCRATCH": abs_scratch})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(os.path.join(abs_scratch, ".team", "tabs.json"))),
+                         ["w1:t1", "w1:t9"])
+        self.assertFalse(os.path.exists(self.sp(".team")))
+
     def test_rejects_unsafe_git_ref(self):
         p = self.run_script("team-slice", "evil;rm -rf x", "main", "--label", "T1 X y", env_extra=self.WS)
         self.assertEqual(p.returncode, 2)

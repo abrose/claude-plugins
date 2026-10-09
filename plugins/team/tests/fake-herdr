@@ -84,6 +84,9 @@ case "$group $sub" in
   "pane close")
     emit '{"result":{"ok":true}}' ;;
   "tab create")
+    if [ "$scenario" = "tab_create_fails" ]; then
+      fail '{"error":{"code":"workspace_not_found","message":"tab create failed"}}'
+    fi
     emit '{"result":{"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}' ;;
   "agent start")
     if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
