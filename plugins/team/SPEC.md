@@ -761,9 +761,27 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   open and assumed counts), agents, one row per idle worker tab (`tab w4:t19
   idle, consider release (w4:p3K done)`: every pane there idle or done, every
   briefed agent with a fresh report, the pane statuses seen; it is no WATCH
-  line), last error, tick time. `questions` (title
-  `Questions`): the question log, every card of the run newest first, one row
-  `Q-<n> <status> [#<decision>] <door> <from>/<tag>: <question>`. The engine
+  line), last error, tick time. An urgent row shows the sender without its
+  `<team_id>-` prefix. `questions` (title
+  `Questions`): the question log, every card of the run newest first, one
+  collapsible row (a plain Button), exactly one line, cut with `…` at the pane
+  width (`bodyColumns`; a Text inside a Button does not truncate by itself,
+  so the tail after the status glyph is cut by hand and every glyph counts as
+  one column):
+  `<▸|▾> <status> Q-<n> [#<decision>] <door> <source>: <question>`. Status glyph:
+  open `●` yellow, assumed `◐` cyan, answered `✓` green dim (with `#<decision>`),
+  obsolete `✗` dim. Door glyph: one-way `→`, two-way `⇄`. The source is `from`
+  without a matching `<team_id>-` prefix, plus `/<tag>` unless the tag is
+  `general`. One switch, `ASCII_GLYPHS` in `pane.tsx` (off by default), swaps the
+  glyphs for `?` `~` `+` `x`, door `1` `2` and the expand markers `>` `v`. Enter
+  or a click toggles the
+  row: the expanded block shows the question, context, options with cost,
+  recommendation, blocks, rework and door, and `reason` for an obsolete card.
+  The block sits in one `Box` with `paddingLeft={4}`, so wrapped lines keep the
+  indent. The expanded ids are in the state key `team.expandedCards`; the render
+  drops ids of cards that no longer exist and writes the key only when it
+  shrank. Toasts and the
+  status line keep the full names. The engine
   draws the two as tabs in one frame; the person picks the shown tab, and an
   urgent card never switches it. Both open on the first activation of the envoy
   role unless hidden; `/team-overview` toggles both and keeps the choice in

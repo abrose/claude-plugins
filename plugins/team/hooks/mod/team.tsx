@@ -9,7 +9,7 @@ import { readJson, writeJson } from './io'
 import type { Io } from './io'
 import { herdrAgents, herdrFocus } from './herdr'
 import type { HerdrListing } from './herdr'
-import { closeHides, drawPane, drawQuestions, hiddenKey, QUESTIONS_PANE, TEAM_PANE } from './pane'
+import { closeHides, drawPane, drawQuestions, hiddenKey, pruneExpanded, QUESTIONS_PANE, TEAM_PANE } from './pane'
 import { mainCheckout, runDir, teamDir } from './paths'
 import { parsePlan } from './plan'
 import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
@@ -25,6 +25,7 @@ const agents = atom({ plugin: 'team', key: 'agents' } as const, [] as TeamAgentR
 const idle = atom({ plugin: 'team', key: 'idleTabs' } as const, [] as string[])
 const plan = atom({ plugin: 'team', key: 'plan' } as const, null as TeamPlan | null)
 const cards = atom({ plugin: 'team', key: 'cards' } as const, [] as TeamCard[])
+const expanded = atom({ plugin: 'team', key: 'expandedCards' } as const, [] as string[])
 const urgent = atom({ plugin: 'team', key: 'urgent' } as const, 0)
 const planPath = atom({ plugin: 'team', key: 'planPath' } as const, '')
 const tickAt = atom({ plugin: 'team', key: 'tickAt' } as const, '')
@@ -278,8 +279,18 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: QUESTIONS_PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    return drawQuestions({ Box, Text } as never, await read($, cards))
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const current = await read($, cards)
+    const open = await read($, expanded)
+    const live = pruneExpanded(open, current)
+    if (live !== open) await update($, expanded, () => live)
+    return drawQuestions({ Box, Text, Button } as never, {
+      cards: current,
+      teamId: (await envoyConfig(makeIo($)))?.team_id ?? '',
+      expanded: live,
+      columns: e.props.bodyColumns,
+      toggle: id => update($, expanded, ids => (ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id])),
+    })
   })
 
   on('ui.render', { component: 'Pane', requestId: TEAM_PANE }, async ($, e) => {
@@ -289,6 +300,7 @@ export const register: Register = on => {
       idle: await read($, idle),
       plan: await read($, plan),
       cards: await read($, cards),
+      teamId: (await envoyConfig(makeIo($)))?.team_id ?? '',
       planPath: await read($, planPath),
       tickAt: await read($, tickAt),
       error: await read($, error),

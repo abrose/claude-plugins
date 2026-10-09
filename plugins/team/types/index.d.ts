@@ -36,6 +36,8 @@ declare module 'claude-code' {
       idleTabs: string[]
       plan: TeamPlan | null
       cards: TeamCard[]
+      /** Ids of the question cards shown expanded in the Questions tab. */
+      expandedCards: string[]
       urgent: number
       planPath: string
       tickAt: string
