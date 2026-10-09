@@ -4,9 +4,9 @@ import type { On } from 'claude-code'
 import type { PromptStyle } from '../../types'
 import { findSent, isOwn, shownText } from './state'
 
-export const STYLES: PromptStyle[] = ['box', 'banner', 'gutter', 'label', 'double']
+export const STYLES: PromptStyle[] = ['box', 'banner', 'gutter', 'label', 'double', 'tint']
 
-const style = atom({ plugin: 'chebu-ui', key: 'promptStyle' } as const, 'double')
+const style = atom({ plugin: 'chebu-ui', key: 'promptStyle' } as const, 'tint')
 const sent = atom({ plugin: 'chebu-ui', key: 'sent' } as const, [])
 
 export const PROMPT_STYLE_COMMAND = {
@@ -101,7 +101,7 @@ export function registerPromptStyle(on: On) {
           </Box>
         )
         break
-      default:
+      case 'double':
         prompt = (
           <Box key="prompt"borderStyle="double" borderColor="green" width="100%" paddingX={1} flexDirection="row">
             {tag !== '' && (
@@ -112,6 +112,17 @@ export function registerPromptStyle(on: On) {
             <Text color="green" bold>
               {tag !== '' ? ' ' : ''}❯ {text}
             </Text>
+          </Box>
+        )
+        break
+      default:
+        // A background instead of a frame, like the reply's, so copied text carries no border characters.
+        prompt = (
+          <Box key="prompt" backgroundColor="#1e3a2a" width="100%" paddingX={1} flexDirection="row">
+            <Text color="green" bold>
+              {tag}❯{' '}
+            </Text>
+            <Text bold>{text}</Text>
           </Box>
         )
     }

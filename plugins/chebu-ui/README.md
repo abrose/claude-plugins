@@ -16,7 +16,7 @@ Each tweak lives in its own file under `hooks/mod/` and is registered from
 ### Prompt style
 
 Draws your own prompts (typed at the terminal, or sent from phone or web) in a
-bold, framed style, so you can find them again in a long transcript. Messages
+bold style, so you can find them again in a long transcript. Messages
 from background tasks, teammates and other agents keep the default look. Only
 the drawing changes: the stored message and what the model reads stay as they
 were.
@@ -25,13 +25,14 @@ were.
 
 | Style    | Look                                                        |
 | -------- | ----------------------------------------------------------- |
-| `double` | Full-width green double frame (default)                     |
+| `tint`   | Full-width dark green background, no frame (default)        |
+| `double` | Full-width green double frame                               |
 | `box`    | Rounded magenta frame                                       |
 | `banner` | Full-width magenta background band, black text              |
 | `gutter` | Yellow bar on the left, no frame                            |
 | `label`  | Cyan ` YOU ` tag above the prompt                           |
 
-The choice lasts for the session; new sessions start with `double`.
+The choice lasts for the session; new sessions start with `tint`.
 
 Each prompt also carries its number (`#3`) in this session. A prompt sent while
 a turn runs shows in a dashed yellow frame with a `⏳ queued` tag until it

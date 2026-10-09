@@ -1,4 +1,4 @@
-export type PromptStyle = 'box' | 'banner' | 'gutter' | 'label' | 'double'
+export type PromptStyle = 'box' | 'banner' | 'gutter' | 'label' | 'double' | 'tint'
 
 /**
  * One own prompt of this session: its text, when it was sent (epoch ms), and whether it still

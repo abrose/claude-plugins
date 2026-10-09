@@ -9,11 +9,13 @@ const runStyle = ($: any, args: string) => $.command.run({ command: 'prompt-styl
 
 describe('Prompt style', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`draws an own prompt in a green double frame by default (${surface})`, async ($, on) => {
+    test(`draws an own prompt on a dark green background, without a frame, by default (${surface})`, async ($, on) => {
       await start($, on)
       const ui = await mountMessage($, surface, { kind: 'composer' })
 
-      expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double', borderColor: 'green' })
+      const prompt = (await ui.find({ key: 'prompt' }))?.props
+      expect(prompt).toMatchObject({ backgroundColor: '#1e3a2a' })
+      expect(prompt?.borderStyle).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: /find me later/ })).toBeDefined()
     })
   }
@@ -22,7 +24,7 @@ describe('Prompt style', () => {
     await start($, on)
     const ui = await mountMessage($, 'terminal', { kind: 'bridge' })
 
-    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double' })
+    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ backgroundColor: '#1e3a2a' })
   })
 
   test('leaves messages from tasks and other agents alone', async ($, on) => {
@@ -63,7 +65,7 @@ describe('Prompt style', () => {
 
     await $.turn.start({ text: 'find me later' } as never)
     const delivered = await mountMessage($, 'terminal', { kind: 'composer' })
-    expect((await delivered.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double' })
+    expect((await delivered.find({ key: 'prompt' }))?.props).toMatchObject({ backgroundColor: '#1e3a2a' })
   })
 
   test('/prompt-style <name> switches the style', async ($, on) => {
@@ -78,6 +80,7 @@ describe('Prompt style', () => {
     await start($, on)
     expect(await runStyle($, 'label')).toMatchObject({ text: 'Prompt style: label' })
     expect(await runStyle($, '')).toMatchObject({ text: 'Prompt style: double' })
+    expect(await runStyle($, '')).toMatchObject({ text: 'Prompt style: tint' })
     expect(await runStyle($, '')).toMatchObject({ text: 'Prompt style: box' })
   })
 
@@ -86,6 +89,14 @@ describe('Prompt style', () => {
     expect(await runStyle($, 'neon')).toMatchObject({ text: expect.stringContaining('Unknown style "neon"') })
 
     const ui = await mountMessage($, 'terminal', { kind: 'composer' })
-    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double' })
+    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ backgroundColor: '#1e3a2a' })
+  })
+
+  test('/prompt-style double brings back the green double frame', async ($, on) => {
+    await start($, on)
+    await runStyle($, 'double')
+
+    const ui = await mountMessage($, 'terminal', { kind: 'composer' })
+    expect((await ui.find({ key: 'prompt' }))?.props).toMatchObject({ borderStyle: 'double', borderColor: 'green' })
   })
 })
