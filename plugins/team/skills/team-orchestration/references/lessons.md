@@ -133,11 +133,13 @@ never here.
   cleared it first, resurrect adopts the session its pane now runs; check the
   `adopted session` line before the next brief.
 
-## The absent human
+## Own calls
 
-- When the human is away, log every own call to
-  `scratchpad/current/orchestration-decisions.md` with its context. The human's own
-  decisions stay in the numbered file. The two files never mix.
+- Log every own call to `scratchpad/current/orchestration-decisions.md` with
+  its context. An own call becomes a card via `ask` instead when it is a
+  one-way door, has more than about 1 h of rework, falls outside the brief's
+  or a decision's scope, or touches permissions. The human's own decisions
+  stay in the numbered file. The two files never mix.
 
 ## Deferred features
 

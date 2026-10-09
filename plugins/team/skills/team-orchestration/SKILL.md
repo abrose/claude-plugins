@@ -75,9 +75,12 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     agent a new session id and the hooks follow it; a `/compact` keeps the id
     and the hooks lift its brief mark. `brief_send` refuses an agent that was
     neither cleared nor compacted since its last brief.
-12. When the human is away, the orchestrator writes every own call to
-    `scratchpad/current/orchestration-decisions.md` with context, so it can be audited.
-    The human's decisions stay in the numbered file.
+12. The orchestrator writes every own call to
+    `scratchpad/current/orchestration-decisions.md` with context, so it can be
+    audited. An own call becomes a card via `ask` instead when it is a one-way
+    door, has more than about 1 h of rework, falls outside the brief's or a
+    decision's scope, or touches permissions. The human's decisions stay in
+    the numbered file.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
 14. The team mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
