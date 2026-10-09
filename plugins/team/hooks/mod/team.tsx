@@ -14,6 +14,7 @@ import { mainCheckout, runDir, teamDir } from './paths'
 import { parsePlan } from './plan'
 import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
 import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
+import { reattach } from './reattach'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
 import { pickDecisions } from './decisions'
 import { agentRows, idleTabRows, newReportLines, readLedger, readRecords, syncPanes, watchTick } from './tick'
@@ -224,6 +225,10 @@ export const register: Register = on => {
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     lastBadge = null
     await $.command.register({ name: 'team-overview', description: 'Show or hide the Team and Questions tabs' })
+    await $.command.register({
+      name: 'team-envoy',
+      description: 'Make this session the envoy of the live team run; starts a new orchestrator if its session is gone',
+    })
     await $.tool.register(BRIEF_TOOL_SPEC)
     await $.tool.register(ASK_TOOL_SPEC)
     await $.tool.register(QUEUE_TOOL_SPEC)
@@ -264,6 +269,12 @@ export const register: Register = on => {
     await $.store.set(hiddenKey(cfg.team_id), false)
     await openPanes($)
     return { text: 'Team overview shown.' }
+  })
+
+  // The tabs open on the next tick, which finds the envoy role new to this session.
+  on('command.run', { command: 'team-envoy' }, async $ => {
+    const text = await reattach(makeIo($))
+    return { text }
   })
 
   on('ui.close', { id: TEAM_PANE }, async ($, e, next) => {

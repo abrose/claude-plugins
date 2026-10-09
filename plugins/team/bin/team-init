@@ -305,42 +305,19 @@ json.dump(cfg, open(sys.argv[1], "w"))
 PY
 fi
 
-# Start the orchestrator in its own worker tab. A failed start leaves the config
-# with envoy_session only: the envoy tools work, the orchestrator half stays off.
-if ! start_err="$("$here/team-start" orch orchestrator --new-tab --label orch --cwd "$PWD" 2>&1 >/dev/null)"; then
-  echo "orchestrator did not start: $start_err" >&2
+# Start the orchestrator in its own worker tab (team-orch-start, shared with the
+# mod's /team-envoy). A failed start leaves the config with envoy_session only:
+# the envoy tools work, the orchestrator half stays off.
+if ! start_err="$("$here/team-orch-start" 2>&1 >/dev/null)"; then
+  echo "$start_err" >&2
   # team-start leaves a dialog pane open for the human. Its own advice is to re-run
   # team-start; here the next step is /team:init, which records the orchestrator.
   case "$start_err" in
-    *"is at a startup dialog"*)
+    "orchestrator did not start: "*"is at a startup dialog"*)
       echo "After you answer it: close that pane, then run /team:init again; do not run team-start by hand, config.json would not know that orchestrator." >&2 ;;
   esac
   exit 4
 fi
-orch_record="$teamdir/$orch.json"
-orch_session="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['session'])" "$orch_record")"
-orch_pane="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['pane'])" "$orch_record")"
-# The session goes into the config first: the orchestrator is live from here on.
-SESSION="$orch_session" python3 - "$teamdir/config.json" <<'PY'
-import os, json, sys
-cfg = json.load(open(sys.argv[1]))
-cfg["orchestrator_session"] = os.environ["SESSION"]
-json.dump(cfg, open(sys.argv[1], "w"))
-PY
-if ! tab_out="$(herdr pane get "$orch_pane" 2>&1)"; then
-  echo "orchestrator started, tab lookup failed: $tab_out" >&2
-  exit 4
-fi
-orch_tab="$(printf '%s' "$tab_out" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || {
-  echo "orchestrator started, tab lookup failed: unreadable answer from herdr: $tab_out" >&2
-  exit 4
-}
-TAB="$orch_tab" python3 - "$teamdir/config.json" <<'PY'
-import os, json, sys
-cfg = json.load(open(sys.argv[1]))
-cfg["orchestrator_tab"] = os.environ["TAB"]
-json.dump(cfg, open(sys.argv[1], "w"))
-PY
 
 # Drop session index entries whose agent record is gone or names another
 # session, so a stale entry never claims a session for a finished run. A

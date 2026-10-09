@@ -48,7 +48,7 @@ async function followClear(io: Io): Promise<void> {
 
 // Follows a pending /clear first, so a command or tool call right after one
 // does not wait for the next tick to find the team.
-async function readConfig(io: Io): Promise<TeamConfig | null> {
+export async function readConfig(io: Io): Promise<TeamConfig | null> {
   await followClear(io)
   return readJson<TeamConfig>(io, `${await teamDir(io)}/config.json`)
 }

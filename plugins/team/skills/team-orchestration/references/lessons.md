@@ -99,6 +99,10 @@ never here.
   enabled).
 - `/team-overview` hides or shows both the `Team` and the `Questions` pane.
   Closing one with ✕ or Esc hides it too; the choice is kept per team.
+- `/team-envoy`, run by the human in a fresh session, makes that session the
+  envoy of the live run. If the orchestrator's session is gone, it starts a new
+  orchestrator from zero: that orchestrator knows only the decisions file, the
+  plan file and the reports, so the human tells it with `relay` where to go on.
 - The `Team` pane lists a tab as "consider release" only when the tab holds a
   briefed agent and every briefed agent there has a fresh report. A freshly
   spawned, un-briefed agent looks idle but is not a release candidate. The row

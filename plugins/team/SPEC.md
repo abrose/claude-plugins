@@ -350,7 +350,7 @@ creates and reads these; the overlay never does.
 | `orchestration-decisions.md` | orchestrator | own calls that need no card, logged with context for audit (rule 12) |
 | `brief-<name>-<topic>.md` | `team-brief compose` | the assignment; `-revN` for follow-ups |
 | `reports/<name>-<topic>.md` | agent (via hook) | deliverable summary, deterministic path |
-| `.team/config.json` | `team-init` | `{team_id, ticket, orchestrator, envoy_session, envoy_tab, orchestrator_session, orchestrator_tab}`; `envoy_tab` only with `--envoy-pane`; `orchestrator_session` and `orchestrator_tab` once the orchestrator is up. The team mod also rewrites `orchestrator_session` or `envoy_session` when that session runs `/clear` (`hooks/mod/activation.ts`); nothing else follows a new session id |
+| `.team/config.json` | `team-init`, `team-orch-start`, `/team-envoy` | `{team_id, ticket, orchestrator, envoy_session, envoy_tab, orchestrator_session, orchestrator_tab}`; `envoy_tab` only with `--envoy-pane`; `orchestrator_session` and `orchestrator_tab` once the orchestrator is up (`team-orch-start` writes both). The team mod also rewrites `orchestrator_session` or `envoy_session` when that session runs `/clear` (`hooks/mod/activation.ts`), and `/team-envoy` rewrites `envoy_session` to the session that runs it (`hooks/mod/reattach.ts`); nothing else follows a new session id. `/team-envoy` leaves `envoy_tab` as it is |
 | `.team/<name>.json` | `team-start`, `team-brief`, `brief_send`; deleted by `team-forget` | `{role, topic, brief, pane, started, cwd, session, model, effort, mode}`; `brief_send` adds `brief_sent_session` (the `SessionStart` hook removes it on `/compact`) |
 | `.team/roster.md` | `team-status` | last rendered roster, which the envoy shows on `/team:status` |
 | `.team/questions/Q-<n>.json` | the `ask` tool | one card |
@@ -579,15 +579,15 @@ Runs in the human's session, which becomes the envoy. Needs `TEAM_SESSION_ID`
    permission allowlist (`SendMessage` included).
 6. With `--envoy-pane`, record that pane's tab in `.team/tabs.json` and as
    `envoy_tab` in the config.
-7. Start the orchestrator: `team-start orch orchestrator --new-tab --label orch
-   --cwd <current dir>` in a worker tab. If that fails, exit 4 with `orchestrator did not start:
+7. Start the orchestrator with [`team-orch-start`](#team-orch-start) in a
+   worker tab. If that fails, exit 4 with `orchestrator did not start:
    <reason>`, and, for a startup dialog, the advice to answer it, close that
    pane and run `/team:init` again. The config then holds `envoy_session`
    only: the envoy tools work, the orchestrator half stays off.
-8. Write the orchestrator's session into the config as `orchestrator_session`,
-   then look up its tab and write it as `orchestrator_tab`. If the lookup
-   fails, exit 4 with `orchestrator started, tab lookup failed: <reason>`; the
-   orchestrator runs, without a recorded tab.
+8. (`team-orch-start`) Write the orchestrator's session into the config as
+   `orchestrator_session`, then look up its tab and write it as
+   `orchestrator_tab`. If the lookup fails, exit 4 with `orchestrator started,
+   tab lookup failed: <reason>`; the orchestrator runs, without a recorded tab.
 9. Drop session index entries whose record is gone or names another session.
 10. Print `team_id=<id> config=<path>`.
 
@@ -595,6 +595,49 @@ Exit codes: 0 ok, 1 refused (a failed `herdr agent list` in the live-agent
 check of step 2 included), 2 bad arguments (a bad ticket included), 4 the
 envoy pane lookup of step 6 failed or the orchestrator did not start (steps 7
 and 8). Step 3 ignores a herdr error.
+
+### `team-orch-start`
+
+```
+team-orch-start
+```
+
+Starts the run's orchestrator and records it. `team-init` (steps 7 and 8) and
+the mod command `/team-envoy` both call it, so an orchestrator starts one way
+only. Needs `.team/config.json`, else exit 1 with `no team run: ...` and no
+herdr call. In order:
+
+0. Take the start lock: `mkdir .team/orch-starting`, which is atomic, so of two
+   starts (`team-init` and `/team-envoy`, or two `/team-envoy` calls) only one
+   goes on. The other exits 5 with `an orchestrator is starting: <lock> is <age>
+   s old; left alone`, no herdr call and no config change. A lock 600 s old or
+   older is left from a killed start and is taken over (stderr `taking over a
+   stale start lock: ...`). The 600 s is twice the mod's wait for a start
+   (`START_TIMEOUT_MS`, 300 s, `hooks/mod/reattach.ts`), so a hung start the
+   mod just gave up on is not taken over at once; a test holds the factor 2.
+   A start takes ~3 min at most (`team-start`: 90 s agent start plus 90 s busy
+   retries). An exit trap removes the lock on every exit, also on INT and
+   TERM; only a SIGKILL leaves it behind.
+0a. Under the lock, check again that no orchestrator runs (one may have
+   started or come back since the caller's own check): `herdr agent list`,
+   with the alive rule of `/team-envoy` (Commands). The envoy session stands
+   for the caller here (`envoy_session`). A live one is exit 5 with `an
+   orchestrator runs (<pane>); left alone`, no start and no config change. If
+   herdr does not answer or answers unreadably, the start goes on as before
+   (stderr `cannot check for a live orchestrator: ...; starting one`).
+1. `team-start orch orchestrator --new-tab --label orch --cwd <current dir>`.
+   On failure, exit 4 with `orchestrator did not start: <team-start's stderr>`;
+   the config is not changed.
+2. Read the session and pane from the record `.team/<orchestrator>.json`
+   (`orchestrator` from the config), write `orchestrator_session`, then look up
+   the pane's tab and write `orchestrator_tab`. A failed lookup is exit 4 with
+   `orchestrator started, tab lookup failed: <reason>`, the new session kept.
+   Each config write goes to a temp file `config.json.<random>` in `.team/`
+   and is renamed over `config.json`, so a reader never sees a half file.
+3. Print `orchestrator=<name> session=<id> pane=<pane> tab=<tab>`.
+
+Exit codes: 0 ok, 1 no run, 2 bad arguments (it takes none; `--help` prints
+the usage), 4 as above, 5 another start holds the lock or an orchestrator runs.
 
 ### `team-forget`
 
@@ -628,6 +671,7 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 | `/team:release [name ...|all]` | `all` (the end of a session) runs in the envoy session; a named release runs in the orchestrator or the envoy session. For each agent `team-status` lists (never the envoy, never the session it runs in, also for `all`): check for a report, `agent prompt <pane> "/clear"` (pane found by session id), run the overlay's `release_check` command if defined (orphan processes), close the pane (closing the last pane closes the tab), then `team-forget <name>`, which deletes its session index entry and its record. With `all`, also removes `.team/tabs.json`, `watch-state.json`, `layout-flags.json`, `toasted.json` and `last-relay.txt`, and keeps `delivered.json` (its `_decision` mark stops the next orchestrator tick from sending every DECISION line of the run again). Refuses to release an agent that is `working`, and lists as refused an agent `team-forget` keeps because herdr still shows it. |
 | `/team:resurrect` | Runs in the envoy session. `team-resurrect` relaunches the orchestrator and the workers whose `.team/restored/` mark the `SessionStart` hook set, then the command reports which it relaunched, which were healthy, and which are missing. It starts no agent that has no record. |
 | `/team-overview` | A mod command: hides or shows both envoy tabs, `Team` and `Questions`; the choice is kept per team. |
+| `/team-envoy` | A mod command, run in a session the human talks to, to re-attach it to the live run (decision 15). Without `.team/config.json` it refuses and names `/team:init`; in the orchestrator session it refuses (rule 16). Otherwise it writes this session as `envoy_session`, so the envoy half (tabs, status line, toasts, `queue`, `decide`, `relay`) runs here from the next tick and the old envoy session loses it. Then it checks the orchestrator in `herdr agent list`. It counts as alive when a listed agent has the session `orchestrator_session`, or the herdr name `orchestrator` from the config (`team-start` gives it through `herdr agent start <name>`), or the pane `pane` of the orchestrator record `.team/<orchestrator>.json`; the last two cover the moment after an orchestrator `/clear`, when the config can still name the old session. herdr can reuse a pane id, so an agent in that pane counts only when it is neither this session nor the `session` of another team record in `.team/`. Alive, it is left alone; gone (or no `orchestrator_session` recorded), `team-orch-start` starts a new one from zero (OQ3) and the output names it, `<name> (<pane>, <session>)`. When `team-orch-start` exits 5, the output says an orchestrator is starting (another start holds the lock) or that an orchestrator runs in `<pane>` (found live under the lock), and it is left alone. A failed `herdr agent list` starts nothing and says the orchestrator state is unknown. A failed start says why; for a startup dialog it says to answer it, close the pane and run `/team-envoy` again. The command waits for the start (up to 300 s): a `$` call does not count against the hook's 10 s budget. |
 
 ### Report hook
 
@@ -684,7 +728,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   orchestrator session both roles. The envoy role needs no
   `orchestrator_session`, so the envoy tools work also after a failed
   orchestrator start. On `session.start` the mod sets `TEAM_SESSION_ID` (which
-  `team-init` writes into the config), registers the `team-overview` command and
+  `team-init` writes into the config), registers the `team-overview` and
+  `team-envoy` commands and
   the tools below, and starts a 15 s tick. A tick is a no-op for a session with
   no role; a session that loses its role has its team status line cleared. On
   `session.end` with `reason: clear` it remembers the old id; the next tick (or
@@ -985,9 +1030,16 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
    `/team-overview`, agent rows and pane healing, report pickup and the
    baseline, the watch and layout rules, `brief_send`, the roles
    (`roleOf`, activation per role), `ask`, `queue`, `decide` and `relay` with
-   their refusals, the DECISION line and its mark, the urgent badge and toast.
+   their refusals, the DECISION line and its mark, the urgent badge and toast,
+   `/team-envoy` (orchestrator alive by session, name or record pane, a reused
+   pane id held by this session or a worker, gone, a start under way, an
+   orchestrator found live under the lock, no run, and its refusals).
 8c. `team-init` (ticket rule, run files, `envoy_session`, orchestrator start and
-   its exit 4 paths), `team-forget` (record, index entry, safety), `team-status`
+   its exit 4 paths, no start lock left), `team-orch-start` (no run, start and
+   record, exit 4 paths, the start lock: held, stale at twice the mod's
+   timeout, removed on every exit; the re-check under the lock by session,
+   name and record pane, a reused pane id, herdr not answering; config
+   written by rename), `team-forget` (record, index entry, safety), `team-status`
    (one line per session, envoy and caller skipped), `--plugin-dir` in
    `team-start` and `team-resurrect`.
 9. A hook error (unreadable transcript) exits 0 and logs one line.
@@ -1500,3 +1552,27 @@ again. It also carried no evidence of what the mod saw.
   report, or herdr was down).
 - Not done in the mod: the overlay's `release_check`, and the check that the
   context gauge reads 0 percent after the `/clear`.
+
+## Increment: `/team-envoy` re-attach
+
+Decision 15 of the team-envoy run and its OQ3: a fresh session re-attaches to a
+live run, and the re-attach starts a new orchestrator when its session is gone.
+
+- New mod command `/team-envoy` (`hooks/mod/reattach.ts`, see Commands). It
+  writes `envoy_session`; it never changes `envoy_tab`.
+- New script `team-orch-start` (see its section): the orchestrator start that
+  was steps 7 and 8 inside `team-init`, moved out unchanged in behaviour so
+  `team-init` and `/team-envoy` share it. `team-init` keeps its own
+  `/team:init` advice for a startup dialog.
+- Fix round 2 (tester review): `team-orch-start` takes the start lock
+  `.team/orch-starting` (exit 5 while another start holds it, taken over at
+  300 s), so two close `/team-envoy` calls, or one during `team-init`'s start,
+  never start two orchestrators. `/team-envoy` also counts an agent with the
+  orchestrator's herdr name or in the orchestrator record's pane as alive. The
+  script's config writes are temp file plus rename.
+- Fix round 3 (tester re-test findings 1, 2 and 4): an agent in the
+  orchestrator record's pane counts as alive only when it is neither the
+  caller's session nor the session of another team record, since herdr can
+  reuse a pane id. `team-orch-start` checks again under the lock that no
+  orchestrator runs (exit 5, `an orchestrator runs (<pane>); left alone`).
+  The stale-lock age is 600 s, twice `START_TIMEOUT_MS`.

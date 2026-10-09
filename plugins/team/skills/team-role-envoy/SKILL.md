@@ -20,5 +20,11 @@ These rules bind you on every turn.
 Record every decision with `decide`, never by editing the decisions file. Pass in
 `overrides` every assumed card whose assumption the answer changes.
 
+When the human talks to you in a session that is not yet the envoy of the
+live run (the envoy tools refuse), tell them to run `/team-envoy` there. It
+makes this session the envoy and starts a new orchestrator if the old one is
+gone. After a new orchestrator, ask the human what it should start with and
+send the answer with `relay`.
+
 The status line and toasts flag urgent cards; when the human asks about them, call
 `queue` and present the urgent cards first.

@@ -22,8 +22,12 @@ export type World = {
   agents: HerdrAgent[]
   panes: HerdrPane[]
   herdrFails: string | null
-  /** Calls that fail with this stderr, by "agent prompt", "pane close" or "team-forget". */
+  /** Calls that fail with this stderr, by "agent prompt", "pane close", "team-forget" or "team-orch-start". */
   fails: Map<string, string>
+  /** team-orch-start finds the start lock of another start and refuses with exit 5. */
+  orchLocked: boolean
+  /** team-orch-start finds a live orchestrator in this pane after it takes the lock and refuses with exit 5. */
+  orchRunsIn: string
   /** The next prompt.submit throws, once. */
   submitFails: boolean
   /** The next fs.write throws, once. */
@@ -133,6 +137,8 @@ export function world(on: On): World {
     panes: [],
     herdrFails: null,
     fails: new Map(),
+    orchLocked: false,
+    orchRunsIn: '',
     submitFails: false,
     writeFails: false,
     dirs: new Set(),
@@ -239,6 +245,16 @@ export function world(on: On): World {
       if (w.agents.some(a => a.agent_session?.value === session)) return out('', 1, `${name} is still live: close its pane first`)
       w.files.delete(`${w.team}/${name}.json`)
       return out(`forgot ${name}\n`)
+    }
+    if (bin.endsWith('/bin/team-orch-start')) {
+      // Stands for team-start in a new tab, then the config writes of the real script.
+      const failure = w.fails.get('team-orch-start')
+      if (failure) return out('', 4, failure)
+      if (w.orchLocked) return out('', 5, `an orchestrator is starting: ${w.team}/orch-starting is 12 s old; left alone`)
+      if (w.orchRunsIn) return out('', 5, `an orchestrator runs (${w.orchRunsIn}); left alone`)
+      const path = `${w.team}/config.json`
+      w.writeJson(path, { ...w.json(path), orchestrator_session: 'sid-orch-new', orchestrator_tab: 'w1:t20' })
+      return out('orchestrator=app-1-orch session=sid-orch-new pane=w1:p20 tab=w1:t20\n')
     }
     if (w.herdrFails) return out('', 1, w.herdrFails)
     const sub = argv.slice(1, 3).join(' ')

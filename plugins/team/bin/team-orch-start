@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Start the run's orchestrator in a new worker tab of the current directory and
+# record it in .team/config.json: orchestrator_session first (the orchestrator is
+# live from then on), then orchestrator_tab. team-init and the team mod's
+# /team-envoy both start an orchestrator this way.
+# Prints: orchestrator=<name> session=<id> pane=<pane> tab=<tab>
+# Exit codes: 0 ok, 1 no run (no config), 2 bad arguments, 4 the orchestrator
+# did not start, or it started and the tab lookup failed, 5 another start holds
+# the start lock (.team/orch-starting), or an orchestrator runs already.
+set -euo pipefail
+
+usage_text="usage: team-orch-start"
+case "${1:-}" in
+  "") ;;
+  -h|--help) echo "$usage_text"; exit 0 ;;
+  *) echo "unknown argument: $1" >&2; echo "$usage_text" >&2; exit 2 ;;
+esac
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+teamdir="${TEAM_SCRATCH:-scratchpad/current}/.team"
+config="$teamdir/config.json"
+[ -f "$config" ] || { echo "no team run: $config is missing; start one with /team:init <ticket>" >&2; exit 1; }
+
+# One start at a time: mkdir is atomic, so of two starts (team-init, two /team-envoy
+# calls) only one takes the lock; the other exits 5. A start takes up to ~3 min
+# (team-start: 90 s agent start plus 90 s busy retries) and the mod waits 300 s
+# for it (START_TIMEOUT_MS, hooks/mod/reattach.ts). A lock older than twice that
+# is left from a killed start (SIGKILL skips the trap) and is taken over; the
+# margin keeps a hung start the mod just gave up on from being taken over at once.
+# A test holds stale_after at 2 x START_TIMEOUT_MS.
+lock="$teamdir/orch-starting"
+stale_after=600
+lock_age() {
+  python3 -c "import os,sys,time;print(int(time.time()-os.stat(sys.argv[1]).st_mtime))" "$lock" 2>/dev/null
+}
+if ! mkdir "$lock" 2>/dev/null; then
+  age="$(lock_age)" || age=""
+  if [ -n "$age" ] && [ "$age" -ge "$stale_after" ]; then
+    echo "taking over a stale start lock: $lock is $age s old" >&2
+    rmdir "$lock" 2>/dev/null || true
+  fi
+  if ! mkdir "$lock" 2>/dev/null; then
+    echo "an orchestrator is starting: $lock is ${age:-?} s old; left alone" >&2
+    exit 5
+  fi
+fi
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Under the lock, check again that no orchestrator runs: one may have started or
+# come back between the caller's own check and the lock. Same alive rule as
+# liveOrchestrator in hooks/mod/reattach.ts: the config's orchestrator_session, the
+# herdr name cfg.orchestrator, or the orchestrator record's pane when the agent
+# there is neither the envoy (envoy_session) nor the session of another team record
+# (herdr can reuse a pane id). Prints "alive <pane>", "none" or "unreadable".
+live_orchestrator() {
+  AGENTS="$1" python3 - "$config" "$teamdir" <<'PY'
+import json, os, sys
+config, teamdir = sys.argv[1], sys.argv[2]
+non_record = {"config.json", "watch-state.json", "tabs.json", "layout-flags.json", "delivered.json", "toasted.json"}
+try:
+    agents = json.loads(os.environ["AGENTS"])["result"]["agents"] or []
+except (ValueError, KeyError, TypeError):
+    print("unreadable")
+    sys.exit(0)
+cfg = json.load(open(config))
+orch = cfg.get("orchestrator") or ""
+sid = lambda a: (a.get("agent_session") or {}).get("value") or ""
+hit = next((a for a in agents if cfg.get("orchestrator_session") and sid(a) == cfg["orchestrator_session"]), None)
+hit = hit or next((a for a in agents if orch and a.get("name") == orch), None)
+if not hit:
+    records = {}
+    for f in sorted(os.listdir(teamdir)):
+        if f.endswith(".json") and f not in non_record:
+            try:
+                rec = json.load(open(os.path.join(teamdir, f)))
+            except (OSError, ValueError):
+                continue
+            if isinstance(rec, dict):
+                records[f[:-len(".json")]] = rec
+    pane = (records.get(orch) or {}).get("pane")
+    others = {cfg.get("envoy_session")} | {r.get("session") for n, r in records.items() if n != orch}
+    others -= {None, ""}
+    hit = next((a for a in agents if pane and a.get("pane_id") == pane and sid(a) not in others), None)
+print("alive %s" % hit.get("pane_id", "?") if hit else "none")
+PY
+}
+if ! list_out="$(herdr agent list 2>&1)"; then
+  echo "cannot check for a live orchestrator: herdr agent list failed: $list_out; starting one" >&2
+else
+  verdict="$(live_orchestrator "$list_out")"
+  case "$verdict" in
+    alive\ *) echo "an orchestrator runs (${verdict#alive }); left alone" >&2; exit 5 ;;
+    unreadable) echo "cannot check for a live orchestrator: unreadable answer from herdr agent list; starting one" >&2 ;;
+  esac
+fi
+
+# Temp file plus rename, so a reader (the team mod) never sees a half-written config.
+set_config() {
+  KEY="$1" VALUE="$2" python3 - "$config" <<'PY'
+import os, json, sys, tempfile
+path = sys.argv[1]
+cfg = json.load(open(path))
+cfg[os.environ["KEY"]] = os.environ["VALUE"]
+fd, tmp = tempfile.mkstemp(prefix="config.json.", dir=os.path.dirname(path) or ".")
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(cfg, fh)
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
+PY
+}
+
+if ! start_err="$("$here/team-start" orch orchestrator --new-tab --label orch --cwd "$PWD" 2>&1 >/dev/null)"; then
+  echo "orchestrator did not start: $start_err" >&2
+  exit 4
+fi
+orch="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['orchestrator'])" "$config")"
+orch_record="$teamdir/$orch.json"
+orch_session="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['session'])" "$orch_record")"
+orch_pane="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['pane'])" "$orch_record")"
+set_config orchestrator_session "$orch_session"
+if ! tab_out="$(herdr pane get "$orch_pane" 2>&1)"; then
+  echo "orchestrator started, tab lookup failed: $tab_out" >&2
+  exit 4
+fi
+orch_tab="$(printf '%s' "$tab_out" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || {
+  echo "orchestrator started, tab lookup failed: unreadable answer from herdr: $tab_out" >&2
+  exit 4
+}
+set_config orchestrator_tab "$orch_tab"
+echo "orchestrator=$orch session=$orch_session pane=$orch_pane tab=$orch_tab"

@@ -5,6 +5,8 @@ export type HerdrAgent = {
   tab_id?: string
   agent_status: string
   agent_session?: { value: string }
+  /** The herdr name `herdr agent start <name>` gave it; herdr does not restore it after a restart. */
+  name?: string
 }
 export type HerdrPane = { pane_id: string; tab_id: string; agent_status: string }
 export type HerdrListing = { ok: true; agents: HerdrAgent[] } | { ok: false; reason: string }
