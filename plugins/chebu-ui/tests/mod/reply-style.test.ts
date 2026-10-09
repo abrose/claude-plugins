@@ -6,12 +6,22 @@ const assistant = (content: object[]) => ({ message: { type: 'assistant', conten
 
 describe('Reply style', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`draws an answer as markdown in a round blue frame (${surface})`, async ($, on) => {
+    test(`draws an answer on a tinted background, without a frame (${surface})`, async ($, on) => {
       await start($, on)
       const ui = await mount($, 'AssistantMessage', { text: 'The **answer**.', isFirstOfReply: true }, surface)
 
-      expect((await ui.find({ type: 'Box' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'blue' })
-      expect(await ui.find({ type: 'Markdown', text: 'The **answer**.' })).toBeDefined()
+      const box = (await ui.find({ type: 'Box' }))?.props
+      expect(box).toMatchObject({ backgroundColor: '#1e2a3a' })
+      expect(box?.borderStyle).toBeUndefined()
+    })
+
+    // Another mod beneath (gfm-render draws alerts and diagrams) must still get its turn.
+    test(`tints the drawing of the hooks beneath instead of replacing it (${surface})`, async ($, on) => {
+      await start($, on)
+      const ui = await mount($, 'AssistantMessage', { text: 'The **answer**.', isFirstOfReply: true }, surface)
+
+      expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeDefined()
+      expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
     })
   }
 
@@ -30,7 +40,7 @@ describe('Reply style', () => {
     await append($, assistant([{ type: 'text', text: 'Done.' }]))
     const ui = await mount($, 'AssistantMessage', { text: 'Done.', isFirstOfReply: true })
 
-    expect(await ui.find({ type: 'Markdown', text: 'Done.' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeDefined()
   })
 
   test('ignores what a subagent says', async ($, on) => {
@@ -38,6 +48,6 @@ describe('Reply style', () => {
     await append($, { agentId: 'a1', ...assistant([{ type: 'text', text: 'Sub.' }, { type: 'tool_use', name: 'Read' }]) })
     const ui = await mount($, 'AssistantMessage', { text: 'Sub.', isFirstOfReply: true })
 
-    expect(await ui.find({ type: 'Markdown', text: 'Sub.' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeDefined()
   })
 })

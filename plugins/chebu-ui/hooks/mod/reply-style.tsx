@@ -4,8 +4,8 @@ import type { On } from 'claude-code'
 const narration = atom({ plugin: 'chebu-ui', key: 'narration' } as const, [])
 
 export function registerReplyStyle(on: On) {
-  on('ui.render', { component: 'AssistantMessage' }, async ($, e) => {
-    const { Box, Markdown, Text } = $.ui.resolve(e)
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const { Box, Text } = $.ui.resolve(e)
     const block = e.props.text.trim()
 
     // Narration is text a tool call followed; anything else (the answer, an older reply) stays bright.
@@ -25,8 +25,10 @@ export function registerReplyStyle(on: On) {
     }
 
     return (
-      <Box marginTop={1} borderStyle="round" borderColor="blue" paddingX={1}>
-        <Markdown text={e.props.text} />
+      // A background instead of a frame, so copied text carries no border characters.
+      // Wraps the drawing beneath, so another mod (gfm-render's alerts and diagrams) still gets its turn.
+      <Box marginTop={1} backgroundColor="#1e2a3a" paddingX={1}>
+        {await next(e)}
       </Box>
     )
   })

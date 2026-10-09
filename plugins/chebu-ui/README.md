@@ -64,10 +64,11 @@ call that failed or was interrupted.
 
 ### Reply style
 
-The answer shows as markdown in a round blue frame. Text that a tool call
-followed in the same turn (narration such as "Let me read the file") shows dim
-and italic instead, so the answer stands out. Replies from before the plugin
-loaded show framed.
+The answer shows as markdown on a dark blue-gray background. There is no frame,
+so text copied from the answer carries no border characters. Text that a tool
+call followed in the same turn (narration such as "Let me read the file") shows
+dim and italic instead, so the answer stands out. Replies from before the
+plugin loaded show on the background too.
 
 ## Development
 
