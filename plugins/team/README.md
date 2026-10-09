@@ -102,13 +102,12 @@ In the `Team` pane, click an agent row to jump to its herdr pane. With the keybo
 | envoy | `team-envoy` | Opus 5.5 (fresh session only) | - | In a fresh session started with `claude --agent team-envoy`: yes (`Edit`, `Write` blocked). In your own session after `/team:init`: no. It keeps every tool and its own model; the prose rule of `team-role-envoy` is its only guard |
 
 The orchestrator overrides the defaults per job with `team-start --model
-opus-5-5|sonnet-5-5|haiku-4-5` and `--effort low|medium|high|xhigh|max`. Any
-other model is refused. Haiku starts in `accept-edits` mode, since it has no
-auto mode.
+opus-5-5|sonnet-5-5|haiku-5-5` and `--effort low|medium|high|xhigh|max`. Any
+other model is refused. Without `--effort`, `haiku-5-5` runs at effort `high`.
 
 Reviewer and post-notes work run on `team-investigator` with the `brief-review`
 and `brief-post-notes` templates. Mechanical jobs run on `team-implementer`
-with `--model haiku-4-5`.
+with `--model haiku-5-5`.
 
 ## Multiple teams
 

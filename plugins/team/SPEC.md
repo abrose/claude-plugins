@@ -141,9 +141,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
    composes the team on demand: it starts an agent when a task needs one, and
    never asks the human up front which roles the run will use. It fits
    `team-start --model` and `--effort` to each job: `opus-5-5` for deep
-   analysis and review, `sonnet-5-5` for code and tests, `haiku-4-5` for
-   mechanical jobs such as Jira writes (it starts in accept-edits, so budget
-   an approval round). Omit a flag only when the role default fits the job; a
+   analysis and review, `sonnet-5-5` for code and tests, `haiku-5-5` at
+   effort `high` for mechanical jobs such as Jira writes. Omit a flag only when the role default fits the job; a
    human or project rule for a kind of job wins. It never does
    operational work itself. It never investigates a question, never
    analyses code to answer one, never runs a test, never drives a browser, never
@@ -256,8 +255,10 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 Model and effort are start flags. The defaults below are what `team-start`
 passes when `--model` or `--effort` is omitted. The orchestrator picks
 another model or effort per job with `--model` and `--effort`. The model
-allowlist is `opus-5-5`, `sonnet-5-5`, `haiku-4-5`. Every other model,
-Fable included, is refused with exit 2.
+allowlist is `opus-5-5`, `sonnet-5-5`, `haiku-5-5`. Every other model,
+Fable included, is refused with exit 2. When `--effort` is omitted,
+`haiku-5-5` defaults to effort `high` whatever the role; the other models
+follow the role default.
 
 | Role | Agent file | Model | Effort | Mode | Read-only | Used for |
 |---|---|---|---|---|---|---|
@@ -269,9 +270,8 @@ Fable included, is refused with exit 2.
 
 Reviewer and Mechanic are not separate agent files: a reviewer is
 `team-investigator` with `brief-review.md`; a mechanical job runs on
-`team-implementer` with `--model haiku-4-5`. Haiku has no auto mode, so
-`team-start` defaults it to `accept-edits` and refuses `--mode auto` with
-exit 2; budget an approval round for it.
+`team-implementer` with `--model haiku-5-5`. Haiku 5.5 supports auto mode
+and starts in `auto` like the other models.
 
 ### Agent frontmatter
 
@@ -348,16 +348,15 @@ creates and reads these; the overlay never does.
 
 ```
 team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])
-           [--model opus-5-5|sonnet-5-5|haiku-4-5] [--effort low|medium|high|xhigh|max]
+           [--model opus-5-5|sonnet-5-5|haiku-5-5] [--effort low|medium|high|xhigh|max]
            [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]
 ```
 
 1. Resolve `<role>` (`investigator`, `implementer`, `tester` or `orchestrator`)
    to the agent file, default model and default effort from
    the role table. Refuse with exit 2 a model outside the allowlist, an
-   effort claude does not know, or Haiku with `--mode auto`. The mode
-   defaults to `auto`, or to `accept-edits` for Haiku. `accept-edits` goes
-   to claude as `--permission-mode acceptEdits`.
+   effort claude does not know. The mode defaults to `auto` for every model.
+   `accept-edits` goes to claude as `--permission-mode acceptEdits`.
    Namespace the name as `<team_id>-<label>` from `.team/config.json`, then
    refuse with exit 3 if the live `herdr agent list` already holds that name: a
    name a live agent owns is not restartable without seizing its pane.

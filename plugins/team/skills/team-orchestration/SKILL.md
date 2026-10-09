@@ -16,9 +16,8 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
    composes the team on demand: it starts an agent when a task needs one, and
    never asks the human up front which roles the run will use. It fits
    `team-start --model` and `--effort` to each job: `opus-5-5` for deep
-   analysis and review, `sonnet-5-5` for code and tests, `haiku-4-5` for
-   mechanical jobs such as Jira writes (it starts in accept-edits, so budget
-   an approval round). Omit a flag only when the role default fits the job; a
+   analysis and review, `sonnet-5-5` for code and tests, `haiku-5-5` at
+   effort `high` for mechanical jobs such as Jira writes. Omit a flag only when the role default fits the job; a
    human or project rule for a kind of job wins. It never does
    operational work itself. It never investigates a question, never
    analyses code to answer one, never runs a test, never drives a browser, never

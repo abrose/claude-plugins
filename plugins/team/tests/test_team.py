@@ -233,16 +233,22 @@ class TeamStart(Base):
                 self.assert_started(self.start_argv("maker", "team-implementer", model, "xhigh"))
                 self.assertEqual(json.loads(p.stdout)["model"], model)
 
-    def test_haiku_starts_in_accept_edits_mode(self):
-        # Haiku has no auto mode, so the default mode follows the model.
+    def test_haiku_starts_in_auto_mode(self):
         p = self.run_script("team-start", "clerk", "implementer", "--pane", "w1:p2",
-                            "--cwd", self.proj, "--model", "haiku-4-5", "--effort", "low",
-                            env_extra=self.bar_env("Haiku 4.5", mode="accept edits on"))
+                            "--cwd", self.proj, "--model", "haiku-5-5", "--effort", "low",
+                            env_extra=self.bar_env("Haiku 5.5"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assert_started(self.start_argv("clerk", "team-implementer", "claude-haiku-4-5-20251001",
-                                            "low", mode="acceptEdits"))
+        self.assert_started(self.start_argv("clerk", "team-implementer", "claude-haiku-5-5", "low"))
         out = json.loads(p.stdout)
-        self.assertEqual(out["mode"], "accept-edits")
+        self.assertEqual(out["mode"], "auto")
+
+    def test_haiku_defaults_to_high_effort(self):
+        # The model default effort wins over the role default (implementer: medium).
+        p = self.run_script("team-start", "clerk", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--model", "haiku-5-5",
+                            env_extra=self.bar_env("Haiku 5.5"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_started(self.start_argv("clerk", "team-implementer", "claude-haiku-5-5", "high"))
 
     def test_accept_edits_mode_uses_claude_permission_mode_name(self):
         p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2",
@@ -251,13 +257,6 @@ class TeamStart(Base):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assert_started(self.start_argv("maker", "team-implementer", "claude-sonnet-5-5",
                                             "medium", mode="acceptEdits"))
-
-    def test_haiku_with_auto_mode_is_bad_args(self):
-        p = self.run_script("team-start", "clerk", "implementer", "--pane", "w1:p2",
-                            "--cwd", self.proj, "--model", "haiku-4-5", "--mode", "auto")
-        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("haiku-4-5 has no auto mode", p.stderr)
-        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
 
     def test_rejects_model_outside_allowlist(self):
         for flag in ("fable", "opus", "opus-4-8", "sonnet-5", "claude-opus-5-5"):

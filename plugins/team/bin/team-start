@@ -5,7 +5,7 @@ set -euo pipefail
 
 usage() {
   echo "usage: team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])" >&2
-  echo "       [--model opus-5-5|sonnet-5-5|haiku-4-5] [--effort low|medium|high|xhigh|max]" >&2
+  echo "       [--model opus-5-5|sonnet-5-5|haiku-5-5] [--effort low|medium|high|xhigh|max]" >&2
   echo "       [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
   exit 2
 }
@@ -42,14 +42,16 @@ while [ $# -gt 0 ]; do
 done
 
 model_flag="${model_flag:-$def_model}"
+model_effort=""
 case "$model_flag" in
-  opus-5-5)   model=claude-opus-5-5;           bar_model=Opus;   def_mode=auto ;;
-  sonnet-5-5) model=claude-sonnet-5-5;         bar_model=Sonnet; def_mode=auto ;;
-  haiku-4-5)  model=claude-haiku-4-5-20251001; bar_model=Haiku;  def_mode=accept-edits ;;
+  opus-5-5)   model=claude-opus-5-5;   bar_model=Opus;   def_mode=auto ;;
+  sonnet-5-5) model=claude-sonnet-5-5; bar_model=Sonnet; def_mode=auto ;;
+  haiku-5-5)  model=claude-haiku-5-5;  bar_model=Haiku;  def_mode=auto; model_effort=high ;;
   *) echo "unknown model: $model_flag" >&2; exit 2 ;;
 esac
 
-effort="${effort:-$def_effort}"
+# A model default effort wins over the role default; --effort wins over both.
+effort="${effort:-${model_effort:-$def_effort}}"
 case "$effort" in
   low|medium|high|xhigh|max) ;;
   *) echo "unknown effort: $effort" >&2; exit 2 ;;
@@ -61,10 +63,6 @@ case "$mode" in
   accept-edits) permission_mode=acceptEdits; bar_mode="accept edits" ;;
   *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
-if [ "$model_flag" = haiku-4-5 ] && [ "$mode" = auto ]; then
-  echo "haiku-4-5 has no auto mode; use --mode accept-edits" >&2
-  exit 2
-fi
 
 session_id="$(python3 -c "import uuid;print(uuid.uuid4())")"
 index_dir="${TEAM_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/team/sessions}"
