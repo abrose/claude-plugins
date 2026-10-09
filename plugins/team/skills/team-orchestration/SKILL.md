@@ -120,7 +120,15 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     has one, otherwise one plain `grep -n <literal> <file>` per call (an em
     dash can be typed literally), including em dash scans. If a command still
     prompts, find a simpler form instead of waiting. Such commands trigger
-    permission prompts that stall the run.
+    permission prompts that stall the run. One exception: pass a secret only
+    as `VAR="$(<secret command>)" <command>`. Only a secret-read command may
+    sit inside `$(...)`, assigned to a variable prefix of the same command;
+    every other `$(...)` stays banned. Never print, `echo` or `printenv` a
+    secret, and
+    never write it to a file you read back. The secret hook requires this
+    form and the human's allow rules cover it, so it does not prompt. If the
+    form still prompts, stop and report; never work around the guard with
+    your own scripts unless the brief says so.
 21. Every card states door (one-way or two-way) and rework (a concrete
     estimate). Park a two-way card with about an hour of rework or less: file it
     with `parked: true`, record the assumption in your work, and continue. Wait

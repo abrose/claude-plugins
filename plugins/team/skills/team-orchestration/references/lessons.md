@@ -57,6 +57,15 @@ never here.
   (`app-1` then `app-1-2`), never the old team's names. `team-start` refuses a
   label whose namespaced name is already a live agent. Trust the id init prints.
 
+## Secrets
+
+- Rule 20 and a project's secret hook can collide. In BUG-3359 the hook
+  blocked a bare `gopass show` and prescribed `$(...)` substitution, which
+  rule 20 then banned. The worker wrote its own Python helpers instead and
+  reported a deviation. The prescribed form is allowed by rule 20:
+  `GRAFANA_PASS="$(gopass show -o <path>)" <command>`, with
+  `<path>` a placeholder here. Use it, and never print the value.
+
 ## Fan-out
 
 - `brief_send` returns as soon as the kick-off is queued at the agent. To fan
