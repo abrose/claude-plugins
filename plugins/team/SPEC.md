@@ -356,7 +356,7 @@ creates and reads these; the overlay never does.
 | `.team/questions/Q-<n>.json` | the `ask` tool | one card |
 | `.team/questions/claims/<n>` | the `ask` tool | a directory per claimed card number |
 | `.team/decisions/<n>.json` | the `decide` tool | the ledger the orchestrator's tick reads, one entry per decision |
-| `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number |
+| `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number; `_line:<name>` holds the last REPORT line sent for that agent |
 | `.team/toasted.json` | the envoy's tick | ids of urgent cards seen or toasted |
 | `.team/last-relay.txt` | the `relay` tool | the orchestrator session on the first line, then the last `RELAY` text sent to it |
 
@@ -762,7 +762,29 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `.team/decisions/`, past the `_decision` mark in `delivered.json`, a missing
   mark being 0), and sends every REPORT line, then every DECISION line, then
   every WATCH line, as one `$.prompt.submit`. A record with role `orchestrator`
-  is skipped by report pickup and the watch rules. herdr down -> one
+  is skipped by report pickup and the watch rules. Delivery runs once at a
+  time and writes its marks first. A tick that finds another tick running
+  returns at once (the timer does not wait for a tick). The marks in
+  `delivered.json` are written before `$.prompt.submit` is called, and the tick
+  does not await the submit, which waits while the session is busy. A write
+  merges with the file on disk and keeps the higher number per key, so no
+  write lowers a mark, with no exception. A `delivered.json` that exists but
+  does not parse (a read during a write) or is not an object stops the send of
+  that tick: the tick shows `prompt not sent: Error: delivered.json does not
+  parse`, sends nothing and writes nothing, and the next tick reads again. Only
+  a missing file is a first run; reading a broken file as missing would send
+  every old decision again. A submit that fails keeps its lines
+  in a retry list in the mod's memory (the marks stay where they are); only a
+  rejected submit fills the list, and a failure after a good submit (the status
+  line) never does. The next
+  tick that sends puts the retry lines first in its bundle, once each, and
+  empties the list as it calls the submit; if that submit fails too, all its
+  lines go back to the list. The list lives in memory only: a mod restart
+  between the failure and the next send loses those lines. A `/clear` of the
+  session (a new `session.start`) keeps them. An error shown for a failed send
+  is wrapped so that a failure of the display is not an unhandled rejection.
+  A report file whose REPORT line equals the last line sent
+  for that agent (`_line:<name>`) is marked but not sent again. herdr down -> one
   `WATCH herdr unreachable: <reason>` until it is back. Line formats:
   `REPORT <name> <topic>: <summary>`; `DECISION <n> (Q-12 tester/fixtures, Q-13
   tester/fixtures): <answer>`, with ` - overrides assumption Q-12` added when the

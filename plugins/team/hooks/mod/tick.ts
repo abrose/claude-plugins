@@ -11,8 +11,8 @@ import { watchLines } from './watch'
 import type { WatchMemory } from './watch'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
-import { pickReports } from './reports'
-import type { ReportFile } from './reports'
+import { mergeMarks, pickReports } from './reports'
+import type { Marks, ReportFile } from './reports'
 
 export type TeamRecord = {
   role: string
@@ -49,23 +49,48 @@ export async function reportFiles(io: Io, run: string, records: Record<string, T
 }
 
 /**
- * REPORT lines new since the last tick. `delivered` holds the marks as read;
- * `commit` writes them once the lines are sent, with `extra` marks merged in.
+ * REPORT lines new since the last tick. `delivered` holds the marks as read.
+ * `commit` writes them BEFORE the lines are sent, with `extra` marks merged in, and never lowers a mark
+ * on disk. Nothing writes a mark back down: a send that fails is retried from memory (see `sendLines`).
  */
 export async function newReportLines(io: Io, run: string, teamdir: string,
                                      records: Record<string, TeamRecord>,
 ): Promise<{
   lines: string[]
-  delivered: Record<string, number>
-  commit: (extra?: Record<string, number>) => Promise<void>
+  delivered: Marks
+  /** True when the file exists but does not parse (a read during a write): the tick must send nothing. */
+  unreadable: boolean
+  commit: (extra?: Marks) => Promise<void>
 }> {
   const path = `${teamdir}/delivered.json`
-  const picked = pickReports(await reportFiles(io, run, records), await readJson<Record<string, number>>(io, path))
+  const read = await readMarks(io, path)
+  const picked = pickReports(await reportFiles(io, run, records), read.marks)
   return {
     lines: picked.lines,
     delivered: picked.delivered,
-    commit: (extra = {}) => writeJson(io, path, { ...picked.delivered, ...extra }),
+    unreadable: read.unreadable,
+    commit: async (extra = {}) => {
+      const disk = await readMarks(io, path)
+      if (disk.unreadable) throw new Error('delivered.json does not parse')
+      await writeJson(io, path, mergeMarks(disk.marks, { ...picked.delivered, ...extra }))
+    },
   }
+}
+
+/**
+ * The marks on disk. A missing file is a first run (`marks` null). A file that exists but does not parse, or
+ * is not an object, is `unreadable`: reading it as missing would make the next tick send every old decision.
+ */
+async function readMarks(io: Io, path: string): Promise<{ marks: Marks | null; unreadable: boolean }> {
+  const text = await io.readText(path)
+  if (text === null) return { marks: null, unreadable: false }
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return { marks: parsed as Marks, unreadable: false }
+  } catch {
+    // falls through to unreadable
+  }
+  return { marks: null, unreadable: true }
 }
 
 /** The ledger `decide` writes: one entry per decision under `<teamdir>/decisions/`. */

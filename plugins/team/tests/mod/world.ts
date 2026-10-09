@@ -30,6 +30,10 @@ export type World = {
   orchRunsIn: string
   /** The next prompt.submit throws, once. */
   submitFails: boolean
+  /** The next prompt.submit calls each wait on one of these, in order: it is recorded in `submits` at once, answers when the promise settles. */
+  holdSubmits: Promise<void>[]
+  /** The next `herdr agent list` waits on this, once: it holds a tick open. */
+  holdList: Promise<void> | null
   /** The next fs.write throws, once. */
   writeFails: boolean
   /** Runs after each fs.read answered, to stand for a writer in another process. */
@@ -140,6 +144,8 @@ export function world(on: On): World {
     orchLocked: false,
     orchRunsIn: '',
     submitFails: false,
+    holdSubmits: [],
+    holdList: null,
     writeFails: false,
     dirs: new Set(),
     raceMkdir: new Set(),
@@ -258,7 +264,12 @@ export function world(on: On): World {
     }
     if (w.herdrFails) return out('', 1, w.herdrFails)
     const sub = argv.slice(1, 3).join(' ')
-    if (sub === 'agent list') return out(JSON.stringify({ result: { agents: w.agents } }))
+    if (sub === 'agent list') {
+      const hold = w.holdList
+      w.holdList = null
+      const answer = out(JSON.stringify({ result: { agents: w.agents } }))
+      return hold ? hold.then(() => answer) : answer
+    }
     if (sub === 'pane list') return out(JSON.stringify({ result: { panes: w.panes } }))
     if (sub === 'agent read') return out('Allow Bash(rm -rf build)? [y/n]\n')
     // /clear never starts a turn, so herdr answers a prompt of it with agent_prompt_stalled.
@@ -284,7 +295,8 @@ export function world(on: On): World {
       throw new Error('submit refused')
     }
     w.submits.push(e.text)
-    return { text: e.text }
+    const hold = w.holdSubmits.shift()
+    return hold ? hold.then(() => ({ text: e.text })) : { text: e.text }
   })
   on('session.send', ($, e) => {
     if (w.sendFails) return { isDelivered: false, reason: w.sendFails }

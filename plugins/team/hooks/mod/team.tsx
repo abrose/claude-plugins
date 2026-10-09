@@ -17,6 +17,7 @@ import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
 import { reattach } from './reattach'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
 import { pickDecisions } from './decisions'
+import { numberMark } from './reports'
 import { agentRows, idleTabRows, newReportLines, readLedger, readRecords, syncPanes, watchTick } from './tick'
 import type { TeamRecord } from './tick'
 
@@ -33,6 +34,11 @@ const tickAt = atom({ plugin: 'team', key: 'tickAt' } as const, '')
 const error = atom({ plugin: 'team', key: 'error' } as const, '')
 // One tick loop per module: a second session.start replaces it, never adds one.
 let tickTimer: Timer | null = null
+// True while a tick runs: a tick that finds it set returns at once.
+let ticking = false
+// Lines of a rejected send, in order. The next tick that sends puts them first. Memory only: a mod restart
+// loses them. A new session.start (a /clear) keeps them.
+let retryLines: string[] = []
 // The status text this module set last; null until a session sets one, so its first tick always sets the line.
 let lastBadge: string | undefined | null = null
 
@@ -150,19 +156,74 @@ async function orchestratorHalf(
   // A card still waiting for the human (open, or parked and so assumed) holds its sender's release back.
   const waiting = new Set((await readCards(io, teamdir))
     .filter(c => c.status === 'open' || c.status === 'assumed').map(c => c.from))
-  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exemptTabs(cfg), waiting)
+  // Read the marks before anything else with a side effect: a file that does not parse stops this tick's send.
   const reports = await newReportLines(io, run, teamdir, records)
-  const decisions = pickDecisions(await readLedger(io, teamdir), reports.delivered._decision)
-  const lines = [...reports.lines, ...decisions.lines, ...watch]
-  try {
-    if (lines.length > 0) await $.prompt.submit({ text: lines.join('\n') })
-    await reports.commit({ _decision: decisions.mark })
-    if (split && lines.length > 0 && lastBadge?.startsWith(NOT_SENT)) await setStatus($, undefined)
-  } catch (err) {
-    const text = `${NOT_SENT}${String(err).slice(0, 160)}`
-    await update($, error, () => text)
-    if (split) await setStatus($, text)
+  if (reports.unreadable) {
+    await showNotSent($, new Error('delivered.json does not parse'), split)
+    return
   }
+  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exemptTabs(cfg), waiting)
+  const decisions = pickDecisions(await readLedger(io, teamdir), numberMark(reports.delivered, '_decision'))
+  const fresh = [...reports.lines, ...decisions.lines, ...watch]
+  // The marks go first: a submit waits while the session is busy, and a later tick must not pick the same lines again.
+  try {
+    await reports.commit({ _decision: decisions.mark })
+  } catch (err) {
+    await showNotSent($, err, split)
+    return
+  }
+  // Lines of a rejected send go first. The list is emptied as the submit is called, so a later tick cannot send them twice.
+  const lines = [...retryLines, ...fresh.filter(l => !retryLines.includes(l))]
+  if (lines.length === 0) return
+  retryLines = []
+  // Not awaited: the tick ends here, and the submit settles whenever the session takes the prompt.
+  void sendLines($, lines, split).catch(err => showNotSentSafely($, err, split))
+}
+
+async function showNotSent($: EngineInterface, err: unknown, split: boolean): Promise<void> {
+  const text = `${NOT_SENT}${String(err).slice(0, 160)}`
+  await update($, error, () => text)
+  if (split) await setStatus($, text)
+}
+
+/** The display of an error that cannot throw: when it fails, nothing is left to tell. */
+async function showNotSentSafely($: EngineInterface, err: unknown, split: boolean): Promise<void> {
+  try {
+    await showNotSent($, err, split)
+  } catch {
+    // The display itself failed, so there is nothing left to tell; the lines are in the retry list.
+  }
+}
+
+/**
+ * Sends one prompt. A failed send keeps its lines in `retryLines`, so the next tick that sends puts them
+ * first in its bundle. The marks stay where they are. The list is memory only: a restart loses it.
+ */
+async function sendLines($: EngineInterface, lines: string[], split: boolean): Promise<void> {
+  try {
+    await $.prompt.submit({ text: lines.join('\n') })
+  } catch (err) {
+    // Only a rejected submit fills the list.
+    retryLines = [...retryLines, ...lines.filter(l => !retryLines.includes(l))]
+    await showNotSent($, err, split)
+    return
+  }
+  // The lines are sent. A throw from here on goes to the caller's catch and never fills the list.
+  if (split && lastBadge?.startsWith(NOT_SENT)) await setStatus($, undefined)
+}
+
+/** Test-only access to the module state; the mod itself never calls it. */
+export const testing = {
+  reset: () => {
+    retryLines = []
+    ticking = false
+    lastBadge = null
+  },
+  retryLines: () => [...retryLines],
+  setBadge: (text: string | undefined | null) => {
+    lastBadge = text
+  },
+  sendLines,
 }
 
 /** The envoy half: the plan, the cards and the agent rows the panes draw. */
@@ -195,7 +256,18 @@ async function urgentBadge($: EngineInterface, io: Io, teamdir: string, found: T
   await writeJson(io, marksPath, fresh.seen)
 }
 
+/** The timer does not wait for a tick (its callback returns void), so a slow tick would overlap the next one. */
 async function tick($: EngineInterface, io: Io): Promise<void> {
+  if (ticking) return
+  ticking = true
+  try {
+    await tickOnce($, io)
+  } finally {
+    ticking = false
+  }
+}
+
+async function tickOnce($: EngineInterface, io: Io): Promise<void> {
   const held = await sessionRole(io)
   const was = await read($, active)
   await update($, active, () => held !== null)
