@@ -78,6 +78,23 @@ never here.
   round needs the human's explicit go.
 - Behaviour-neutral tidy-ups do not count as rounds.
 
+## Commit gos
+
+- A commit go is a numbered decision that names the branch, the commit message
+  and the scope (commit only). The envoy records it with `decide`. Push, merge,
+  bump, tag and MR creation each need their own decision. Nobody types a go
+  into a worker or orchestrator pane.
+- A tracker write (Jira or any other tracker: comment, field change,
+  transition, worklog, issue creation, posted note) is a decision too. It names
+  the tracker item, what gets written and the scope. A plain go is no go.
+- Evidence (team-envoy run, 2026-10-09): impl3 committed 7ec1f1f under
+  decision 16 with no go in its pane. The relayed gos without a decision (Q-8,
+  Q-11) were refused by auto mode.
+- Fallback, if auto mode refuses a commit that has a decision: the worker stops
+  and files a card. Option 1 then applies: the worker stages and writes the
+  message file, and the envoy runs a `team-commit` script on the human's
+  first-hand go (about 2 h to build). That script does not exist yet.
+
 ## Testing and verification
 
 - Verify one load-bearing claim of every report before you relay it.

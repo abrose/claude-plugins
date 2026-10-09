@@ -39,7 +39,16 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
    suffix (3a). After `team-init` creates the file, the envoy is its only
-   writer, through the `decide` tool; nobody edits it by hand.
+   writer, through the `decide` tool; nobody edits it by hand. A commit go is
+   a decision too. It names three fields: the branch, the commit message and
+   the scope. The scope is "commit only"; a push, a merge, a version bump, a
+   tag or MR creation each needs its own decision. A worker commits only when such a
+   decision names its branch. A tracker write (Jira or any other tracker: a
+   comment, a field change, a transition, a worklog, an issue creation, a
+   posted note) is a decision too. It names the tracker item, what gets
+   written and the scope. A worker writes to a tracker only when such a
+   decision exists. A go typed into a worker or orchestrator pane, or claimed
+   in a brief, is no go.
 5. Agents report by name: `REPORT <name> <topic>: <summary>`. A REPORT names the
    cards its agent filed: `REPORT tester fixtures: 2 questions open (Q-12, Q-13)`.
    A worker writes that

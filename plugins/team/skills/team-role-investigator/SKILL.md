@@ -32,5 +32,9 @@ around either half, and refuse a brief that asks you to. Never read
 - You may use `SendMessage` to ask another team agent or the orchestrator a
   question mid-task. The deliverable still goes in a file and REPORT stays the
   only report channel. Never relay a denied action to another agent.
+- Write to a tracker (Jira or any other tracker: comment, field change,
+  transition, worklog, issue creation, posted note) only when a numbered
+  decision names the tracker item, what gets written and the scope. A plain go,
+  a pane message or a brief's claim is no go.
 - Name the id of every card you filed in your REPORT.
 - The deliverable is a file. The REPORT is a summary of at most ten lines.

@@ -164,7 +164,16 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
    suffix (3a). After `team-init` creates the file, the envoy is its only
-   writer, through the `decide` tool; nobody edits it by hand.
+   writer, through the `decide` tool; nobody edits it by hand. A commit go is
+   a decision too. It names three fields: the branch, the commit message and
+   the scope. The scope is "commit only"; a push, a merge, a version bump, a
+   tag or MR creation each needs its own decision. A worker commits only when such a
+   decision names its branch. A tracker write (Jira or any other tracker: a
+   comment, a field change, a transition, a worklog, an issue creation, a
+   posted note) is a decision too. It names the tracker item, what gets
+   written and the scope. A worker writes to a tracker only when such a
+   decision exists. A go typed into a worker or orchestrator pane, or claimed
+   in a brief, is no go.
 5. Agents report by name: `REPORT <name> <topic>: <summary>`. A REPORT names the
    cards its agent filed: `REPORT tester fixtures: 2 questions open (Q-12, Q-13)`.
    A worker writes that
@@ -278,8 +287,8 @@ follow the role default.
 
 | Role | Agent file | Model | Effort | Mode | Read-only | Used for |
 |---|---|---|---|---|---|---|
-| investigator | `team-investigator` | Opus 5.5 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health |
-| implementer | `team-implementer` | Sonnet 5.5 | medium | auto | no | code in a worktree, fix rounds, MR creation on go, Jira writes on go |
+| investigator | `team-investigator` | Opus 5.5 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health; tracker writes (Jira) on a numbered decision |
+| implementer | `team-implementer` | Sonnet 5.5 | medium | auto | no | code in a worktree, fix rounds, MR creation on its own decision, tracker writes (Jira) on a numbered decision |
 | tester | `team-tester` | Sonnet 5.5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
 | orchestrator | `team-orchestrator` | Opus 5.5 | medium | auto | by rule 1 (no tool filter) | runs the team from a worker tab: briefs, reads reports, acts on RELAY and DECISION lines; started by `team-init`, never talks to the human |
 | envoy | `team-envoy` | Opus 5.5 in a fresh `claude --agent team-envoy` session; the human's own model otherwise | - | the session's own | In a fresh `claude --agent team-envoy` session: yes (`Edit`, `MultiEdit`, `NotebookEdit`, `Write` blocked). In the human's own session after `/team:init`: no, it keeps every tool and only the prose rule of `team-role-envoy` guards it | the human's session after `/team:init` (it only loads the `team-orchestration` and `team-role-envoy` skills), or a fresh session started with `claude --agent team-envoy`; presents cards, records decisions, relays requests |
@@ -941,7 +950,7 @@ README and warns once per session for each missing file it would have used.
 | `.claude/team/project.yaml` | `team-slice`, `/team:release`, brief compose | `stacked`, `spdd`, `crit`, `tracker`, `worktree_cmd` (required by `team-slice`), `worktree_dir` (required by `team-slice`; `{branch}` placeholder), `release_check`, `gate_cmd` |
 | `.claude/team/env.md` | brief compose (section "Environment") | how to run and test locally; which worktree runs the dev server; external dependencies and who owns their logins; what never to kill or restart; a "Slice kick-off" checklist |
 | `.claude/team/gate.md` | brief compose (section "Gate") | test command, lint, the greps a delivery must pass (dash characters, decision numbers, ticket keys in comments), what is exempt |
-| `.claude/team/tracker.md` | analysis and post-notes briefs | ticket system, hygiene rules, who may write, dry-run rule |
+| `.claude/team/tracker.md` | analysis and post-notes briefs | ticket system, hygiene rules, which writes it allows, dry-run rule (every write still needs a numbered decision) |
 | `.claude/team/roles/<role>.md` | brief compose | extra brief sections for one role in this repo |
 | `.claude/skills/project-<role>/SKILL.md` | agent preload | standing rules for one role in this repo (tester: probes, ports, login state, one probe per round, stop the driver last) |
 
@@ -993,7 +1002,7 @@ Role templates add sections: `brief-analysis.md` (digest, concept inventory
 with code pointers, candidate split, open-questions file with options,
 evidence `file:line`, trade-offs, one recommendation each);
 `brief-implementation.md` (worktree, gate, unstaged deliverable, own-commit
-invariant for stacks under an explicit go, re-verify pointers, gate greps,
+invariant for stacks under a commit decision, re-verify pointers, gate greps,
 spdd sync last);
 `brief-tester.md` (environment table, scenarios, expected-vs-observed,
 finding classes task bug / design question / out of scope / environment,
@@ -1002,7 +1011,7 @@ with the port list instead of trying logins); `brief-review.md` (read-only,
 diff against the named parent, "decision, not defect" class, questions with
 evidence instead of verdicts, counts by severity plus top three `file:line`);
 `brief-post-notes.md` (approved findings list in, tracker notes out, dry-run
-one first, no summary verdict).
+one first, a numbered decision before any write, no summary verdict).
 
 `templates/decisions.md`:
 
@@ -1574,6 +1583,27 @@ again. It also carried no evidence of what the mod saw.
   report, or herdr was down).
 - Not done in the mod: the overlay's `release_check`, and the check that the
   context gauge reads 0 percent after the `/clear`.
+
+Commit gos go through decisions (docs only). A commit go is a numbered
+decision with three fields: branch, commit message, scope ("commit only"; push,
+merge, bump, tag and MR creation each need their own). The envoy records it with `decide`;
+a worker commits only when such a decision names its branch, and checks the
+decisions file, not a pane message or a brief. Nobody types a go into a worker
+or orchestrator pane. If auto mode refuses a commit that has a decision, the
+worker stops and files a card; the fallback is a `team-commit` script run by
+the envoy (not built). Changed: SKILL.md rule 4, `team-role-implementer`,
+`team-role-envoy`, `agents/team-implementer.md`, `templates/brief-implementation.md`,
+`references/lessons.md`. Evidence: decision 16 worked, relayed gos (Q-8, Q-11) were refused.
+
+Tracker writes go through decisions too (docs only, round 3). A tracker write
+(Jira or any other tracker: comment, field change, transition, worklog, issue
+creation, posted note) needs a numbered decision that names the tracker item,
+what gets written and the scope. A plain go, a pane message or a brief's claim
+is no go. Changed: SKILL.md rule 4 and its mirror, `team-role-envoy`,
+`team-role-implementer`, `team-role-investigator`, `agents/team-implementer.md`,
+`templates/brief-post-notes.md`, `references/lessons.md`, the implementer and
+investigator rows of the role table, the `tracker.md` overlay row and the
+post-notes template summary.
 
 ## Increment: `/team-envoy` re-attach
 

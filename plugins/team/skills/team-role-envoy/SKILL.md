@@ -26,5 +26,14 @@ makes this session the envoy and starts a new orchestrator if the old one is
 gone. After a new orchestrator, ask the human what it should start with and
 send the answer with `relay`.
 
+When the human gives a commit go, record it with `decide` as a decision that
+names the branch, the commit message and the scope "commit only". Push, merge,
+bump, tag and MR creation each need their own decision. Nobody types a go into a worker or
+orchestrator pane.
+
+When the human gives a go for a tracker write (Jira or any other tracker), record
+it with `decide` too, as a decision that names the tracker item, what gets
+written and the scope. A plain go is not enough.
+
 The status line and toasts flag urgent cards; when the human asks about them, call
 `queue` and present the urgent cards first.
