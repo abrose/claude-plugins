@@ -17,7 +17,11 @@ case "${1:-}" in
 esac
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-teamdir="${TEAM_SCRATCH:-scratchpad/current}/.team"
+# The run dir, absolute. A relative TEAM_SCRATCH is the project root's, not this $PWD's: the
+# mod runs this script from whatever directory its session stands in (a worktree, a subdir).
+# shellcheck source=../lib/run-dir.sh
+. "$here/../lib/run-dir.sh"
+teamdir="$(team_run_dir)/.team"
 config="$teamdir/config.json"
 [ -f "$config" ] || { echo "no team run: $config is missing; start one with /team:init <ticket>" >&2; exit 1; }
 
@@ -115,7 +119,13 @@ except BaseException:
 PY
 }
 
-if ! start_err="$("$here/team-start" orch orchestrator --new-tab --label orch --cwd "$PWD" 2>&1 >/dev/null)"; then
+# The orchestrator stands in the project root, as team-init puts it (its relative briefs and
+# run files resolve there). An absolute TEAM_SCRATCH keeps the caller's directory, as in team-init.
+case "${TEAM_SCRATCH:-scratchpad/current}" in
+  /*) orch_cwd="$PWD" ;;
+  *) orch_cwd="$(team_project_root)" ;;
+esac
+if ! start_err="$("$here/team-start" orch orchestrator --new-tab --label orch --cwd "$orch_cwd" 2>&1 >/dev/null)"; then
   echo "orchestrator did not start: $start_err" >&2
   exit 4
 fi

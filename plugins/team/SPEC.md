@@ -480,7 +480,7 @@ team-brief prepare <name> [--topic <topic>]
    and "Gate");
 4. the fixed "Report back" and "Rules" sections from `templates/brief.md`.
 
-It prints the path and exits 0. The orchestrator then edits the task section
+It prints the brief's absolute path (in the main checkout's run dir, from any cwd, as `team-start` does) and exits 0. The orchestrator then edits the task section
 with its own tools. `compose` refuses to overwrite an existing brief (use
 `-rev2` via `--topic`).
 
@@ -489,7 +489,10 @@ record `cwd` is set and differs from `prepare`'s own cwd (a worktree agent), it
 first copies the brief and, when the team's `ticket` names one, the decisions
 file into `<cwd>/scratchpad/current/`, so the agent never reads a path outside its
 own working directory; the kick-off then names the brief relative to that
-cwd instead of the orchestrator's path.
+cwd instead of the orchestrator's path. `prepare` reads the record and the brief from the
+same main run dir. An agent that stands in the project root gets the brief by its
+run-dir-relative form (`scratchpad/current/brief-...`); a caller that stands elsewhere and
+records no agent cwd gets the absolute path.
 
 It then prints the kick-off, "Read <brief-ref> and execute it fully. Report
 back as it describes. You are in execution mode; if your session shows plan
@@ -526,7 +529,9 @@ team-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--cop
 4. `herdr tab create --workspace <live workspace> --cwd <worktree> --label "<label>" --no-focus`
    and one pane, where the live workspace comes from `herdr pane current
    --current` (never the stale spawn-time `$HERDR_WORKSPACE_ID`); print
-   `{"worktree","tab","pane"}`.
+   `{"worktree","tab","pane"}`. Then add the tab id to `tabs.json` in the run
+   dir's `.team/` (`team_run_dir`, the main checkout's run dir from any cwd,
+   as `team-start` does).
 5. Print the kick-off checklist from the overlay's `env.md` section
    "Slice kick-off" if present (which worktree runs the dev server, ports).
 
@@ -542,7 +547,8 @@ names are not used) and prints one line per agent:
 `name (pane, session) status role topic last-report-age`. With `--read-idle`,
 every `idle`/`done` agent without a report file newer than its brief gets an
 `agent read --source recent-unwrapped --lines 8` and the last line is
-appended, so rule 8 is a glance. Writes `.team/roster.md`.
+appended, so rule 8 is a glance. Writes `.team/roster.md` in the main checkout's run
+dir (`team_run_dir`), from any cwd; it creates no `.team/` under the caller's cwd.
 
 The roster lists each session at most once, and it leaves out two sessions: the
 envoy (`envoy_session` in the config) and the session that runs the script
@@ -634,7 +640,11 @@ herdr call. In order:
    orchestrator runs (<pane>); left alone`, no start and no config change. If
    herdr does not answer or answers unreadably, the start goes on as before
    (stderr `cannot check for a live orchestrator: ...; starting one`).
-1. `team-start orch orchestrator --new-tab --label orch --cwd <current dir>`.
+1. `team-start orch orchestrator --new-tab --label orch --cwd <project root>`.
+   The project root is the main checkout (`team_project_root`, `lib/run-dir.sh`),
+   as `team-init` stands there; with an absolute `TEAM_SCRATCH` it is the current
+   dir. The run dir and `.team/` of every step come from `team_run_dir`, so the
+   script gives the same run dir from a linked worktree or a sub directory.
    On failure, exit 4 with `orchestrator did not start: <team-start's stderr>`;
    the config is not changed.
 2. Read the session and pane from the record `.team/<orchestrator>.json`

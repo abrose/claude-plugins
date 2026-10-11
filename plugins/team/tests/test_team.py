@@ -2137,7 +2137,7 @@ class LinkedWorktreeRoot(Base):
             os.symlink(os.path.join(HERE, "fake-" + tool), os.path.join(self.herdr_shim, tool))
 
     def real_env(self, **extra):
-        e = self.env(TEAM_SCRATCH=None, **extra)
+        e = self.env(**{"TEAM_SCRATCH": None, **extra})
         e["PATH"] = self.herdr_shim + os.pathsep + os.environ["PATH"]
         return e
 
@@ -2192,6 +2192,172 @@ class LinkedWorktreeRoot(Base):
         self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
         self.assertFalse(os.path.exists(os.path.join(self.wt, ".claude")))
         self.assertIn("TEAM_SCRATCH=%s" % self.want, " ".join(self.herdr_calls()))
+
+    # team-orch-start and team-slice run from the mod or an agent, with the cwd of whoever called.
+    # Both must use the main checkout's run dir, as team-start does (decision 21 (3), G1 and G2).
+    def write_run(self):
+        os.makedirs(os.path.join(self.want, ".team"))
+        write_text(os.path.join(self.want, ".team", "config.json"), json.dumps(
+            {"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+             "envoy_session": "sid-human", "orchestrator_session": "sid-gone", "orchestrator_tab": "w1:t3"}))
+
+    def orch_start_from(self, cwd, started_in=None, **extra):
+        env = self.real_env(**self.bar_env("Opus 5.5", cwd=started_in or self.main), **extra)
+        return subprocess.run([os.path.join(BIN, "team-orch-start")],
+                              capture_output=True, text=True, env=env, cwd=cwd)
+
+    def assert_orch_start_used_the_main_run_dir(self, p, cwd):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        cfg = json.loads(read_text(os.path.join(self.want, ".team", "config.json")))
+        self.assertEqual(cfg["orchestrator_tab"], "w1:t9")
+        self.assertTrue(os.path.exists(os.path.join(self.want, ".team", "app-1-orch.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.want, ".team", "orch-starting")))
+        self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
+
+    def test_orch_start_from_a_linked_worktree_uses_the_main_run_dir_default(self):
+        self.write_run()
+        self.assert_orch_start_used_the_main_run_dir(self.orch_start_from(self.wt), self.wt)
+
+    def test_orch_start_from_a_sub_directory_uses_the_main_run_dir(self):
+        self.write_run()
+        sub = os.path.join(self.main, "a", "b")
+        os.makedirs(sub)
+        self.assert_orch_start_used_the_main_run_dir(self.orch_start_from(sub), sub)
+
+    def test_orch_start_from_a_worktree_with_a_relative_team_scratch_uses_the_main_run_dir(self):
+        self.write_run()
+        p = self.orch_start_from(self.wt, TEAM_SCRATCH=SCRATCH)
+        self.assert_orch_start_used_the_main_run_dir(p, self.wt)
+
+    def test_orch_start_hands_team_start_the_main_run_dir_and_checkout(self):
+        self.write_run()
+        p = self.orch_start_from(self.wt)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("TEAM_SCRATCH=%s" % self.want, " ".join(self.herdr_calls()))
+        rec = json.loads(read_text(os.path.join(self.want, ".team", "app-1-orch.json")))
+        self.assertEqual(rec["cwd"], self.main)
+
+    def slice_from(self, cwd, **extra):
+        overlay = os.path.join(self.main, "overlay")
+        os.makedirs(overlay)
+        write_text(os.path.join(overlay, "project.yaml"),
+                   'worktree_cmd: "mkdir -p {branch}"\nworktree_dir: "{branch}"\n')
+        env = self.real_env(TEAM_OVERLAY=overlay, HERDR_WORKSPACE_ID="w1", **extra)
+        return subprocess.run([os.path.join(BIN, "team-slice"), "feat", "main", "--label", "T1 APP-1 slug"],
+                              capture_output=True, text=True, env=env, cwd=cwd)
+
+    def assert_slice_registered_in_the_main_run_dir(self, p, cwd):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(json.loads(read_text(os.path.join(self.want, ".team", "tabs.json"))), ["w1:t9"])
+        self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
+
+    def test_slice_from_a_linked_worktree_registers_its_tab_in_the_main_run_dir(self):
+        self.assert_slice_registered_in_the_main_run_dir(self.slice_from(self.wt), self.wt)
+
+    def test_slice_from_a_sub_directory_registers_its_tab_in_the_main_run_dir(self):
+        sub = os.path.join(self.main, "a")
+        os.makedirs(sub)
+        self.assert_slice_registered_in_the_main_run_dir(self.slice_from(sub), sub)
+
+    def test_slice_from_a_worktree_with_a_relative_team_scratch_registers_in_the_main_run_dir(self):
+        p = self.slice_from(self.wt, TEAM_SCRATCH=SCRATCH)
+        self.assert_slice_registered_in_the_main_run_dir(p, self.wt)
+
+    # Round 2 (Q-35, keep separable): team-brief, team-forget and team-status read and write
+    # the run dir too, so they take the main checkout's from any cwd.
+    def main_record(self, name, **fields):
+        os.makedirs(os.path.join(self.want, ".team"), exist_ok=True)
+        rec = {"role": "investigator", "topic": "", "brief": "", "pane": "w1:p2", **fields}
+        write_text(os.path.join(self.want, ".team", name + ".json"), json.dumps(rec))
+
+    def script_from(self, cwd, script, *args, **extra):
+        return subprocess.run([os.path.join(BIN, script), *args], capture_output=True, text=True,
+                              env=self.real_env(**extra), cwd=cwd)
+
+    def three_cwds(self):
+        sub = os.path.join(self.main, "a", "b")
+        os.makedirs(sub)
+        return [(self.wt, {}), (sub, {}), (self.wt, {"TEAM_SCRATCH": SCRATCH})]
+
+    def test_brief_compose_writes_the_brief_in_the_main_run_dir(self):
+        self.main_record("scout")
+        for i, (cwd, extra) in enumerate(self.three_cwds()):
+            with self.subTest(cwd=cwd, extra=extra):
+                brief = os.path.join(self.want, "brief-scout-t%d.md" % i)
+                p = self.script_from(cwd, "team-brief", "compose", "scout", "t%d" % i,
+                                     "--var", "ticket=APP-1", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(p.stdout.strip(), brief)
+                self.assertTrue(os.path.exists(brief))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
+
+    def test_brief_prepare_records_and_names_the_brief_from_the_main_run_dir(self):
+        self.main_record("scout", topic="digest")
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                p = self.script_from(cwd, "team-brief", "prepare", "scout", "--topic", "digest", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
+
+    def test_brief_prepare_for_an_agent_in_the_main_checkout_copies_nothing_onto_itself(self):
+        self.main_record("scout", topic="digest", cwd=self.main)
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        p = self.script_from(self.wt, "team-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Read scratchpad/current/brief-scout-digest.md and execute", p.stdout)
+        rec = json.loads(read_text(os.path.join(self.want, ".team", "scout.json")))
+        self.assertEqual(rec["brief"], "scratchpad/current/brief-scout-digest.md")
+
+    def test_forget_removes_a_record_that_lives_in_the_main_run_dir(self):
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                self.main_record("scout")
+                p = self.script_from(cwd, "team-forget", "scout", TEAM_INDEX_DIR=os.path.join(self.proj, "_index"), **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("forgot scout", p.stdout)
+                self.assertFalse(os.path.exists(os.path.join(self.want, ".team", "scout.json")))
+
+    def test_status_lists_agents_from_the_main_run_dir_and_makes_no_team_dir_in_the_caller(self):
+        self.main_record("scout", topic="digest", session="11111111aaaa")
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                p = self.script_from(cwd, "team-status", scenario="status_mixed", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
+                self.assertTrue(os.path.exists(os.path.join(self.want, ".team", "roster.md")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
+
+    # Tidy-up (review N1): an ABSOLUTE TEAM_SCRATCH from a linked worktree, the envoy's live case.
+    def test_orch_start_from_a_worktree_with_an_absolute_team_scratch_uses_that_run_dir(self):
+        self.write_run()
+        # An absolute TEAM_SCRATCH keeps $PWD: the orchestrator starts in the worktree, so its bar shows it.
+        p = self.orch_start_from(self.wt, started_in=self.wt, TEAM_SCRATCH=self.want)
+        self.assert_orch_start_used_the_main_run_dir(p, self.wt)
+        rec = json.loads(read_text(os.path.join(self.want, ".team", "app-1-orch.json")))
+        self.assertEqual(rec["cwd"], os.path.realpath(self.wt))
+
+    def test_brief_from_a_worktree_with_an_absolute_team_scratch_uses_that_run_dir(self):
+        self.main_record("scout", topic="digest")
+        extra = {"TEAM_SCRATCH": self.want}
+        brief = os.path.join(self.want, "brief-scout-t.md")
+        p = self.script_from(self.wt, "team-brief", "compose", "scout", "t", "--var", "ticket=APP-1", **extra)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.stdout.strip(), brief)
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        p = self.script_from(self.wt, "team-brief", "prepare", "scout", "--topic", "digest", **extra)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
+
+    def test_status_from_a_worktree_with_an_absolute_team_scratch_uses_that_run_dir(self):
+        self.main_record("scout", topic="digest", session="11111111aaaa")
+        p = self.script_from(self.wt, "team-status", scenario="status_mixed", TEAM_SCRATCH=self.want)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
+        self.assertTrue(os.path.exists(os.path.join(self.want, ".team", "roster.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
 
 
 class TeamInit(Base):
@@ -2768,7 +2934,7 @@ class TeamOrchStart(Base):
         self.assertEqual(self.cfg()["envoy_session"], "sid-human")
         self.assertEqual(p.stdout.strip(), "orchestrator=app-1-orch session=%s pane=w1:p9 tab=w1:t9" % sid)
 
-    def test_the_orchestrator_starts_in_the_current_dir(self):
+    def test_the_orchestrator_starts_in_the_project_root(self):
         self.live_run()
         p = self.run_script("team-orch-start")
         self.assertEqual(p.returncode, 0, p.stderr)

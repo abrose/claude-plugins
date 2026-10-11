@@ -87,8 +87,10 @@ out=$(herdr tab create --workspace "$ws" --cwd "$wt_abs" --label "$label" --no-f
 python3 -c "import sys,json;d=json.load(sys.stdin);print(json.dumps({'worktree':'$wt','tab':d['result']['tab']['tab_id'],'pane':d['result']['root_pane']['pane_id']}))" <<<"$out"
 
 # Register the new tab as a team tab, as team-start does for a tab it creates
-# (same team dir, same dedup): the mod releases agents only in listed tabs.
-teamdir="${TEAM_SCRATCH:-scratchpad/current}/.team"
+# (same team dir via lib/run-dir.sh, same dedup): the mod releases agents only in listed tabs.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+teamdir="$(team_run_dir)/.team"
 mkdir -p "$teamdir"
 OUT="$out" python3 - "$teamdir/tabs.json" <<'PY'
 import os, json, sys

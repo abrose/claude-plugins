@@ -1,4 +1,5 @@
-# Sourced by bin/team-init, bin/team-start and bin/team-resurrect (not run on its own).
+# Sourced by bin/team-init, bin/team-start, bin/team-resurrect, bin/team-orch-start,
+# bin/team-slice, bin/team-brief, bin/team-forget and bin/team-status (not run on its own).
 #
 # The run dir is `$TEAM_SCRATCH`, default `scratchpad/current`. A relative value means "under
 # the project root". It must not mean "under $PWD": a shell `cd` in the calling session moves

@@ -12,9 +12,11 @@ set -euo pipefail
 usage_text="usage: team-forget <name> [<name> ...]"
 usage() { echo "$usage_text" >&2; exit 2; }
 
-scratch="${TEAM_SCRATCH:-scratchpad/current}"
-teamdir="$scratch/.team"
 lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+# The run dir, absolute: a relative TEAM_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$lib/run-dir.sh"
+teamdir="$(team_run_dir)/.team"
 
 [ $# -ge 1 ] || usage
 case "$1" in

@@ -12,7 +12,16 @@ usage() {
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 templates="$plugin_root/skills/team-orchestration/templates"
 overlay="${TEAM_OVERLAY:-.claude/team}"
-scratch="${TEAM_SCRATCH:-scratchpad/current}"
+# The run dir, absolute: a relative TEAM_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+scratch="$(team_run_dir)"
+# The run dir as an agent standing in the project root names it (the form prepare records).
+scratch_ref="${TEAM_SCRATCH:-scratchpad/current}"
+case "$scratch_ref" in
+  /*) agent_base="$PWD" ;;
+  *) agent_base="$(team_project_root)" ;;
+esac
 teamdir="$scratch/.team"
 
 json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
@@ -129,7 +138,8 @@ prepare)
   brief="$scratch/brief-$name-$topic.md"
   [ -f "$brief" ] || { echo "no brief: $brief" >&2; exit 2; }
 
-  TOPIC="$topic" BRIEF="$brief" python3 - "$jf" <<'PY'
+  rec_brief="$scratch_ref/brief-$name-$topic.md"
+  TOPIC="$topic" BRIEF="$rec_brief" python3 - "$jf" <<'PY'
 import sys, os, json
 f = sys.argv[1]
 d = json.load(open(f))
@@ -145,11 +155,13 @@ PY
   # into the worktree's own run dir (scratchpad/current), and name the brief
   # by the path the agent sees from its own cwd.
   agent_cwd="$(json_get cwd <"$jf" 2>/dev/null || true)"
-  here_abs="$(python3 -c "import os;print(os.path.realpath('.'))")"
-  brief_ref="$brief"
+  base_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$agent_base")"
+  # A caller standing elsewhere than the project root names the brief by its absolute path.
+  brief_ref="$rec_brief"
+  [ "$(python3 -c "import os;print(os.path.realpath('.'))")" = "$base_abs" ] || brief_ref="$brief"
   if [ -n "$agent_cwd" ]; then
     agent_cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$agent_cwd")"
-    if [ "$agent_cwd_abs" != "$here_abs" ]; then
+    if [ "$agent_cwd_abs" != "$base_abs" ]; then
       target_scratch="$agent_cwd_abs/scratchpad/current"
       mkdir -p "$target_scratch"
       cp "$brief" "$target_scratch/"
@@ -158,6 +170,8 @@ PY
       decisions_file="$scratch/decisions-$ticket.md"
       [ -n "$ticket" ] && [ -f "$decisions_file" ] && cp "$decisions_file" "$target_scratch/"
       brief_ref="scratchpad/current/$(basename "$brief")"
+    else
+      brief_ref="$rec_brief"  # the agent stands in the project root: the relative form is right
     fi
   fi
 

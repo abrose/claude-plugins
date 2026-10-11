@@ -4,7 +4,10 @@
 # Exit codes: 0 ok, 2 bad arguments, 4 herdr error.
 set -euo pipefail
 
-scratch="${TEAM_SCRATCH:-scratchpad/current}"
+# The run dir, absolute: a relative TEAM_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+scratch="$(team_run_dir)"
 teamdir="$scratch/.team"
 
 as_json=""; read_idle=""
