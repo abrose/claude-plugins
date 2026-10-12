@@ -36,6 +36,10 @@ export type World = {
   holdList: Promise<void> | null
   /** The next fs.write throws, once. */
   writeFails: boolean
+  /** Every fs.write to a path that starts with one of these throws, until the entry is removed. */
+  writeFailsAt: Set<string>
+  /** Paths that exist (stat answers) but whose read is refused, like a permission error. */
+  unreadable: Set<string>
   /** Runs after each fs.read answered, to stand for a writer in another process. */
   afterRead?: (path: string) => void
   /** Directories made with mkdir, which have no file under them. */
@@ -198,6 +202,8 @@ export function world(on: On): World {
     holdSubmits: [],
     holdList: null,
     writeFails: false,
+    writeFailsAt: new Set(),
+    unreadable: new Set(),
     dirs: new Set(),
     raceMkdir: new Set(),
     statuses: [],
@@ -236,6 +242,7 @@ export function world(on: On): World {
   on('fs.read', ($, e) => {
     const f = w.files.get(e.path)
     w.afterRead?.(e.path)
+    if (f && w.unreadable.has(e.path)) return { deny: `EACCES: ${e.path}` }
     return f ? { value: f.text } : { deny: `ENOENT: ${e.path}` }
   })
   on('fs.write', ($, e) => {
@@ -243,6 +250,7 @@ export function world(on: On): World {
       w.writeFails = false
       throw new Error('write refused')
     }
+    if ([...w.writeFailsAt].some(p => e.path.startsWith(p))) throw new Error(`write refused: ${e.path}`)
     w.write(e.path, e.text)
     return { value: undefined }
   })
@@ -280,6 +288,16 @@ export function world(on: On): World {
       w.gitCwds.push(e.init?.cwd)
       const answer = argv.includes('--git-common-dir') ? w.git.common : w.git.top
       return answer === null ? out('', 128, 'fatal: not a git repository') : out(`${answer}\n`)
+    }
+    if (bin === 'mv') {
+      const failure = w.fails.get('mv')
+      if (failure) return out('', 1, failure)
+      const [from, to] = [argv[1] ?? '', argv[2] ?? '']
+      const f = w.files.get(from)
+      if (!f) return out('', 1, `mv: ${from}: No such file or directory`)
+      w.files.delete(from)
+      w.files.set(to, { text: f.text, mtimeMs: clock.now() })
+      return out('')
     }
     if (bin === 'tail') return out(w.files.get(argv[argv.length - 1] ?? '')?.text ?? '')
     if (bin === 'mkdir') {

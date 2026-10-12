@@ -14,6 +14,8 @@ export type Io = {
   setSessionEnv: (id: string) => Promise<void>
   readText: (path: string) => Promise<string | null>
   writeText: (path: string, text: string) => Promise<void>
+  /** Moves `from` over `to` in one step (same directory). Throws when it fails; `to` is then untouched. */
+  rename: (from: string, to: string) => Promise<void>
   list: (dir: string) => Promise<string[]>
   mtime: (path: string) => Promise<number | null>
   run: (argv: string[], timeoutMs?: number) => Promise<RunResult>
@@ -33,8 +35,14 @@ export async function readJson<T>(io: Io, path: string): Promise<T | null> {
   }
 }
 
+/**
+ * Writes `<path>.tmp-<random>`, then renames it over `path`: a reader sees the old file or the new one, never
+ * half of one. A failed write or rename leaves `path` as it was (a temp file may stay; its name is no state file).
+ */
 export async function writeJson(io: Io, path: string, value: unknown): Promise<void> {
-  await io.writeText(path, JSON.stringify(value))
+  const tmp = `${path}.tmp-${Math.random().toString(36).slice(2, 10)}`
+  await io.writeText(tmp, JSON.stringify(value))
+  await io.rename(tmp, path)
 }
 
 export async function tailText(io: Io, path: string, bytes: number): Promise<string> {

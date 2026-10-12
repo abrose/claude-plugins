@@ -63,6 +63,22 @@ async function projectRoot($: EngineInterface): Promise<string> {
 }
 
 function makeIo($: EngineInterface): Io {
+  // Every team script resolves its run dir from the main checkout (lib/run-dir.sh). The mod hands
+  // it the absolute run dir and the main checkout as cwd, so a script never depends on the env or
+  // the cwd the engine inherits. An absolute TEAM_SCRATCH needs no git (see main-checkout.test.ts):
+  // it passes the env alone and leaves the cwd to the engine.
+  // Shared by io.run and io.rename; it reads `io` only when called, after io exists.
+  const run: Io['run'] = async (argv, timeoutMs = 10000) => {
+    try {
+      const scratch = await $.env.get('TEAM_SCRATCH')
+      if (scratch?.startsWith('/')) return await $.process.run(argv, { env: { TEAM_SCRATCH: scratch }, timeoutMs })
+      const cwd = await projectRoot($)
+      const env = { TEAM_SCRATCH: await runDir(io) }
+      return await $.process.run(argv, { cwd, env, timeoutMs })
+    } catch (err) {
+      return { exitCode: -1, stdout: '', stderr: String(err) }
+    }
+  }
   const io: Io = {
     sessionId: () => $.session.id(),
     root: () => projectRoot($),
@@ -78,6 +94,11 @@ function makeIo($: EngineInterface): Io {
       }
     },
     writeText: (path, text) => $.fs.write(path, text),
+    // mv in one directory is a rename(2). Whether the engine has $.fs.rename is not known from the repo.
+    rename: async (from, to) => {
+      const r = await run(['mv', from, to])
+      if (r.exitCode !== 0) throw new Error(`mv ${to} failed: ${r.stderr.trim()}`)
+    },
     list: async dir => {
       try {
         return (await $.fs.list(dir)).map(e => e.name)
@@ -92,21 +113,7 @@ function makeIo($: EngineInterface): Io {
         return null
       }
     },
-    // Every team script resolves its run dir from the main checkout (lib/run-dir.sh). The mod hands
-    // it the absolute run dir and the main checkout as cwd, so a script never depends on the env or
-    // the cwd the engine inherits. An absolute TEAM_SCRATCH needs no git (see main-checkout.test.ts):
-    // it passes the env alone and leaves the cwd to the engine.
-    run: async (argv, timeoutMs = 10000) => {
-      try {
-        const scratch = await $.env.get('TEAM_SCRATCH')
-        if (scratch?.startsWith('/')) return await $.process.run(argv, { env: { TEAM_SCRATCH: scratch }, timeoutMs })
-        const cwd = await projectRoot($)
-        const env = { TEAM_SCRATCH: await runDir(io) }
-        return await $.process.run(argv, { cwd, env, timeoutMs })
-      } catch (err) {
-        return { exitCode: -1, stdout: '', stderr: String(err) }
-      }
-    },
+    run,
     sleep: ms => $.clock.sleep(ms),
     now: () => $.clock.now(),
     sendTo: async (sessionId, text) => {
@@ -165,28 +172,32 @@ async function orchestratorHalf(
   // A card still waiting for the human (open, or parked and so assumed) holds its sender's release back.
   const waiting = new Set((await readCards(io, teamdir))
     .filter(c => c.status === 'open' || c.status === 'assumed').map(c => c.from))
-  // Read the marks before anything else with a side effect: a file that does not parse stops this tick's send.
+  // A delivered.json that cannot be used holds REPORT and DECISION lines only. The watch rules, the layout
+  // hygiene and the release run anyway: they have no use for the marks, and a person must see the outage.
   const reports = await newReportLines(io, run, teamdir, records)
-  if (reports.unreadable) {
-    await showNotSent($, new Error('delivered.json does not parse'), split)
-    return
+  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exemptTabs(cfg), waiting,
+    { broken: reports.unreadable, path: reports.path })
+  let fresh = watch
+  let failure: unknown = reports.unreadable ? new Error('delivered.json does not parse') : null
+  if (!reports.unreadable) {
+    const decisions = pickDecisions(await readLedger(io, teamdir), numberMark(reports.delivered, '_decision'))
+    // The marks go first: a submit waits while the session is busy, and a later tick must not pick the same lines again.
+    // When the write fails, REPORT and DECISION lines wait (the marks did not move, so the next tick picks them
+    // again); this tick's WATCH lines are not picked again, so they go out now.
+    try {
+      await reports.commit({ _decision: decisions.mark })
+      fresh = [...reports.lines, ...decisions.lines, ...watch]
+    } catch (err) {
+      failure = err
+    }
   }
-  const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exemptTabs(cfg), waiting)
-  const decisions = pickDecisions(await readLedger(io, teamdir), numberMark(reports.delivered, '_decision'))
-  const fresh = [...reports.lines, ...decisions.lines, ...watch]
-  // The marks go first: a submit waits while the session is busy, and a later tick must not pick the same lines again.
-  try {
-    await reports.commit({ _decision: decisions.mark })
-  } catch (err) {
-    await showNotSent($, err, split)
-    return
-  }
+  if (failure !== null) await showNotSent($, failure, split)
   // Lines of a rejected send go first. The list is emptied as the submit is called, so a later tick cannot send them twice.
   const lines = [...retryLines, ...fresh.filter(l => !retryLines.includes(l))]
   if (lines.length === 0) return
   retryLines = []
   // Not awaited: the tick ends here, and the submit settles whenever the session takes the prompt.
-  void sendLines($, lines, split).catch(err => showNotSentSafely($, err, split))
+  void sendLines($, lines, split, failure !== null).catch(err => showNotSentSafely($, err, split))
 }
 
 async function showNotSent($: EngineInterface, err: unknown, split: boolean): Promise<void> {
@@ -207,8 +218,9 @@ async function showNotSentSafely($: EngineInterface, err: unknown, split: boolea
 /**
  * Sends one prompt. A failed send keeps its lines in `retryLines`, so the next tick that sends puts them
  * first in its bundle. The marks stay where they are. The list is memory only: a restart loses it.
+ * A good send clears the `prompt not sent` status line unless `keepError` is set.
  */
-async function sendLines($: EngineInterface, lines: string[], split: boolean): Promise<void> {
+async function sendLines($: EngineInterface, lines: string[], split: boolean, keepError = false): Promise<void> {
   try {
     await $.prompt.submit({ text: lines.join('\n') })
   } catch (err) {
@@ -218,7 +230,8 @@ async function sendLines($: EngineInterface, lines: string[], split: boolean): P
     return
   }
   // The lines are sent. A throw from here on goes to the caller's catch and never fills the list.
-  if (split && lastBadge?.startsWith(NOT_SENT)) await setStatus($, undefined)
+  // `keepError`: this tick shows an error of its own (a broken or unwritable delivered.json); a send of WATCH lines must not clear it.
+  if (split && !keepError && lastBadge?.startsWith(NOT_SENT)) await setStatus($, undefined)
 }
 
 /** Test-only access to the module state; the mod itself never calls it. */

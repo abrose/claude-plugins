@@ -798,12 +798,22 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `delivered.json` are written before `$.prompt.submit` is called, and the tick
   does not await the submit, which waits while the session is busy. A write
   merges with the file on disk and keeps the higher number per key, so no
-  write lowers a mark, with no exception. A `delivered.json` that exists but
-  does not parse (a read during a write) or is not an object stops the send of
-  that tick: the tick shows `prompt not sent: Error: delivered.json does not
-  parse`, sends nothing and writes nothing, and the next tick reads again. Only
-  a missing file is a first run; reading a broken file as missing would send
-  every old decision again. A submit that fails keeps its lines
+  write lowers a mark, with no exception. Every JSON state file of the mod is
+  written to `<path>.tmp-<random>` and moved over the old file with `mv`, so a
+  failed write leaves the old file whole. A `delivered.json` that exists but
+  cannot be read, is empty, does not parse or is not an object holds the REPORT
+  and DECISION lines and writes no mark; the tick still runs the watch rules,
+  layout hygiene and release, and sends their lines. It shows `prompt not sent:
+  Error: delivered.json does not parse` and sends one line `WATCH delivered.json
+  does not parse: <path> - REPORT and DECISION delivery held until it is fixed`
+  per outage, then one line when the file parses again (the latch is
+  `delivered_broken` in `watch-state.json`; on recovery the release timers
+  start again, as after herdr was down). Held lines go out once after
+  recovery. A failed write of the marks holds the REPORT and DECISION lines of
+  that tick the same way, but still sends its WATCH lines. Only a file that
+  does not exist is a first run; a file that the stat finds but the read
+  refuses is not, because reading it as missing would send every old
+  decision again. A submit that fails keeps its lines
   in a retry list in the mod's memory (the marks stay where they are); only a
   rejected submit fills the list, and a failure after a good submit (the status
   line) never does. The next

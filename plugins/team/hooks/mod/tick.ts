@@ -58,8 +58,9 @@ export async function newReportLines(io: Io, run: string, teamdir: string,
 ): Promise<{
   lines: string[]
   delivered: Marks
-  /** True when the file exists but does not parse (a read during a write): the tick must send nothing. */
+  /** True when the file exists but cannot be used: the tick sends no REPORT or DECISION line and writes no mark. */
   unreadable: boolean
+  path: string
   commit: (extra?: Marks) => Promise<void>
 }> {
   const path = `${teamdir}/delivered.json`
@@ -69,6 +70,7 @@ export async function newReportLines(io: Io, run: string, teamdir: string,
     lines: picked.lines,
     delivered: picked.delivered,
     unreadable: read.unreadable,
+    path,
     commit: async (extra = {}) => {
       const disk = await readMarks(io, path)
       if (disk.unreadable) throw new Error('delivered.json does not parse')
@@ -78,12 +80,13 @@ export async function newReportLines(io: Io, run: string, teamdir: string,
 }
 
 /**
- * The marks on disk. A missing file is a first run (`marks` null). A file that exists but does not parse, or
- * is not an object, is `unreadable`: reading it as missing would make the next tick send every old decision.
+ * The marks on disk. A missing file is a first run (`marks` null). A file that exists but cannot be read, does
+ * not parse, is empty or is not an object, is `unreadable`: reading it as missing would make the next tick send every old decision.
  */
 async function readMarks(io: Io, path: string): Promise<{ marks: Marks | null; unreadable: boolean }> {
   const text = await io.readText(path)
-  if (text === null) return { marks: null, unreadable: false }
+  // `readText` turns every read error into null. A file the stat still finds exists but cannot be read.
+  if (text === null) return { marks: null, unreadable: (await io.mtime(path)) !== null }
   try {
     const parsed: unknown = JSON.parse(text)
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return { marks: parsed as Marks, unreadable: false }
@@ -131,18 +134,31 @@ async function layoutInput(
  * names. Releases an agent that stayed idle with a fresh report for
  * RELEASE_AFTER_MIN, and adds one line for it. Remembers what it flagged in
  * watch-state.json and layout-flags.json. `openCards` names the agents with
- * a card still open.
+ * a card still open. `delivery` says whether delivered.json is broken: one line
+ * when that starts and one when it ends (the latch is `delivered_broken` in
+ * watch-state.json). Everything else runs the same while it is broken.
  */
 export async function watchTick(
   io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
   listed: HerdrListing, now: number, myId: string, exemptTabs: string[], openCards: Set<string>,
+  delivery: { broken: boolean; path: string },
 ): Promise<string[]> {
   const memPath = `${teamdir}/watch-state.json`
   const mem = (await readJson<WatchMemory>(io, memPath)) ?? { agents: {}, _flagged: {}, _idle_since: {} }
+  const wasBroken = mem.delivered_broken === true
+  const recovered = wasBroken && !delivery.broken
+  const out: string[] = []
+  if (delivery.broken && !wasBroken) {
+    out.push(`WATCH delivered.json does not parse: ${delivery.path} - REPORT and DECISION delivery held until it is fixed`)
+  }
+  if (recovered) out.push('WATCH delivered.json parses again: REPORT and DECISION delivery resumed')
   if (!listed.ok) {
     // A timer must not run across a gap in what herdr shows: the agent may have worked in it.
-    await writeJson(io, memPath, { ...mem, _release_since: {}, _release_tried: {}, herdr_down: true })
-    return mem.herdr_down ? [] : [`WATCH herdr unreachable: ${listed.reason}`]
+    await writeJson(io, memPath, {
+      ...mem, _release_since: {}, _release_tried: {}, herdr_down: true, delivered_broken: delivery.broken,
+    })
+    if (!mem.herdr_down) out.push(`WATCH herdr unreachable: ${listed.reason}`)
+    return out
   }
 
   const sessions = bySession(listed.agents)
@@ -152,7 +168,11 @@ export async function watchTick(
     const agent = rec.session ? sessions.get(rec.session) : undefined
     if (agent) facts.push(await gatherFacts(io, run, name, rec, agent.agent_status, now, NO_REPORT_AFTER))
   }
-  const result = watchLines(facts, { ...mem, herdr_down: false }, now, NO_REPORT_AFTER)
+  // After an outage of delivered.json the timers are stale, as after herdr was down: they start again.
+  const base: WatchMemory = { ...mem, herdr_down: false }
+  if (recovered) Object.assign(base, { _release_since: {}, _release_tried: {} })
+  const result = watchLines(facts, base, now, NO_REPORT_AFTER)
+  result.mem.delivered_broken = delivery.broken
   const panes = await herdrPanes(io)
   const layout = panes
     ? await layoutInput(io, teamdir, records, listed.agents,
@@ -174,7 +194,6 @@ export async function watchTick(
     : []
   for (const name of due) result.mem._release_tried![name] = true
   await writeJson(io, memPath, result.mem)
-  const out: string[] = []
   for (const line of result.lines) {
     const name = line.slice('WATCH '.length).split(':')[0] ?? ''
     const pane = records[name]?.pane

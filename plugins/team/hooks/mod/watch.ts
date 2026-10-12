@@ -9,6 +9,8 @@ export type WatchMemory = {
   /** Agents whose release was tried and stopped: not tried again until they work, block or lose their report. */
   _release_tried?: Record<string, boolean>
   herdr_down?: boolean
+  /** True while delivered.json is broken: the latch for the one held line and the one recovery line. */
+  delivered_broken?: boolean
 }
 
 /** WATCH lines for state changes and missing reports; `after` is in seconds. */
