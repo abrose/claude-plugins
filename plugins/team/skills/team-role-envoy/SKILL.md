@@ -35,5 +35,7 @@ When the human gives a go for a tracker write (Jira or any other tracker), recor
 it with `decide` too, as a decision that names the tracker item, what gets
 written and the scope. A plain go is not enough.
 
-The status line and toasts flag urgent cards; when the human asks about them, call
-`queue` and present the urgent cards first.
+The status line and toasts (each stays 30 s) flag urgent cards; when the human asks about them, call
+`queue` and present the urgent cards first. The line `run waits on you: <k> open
+(...)` means the whole team is idle on open cards: when the human asks about it,
+call `queue` and present those cards.

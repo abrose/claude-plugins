@@ -98,6 +98,8 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     which also lists an idle worker tab as `consider release`. The orchestrator's
     mod releases an agent by itself after 30 minutes idle with a fresh REPORT and
     no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
+    The envoy's mod flags a stall: an open card, every worker idle, done or
+    gone with a fresh REPORT, and the orchestrator idle, for 2 minutes.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator
@@ -112,8 +114,9 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     puts the first agent in the tab's root pane in the caller's workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
 16. The orchestrator never speaks to the human. The envoy speaks only when the
-    human pulls; urgent cards show as a status line and a toast in the envoy
-    session, never as a turn.
+    human pulls; urgent cards and a stalled run (the whole team waits on an open
+    card) show as a status line and a 30 s toast in the envoy session, never
+    as a turn.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the

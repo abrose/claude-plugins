@@ -134,7 +134,12 @@ envoy half in the one it names as `envoy_session`. A config without
 
 Every 15 s the **envoy half** reads the plan, the cards and the agent rows for
 the `Team` and `Questions` tabs, sets the status line to `<n> urgent: ...` while
-an urgent card waits, and toasts each new urgent card once. It also lists each
+an urgent card waits, and toasts each new urgent card once. It also sets the
+line to `run waits on you: <k> open (Q-a, ...)`, with one toast per episode
+(every toast stays 30 s), when an open card is all the team waits on for 2 minutes (every worker idle with
+a fresh report, the orchestrator idle; an urgent badge or a `prompt not sent`
+line wins the line). The `Questions` tab draws a waiting urgent card with a red
+`!`. It also lists each
 idle worker tab in the `Team` tab as `tab <id> idle, consider release (<pane>
 <status>, ...)`. It sends no prompt.
 
@@ -229,7 +234,7 @@ archives the previous run and loose scratchpad entries to `scratchpad/.archive/`
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.team/<name>.json`,
 `.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
 `.team/layout-flags.json`, `.team/delivered.json`, `.team/toasted.json` (ids of
-urgent cards seen or toasted), `.team/last-relay.txt` (the last relayed text and its
+urgent cards seen or toasted, plus the `stall:` timer and `stall-toast:` marks of the stall flag), `.team/last-relay.txt` (the last relayed text and its
 orchestrator session), `.team/questions/` (one `Q-<n>.json` per card, and
 `claims/`), `.team/decisions/` (one `<n>.json` per decision, which the
 orchestrator's tick reads), `.team/stops/`, `.team/restored/`, `.team/roster.md`.

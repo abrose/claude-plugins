@@ -3,11 +3,11 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { TeamAgentRow, TeamCard, TeamPlan } from '../../types'
 import { envoyConfig, noteClear, sessionRole } from './activation'
 import type { TeamConfig } from './activation'
-import { badgeText, freshUrgent, toastText } from './badge'
+import { badgeText, freshStall, freshUrgent, pickStatus, stallIds, TOAST_MS, toastText } from './badge'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
-import { herdrAgents, herdrFocus } from './herdr'
+import { bySession, herdrAgents, herdrFocus } from './herdr'
 import type { HerdrListing } from './herdr'
 import { closeHides, drawPane, drawQuestions, hiddenKey, pruneExpanded, QUESTIONS_PANE, TEAM_PANE } from './pane'
 import { mainCheckout, runDir, teamDir } from './paths'
@@ -18,7 +18,9 @@ import { reattach } from './reattach'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
 import { pickDecisions } from './decisions'
 import { numberMark } from './reports'
-import { agentRows, idleTabRows, newReportLines, readLedger, readRecords, syncPanes, watchTick } from './tick'
+import {
+  agentRows, idleTabRows, newReportLines, readLedger, readRecords, stallWorkers, syncPanes, watchTick,
+} from './tick'
 import type { TeamRecord } from './tick'
 
 export const TICK_MS = 15000
@@ -261,21 +263,42 @@ async function envoyHalf(
   await update($, cards, () => found)
   const rows = agentRows(records, listed)
   await update($, agents, () => rows)
-  const idleRows = await idleTabRows(io, await runDir(io), teamdir, records, listed, await $.session.id(), exemptTabs(cfg))
-  await update($, idle, () => idleRows)
+  const myId = await $.session.id()
+  const idleRows = await idleTabRows(io, await runDir(io), teamdir, records, listed, myId, exemptTabs(cfg))
+  await update($, idle, () => idleRows.rows)
   await update($, error, () => (listed.ok ? '' : `herdr: ${listed.reason}`))
-  await urgentBadge($, io, teamdir, found)
+  // The orchestrator has no record: herdr's listing, by the session the config names, tells its state.
+  const orchestrator = listed.ok && cfg.orchestrator_session
+    ? bySession(listed.agents).get(cfg.orchestrator_session)?.agent_status
+    : undefined
+  const stall = stallIds({
+    cards: found,
+    herdrUp: listed.ok,
+    workers: stallWorkers(records, rows, idleRows.briefed, myId),
+    orchestrator,
+  })
+  await urgentBadge($, io, teamdir, found, stall)
 }
 
-/** The status line shows the urgent count; each new urgent card gets one toast. Neither starts a turn. */
-async function urgentBadge($: EngineInterface, io: Io, teamdir: string, found: TeamCard[]): Promise<void> {
-  const text = badgeText(found)
+/**
+ * The status line and the toasts; neither starts a turn. The line is, in this order: a `prompt not sent`
+ * error (set only in an orchestrator-only session, and kept while it shows), the urgent badge, the stall
+ * text. Each new urgent card gets one toast, and each stall episode one toast, whatever the line shows.
+ * `stall` is `stallIds`: the open cards while the whole team waits on the human, else null.
+ */
+async function urgentBadge(
+  $: EngineInterface, io: Io, teamdir: string, found: TeamCard[], stall: string[] | null,
+): Promise<void> {
   await update($, urgent, () => found.filter(c => c.urgent && (c.status === 'open' || c.status === 'assumed')).length)
-  await setStatus($, text)
   const marksPath = `${teamdir}/toasted.json`
-  const fresh = freshUrgent(found, await readJson<string[]>(io, marksPath))
-  for (const c of fresh.toast) await $.ui.toast(toastText(c))
-  await writeJson(io, marksPath, fresh.seen)
+  const read = await readJson<string[]>(io, marksPath)
+  const fresh = freshUrgent(found, read)
+  const waiting = freshStall(stall, found.some(c => c.status === 'open'), fresh.seen, await $.clock.now())
+  const notSent = lastBadge?.startsWith(NOT_SENT) ? lastBadge : undefined
+  await setStatus($, pickStatus(notSent, badgeText(found), waiting.text))
+  for (const c of fresh.toast) await $.ui.toast(toastText(c), { timeoutMs: TOAST_MS })
+  if (waiting.toast !== undefined) await $.ui.toast(waiting.toast, { timeoutMs: TOAST_MS })
+  await writeJson(io, marksPath, waiting.seen)
 }
 
 /** The timer does not wait for a tick (its callback returns void), so a slow tick would overlap the next one. */

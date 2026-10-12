@@ -224,6 +224,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     which also lists an idle worker tab as `consider release`. The orchestrator's
     mod releases an agent by itself after 30 minutes idle with a fresh REPORT and
     no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
+    The envoy's mod flags a stall: an open card, every worker idle, done or
+    gone with a fresh REPORT, and the orchestrator idle, for 2 minutes.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator
@@ -238,8 +240,9 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     puts the first agent in the tab's root pane in the caller's workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
 16. The orchestrator never speaks to the human. The envoy speaks only when the
-    human pulls; urgent cards show as a status line and a toast in the envoy
-    session, never as a turn.
+    human pulls; urgent cards and a stalled run (the whole team waits on an open
+    card) show as a status line and a 30 s toast in the envoy session, never
+    as a turn.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
@@ -367,7 +370,7 @@ creates and reads these; the overlay never does.
 | `.team/questions/claims/<n>` | the `ask` tool | a directory per claimed card number |
 | `.team/decisions/<n>.json` | the `decide` tool | the ledger the orchestrator's tick reads, one entry per decision |
 | `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number; `_line:<name>` holds the last REPORT line sent for that agent |
-| `.team/toasted.json` | the envoy's tick | ids of urgent cards seen or toasted |
+| `.team/toasted.json` | the envoy's tick | ids of urgent cards seen or toasted; `stall:<ms>:<ids>` is the stall timer (since when the whole team has waited on that set of open cards), `stall-toast:<ids>` the set already toasted |
 | `.team/last-relay.txt` | the `relay` tool | the orchestrator session on the first line, then the last `RELAY` text sent to it |
 
 ### `team-start`
@@ -939,7 +942,27 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   <from>: <question>` while an `urgent` card is open or assumed, and is cleared
   when none is. Each new urgent card gets one toast, `URGENT Q-<n> <from>:
   <question>`; the marks are in `.team/toasted.json`, and the first run only
-  sets them (a baseline, no toast). Neither starts a model turn.
+  sets them (a baseline, no toast). Every toast, urgent or stall, stays 30 s
+  (`timeoutMs: 30000`, one constant `TOAST_MS`); a click dismisses it sooner.
+  No native notification, no repeat. Neither starts a model turn.
+- Stall flag, envoy half. The run is stalled when, for 2 minutes (8 ticks)
+  without a break: herdr answers; at least one card is `open` (a parked or
+  assumed card does not count); every worker row is idle, done or gone, and
+  every idle or done worker with a brief has a fresh REPORT; and the
+  orchestrator, found in herdr's listing by `orchestrator_session`, is idle or
+  done. The status line then reads `run waits on you: <k> open (Q-a, Q-b)` and
+  one toast with the same text goes out per episode. An episode is keyed by the
+  set of open card ids: a new card or an answer starts a new one, with its own
+  2 minutes. Any working agent, an unlisted orchestrator, herdr down, or no
+  open card clears the line at once and starts the timer over. A set that was
+  toasted is not toasted again after a break, until the set changes or no card
+  is open. Status line precedence, one line for three claimants: the
+  `prompt not sent` error, then the urgent badge, then the stall text; the
+  toast goes out whichever line shows. The timer and the toast key are two
+  extra marks in `.team/toasted.json` (see the state file table). Neither
+  starts a model turn.
+- Urgent cards in the `Questions` tab draw a red `!` in place of the status
+  glyph while they are open or assumed; the row layout does not change.
 - Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): refuses
   outside the orchestrator session; runs
   `team-brief prepare`, sends the printed kick-off with

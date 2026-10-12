@@ -92,6 +92,47 @@ describe('drawQuestions one-line headline', () => {
   })
 })
 
+describe('drawQuestions urgent mark', () => {
+  const headline = (card: object, ascii = false) =>
+    drawQuestions(fakes, { cards: [sample(card)], teamId: 'app-1', expanded: [], toggle: () => {}, ascii } as never)
+  const coloredTexts = (tree: any) => {
+    const found: any[] = []
+    const walk = (n: any) => {
+      if (!n || typeof n !== 'object') return
+      if (Array.isArray(n)) return n.forEach(walk)
+      if (n.type === 'Text' && n.props.color !== undefined) found.push(n)
+      walk(n.props?.children)
+    }
+    walk(tree)
+    return found
+  }
+
+  test('an urgent open card draws a red ! in place of the status glyph, the layout unchanged', () => {
+    const tree = headline({ urgent: true })
+    expect(strings(tree).join('')).toBe('▸ ! Q-1 ⇄ tester/auth: Q?')
+    const colored = coloredTexts(tree)
+    expect(colored).toHaveLength(1)
+    expect(colored[0].props.color).toBe('red')
+    expect(strings(colored[0])).toEqual(['!'])
+  })
+
+  test('an urgent parked card is marked too', () => {
+    expect(strings(headline({ urgent: true, status: 'assumed' })).join('')).toBe('▸ ! Q-1 ⇄ tester/auth: Q?')
+  })
+
+  test('an urgent card that is resolved keeps its status glyph', () => {
+    expect(strings(headline({ urgent: true, status: 'answered' })).join('')).toBe('▸ ✓ Q-1 ⇄ tester/auth: Q?')
+  })
+
+  test('a card that is not urgent is unchanged', () => {
+    expect(strings(headline({ urgent: false })).join('')).toBe('▸ ● Q-1 ⇄ tester/auth: Q?')
+  })
+
+  test('the mark stays one ASCII column wide', () => {
+    expect(strings(headline({ urgent: true }, true)).join('')).toBe('> ! Q-1 2 tester/auth: Q?')
+  })
+})
+
 describe('drawQuestions expanded block', () => {
   test('one Box indents the block by 4 columns, so no line carries leading spaces', () => {
     const view = { cards: [sample()], teamId: 'app-1', expanded: ['Q-1'], toggle: () => {} }

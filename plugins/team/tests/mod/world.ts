@@ -54,6 +54,8 @@ export type World = {
   raceMkdir: Set<string>
   statuses: (string | undefined)[]
   toasts: string[]
+  /** The timeoutMs each toast in `toasts` carried (undefined: none), same order. */
+  toastMs: (number | undefined)[]
   /** session.send answers not delivered, with this reason. */
   sendFails: string | null
   titles: Map<string, string>
@@ -215,6 +217,7 @@ export function world(on: On): World {
     raceMkdir: new Set(),
     statuses: [],
     toasts: [],
+    toastMs: [],
     sendFails: null,
     titles: new Map(),
     unplaced: new Set(),
@@ -403,6 +406,7 @@ export function world(on: On): World {
   })
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
+    w.toastMs.push(e.timeoutMs)
     return { value: undefined }
   })
   const shown = new Set<string>()

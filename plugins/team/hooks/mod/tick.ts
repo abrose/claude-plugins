@@ -1,4 +1,5 @@
 import type { TeamAgentRow } from '../../types'
+import type { StallWorker } from './badge'
 import type { DecisionEntry } from './decide'
 import { gatherFacts, reportIsFresh } from './facts'
 import type { AgentFacts } from './facts'
@@ -219,23 +220,37 @@ export async function watchTick(
  * The rows of idle team tabs for the Team overview, with the pane statuses seen. Read-only: the envoy session
  * draws them. The orchestrator's mod releases an agent after RELEASE_AFTER_MIN only in a team tab (tabs.json),
  * the same tabs as these rows, and not in an exempt tab; this list adds the rule that every briefed agent in
- * the tab has reported.
+ * the tab has reported. `briefed` is the map the rule reads, pane id to "has a fresh report", for every
+ * briefed agent herdr lists; the stall flag reads it too, so the reports are read once.
  */
 export async function idleTabRows(
   io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
   listed: HerdrListing, myId: string, exemptTabs: string[],
-): Promise<string[]> {
-  if (!listed.ok) return []
-  const panes = await herdrPanes(io)
-  if (!panes) return []
-  const sessions = bySession(listed.agents)
+): Promise<{ rows: string[]; briefed: Map<string, boolean> }> {
   const briefed = new Map<string, boolean>()
+  if (!listed.ok) return { rows: [], briefed }
+  const panes = await herdrPanes(io)
+  const sessions = bySession(listed.agents)
   for (const [name, rec] of Object.entries(records)) {
     if (rec.role === 'orchestrator' || !rec.brief) continue
     const agent = rec.session ? sessions.get(rec.session) : undefined
     if (agent) briefed.set(agent.pane_id, await reportIsFresh(io, run, name, rec))
   }
-  return idleTabs(await layoutInput(io, teamdir, records, listed.agents, panes, briefed, myId, exemptTabs))
+  if (!panes) return { rows: [], briefed }
+  return { rows: idleTabs(await layoutInput(io, teamdir, records, listed.agents, panes, briefed, myId, exemptTabs)), briefed }
+}
+
+/**
+ * What the stall flag needs about each worker: its herdr state and whether its report is fresh. The
+ * orchestrator's record and this session's own record are no workers. A worker without a brief owes no
+ * report, so it counts as fresh.
+ */
+export function stallWorkers(
+  records: Record<string, TeamRecord>, rows: TeamAgentRow[], briefed: Map<string, boolean>, myId: string,
+): StallWorker[] {
+  return rows
+    .filter(r => records[r.name] && records[r.name]!.role !== 'orchestrator' && records[r.name]!.session !== myId)
+    .map(r => ({ state: r.state, fresh: briefed.get(r.pane) ?? true }))
 }
 
 /** A pane id herdr moved is written back to the record, and into `records` for the rest of the tick. */

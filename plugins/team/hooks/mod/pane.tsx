@@ -107,6 +107,8 @@ const CARD_GLYPH = {
     answered: { glyph: '✓', ascii: '+', color: 'green', dim: true },
     obsolete: { glyph: '✗', ascii: 'x', color: undefined, dim: true },
   },
+  /** Replaces the status glyph of an urgent card that still waits (open or parked): one column, like the glyphs it stands in for. */
+  urgent: { glyph: '!', ascii: '!', color: 'red', dim: false },
   door: {
     'one-way': { glyph: '→', ascii: '1' },
     'two-way': { glyph: '⇄', ascii: '2' },
@@ -160,7 +162,8 @@ export function cutTail(text: string, room: number | undefined): string {
 export function drawQuestions({ Box, Text, Button }: Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>,
   { cards, teamId, expanded, toggle, ascii = ASCII_GLYPHS, columns }: QuestionsView,
 ) {
-  const status = (c: TeamCard) => CARD_GLYPH.status[c.status]
+  const waiting = (c: TeamCard) => c.urgent && (c.status === 'open' || c.status === 'assumed')
+  const status = (c: TeamCard) => (waiting(c) ? CARD_GLYPH.urgent : CARD_GLYPH.status[c.status])
   const glyph = (g: { glyph: string; ascii: string }) => (ascii ? g.ascii : g.glyph)
   const headline = (c: TeamCard, open: boolean) => (
     <Text wrap="truncate-end" dimColor={status(c).dim}>
