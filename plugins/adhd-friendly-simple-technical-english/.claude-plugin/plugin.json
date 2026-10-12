@@ -1,6 +1,6 @@
 {
   "name": "adhd-friendly-simple-technical-english",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Ships one output style that combines Simplified Technical English (short, direct sentences) with an ADHD-friendly, action-first shape, and keeps the teaching depth. Select it from /config.",
   "author": {
     "name": "Alfred Brose"
