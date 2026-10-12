@@ -91,7 +91,8 @@ In the `Team` pane, click an agent row to jump to its herdr pane. With the keybo
 | `team-slice <branch> <parent>` | Create a worktree (with the repo's own `worktree_cmd` from the overlay; refuses without one) and a Herdr tab for one slice. |
 | `team-status` | Match `herdr agent list` to `.team/` records by session id into a roster. Each session appears once; the envoy and the calling session never do. |
 | `team-resurrect` | Relaunch the orchestrator and the workers a herdr restore marked as restored, with their saved flags and the same `--plugin-dir` rule as `team-start`. A marked agent `/clear`ed before it ran is adopted: the session its recorded pane runs, when no record claims it, becomes its identity. |
-| `team-forget <name> ...` | Delete the session index entry and the record `.team/<name>.json` of each named agent, once its pane is closed (`/team:release` runs it). Keeps both for an agent herdr still lists, and accepts only plain names and plain session ids. |
+| `team-forget <name> ...` | Delete the session index entry and the record `.team/<name>.json` of each named agent, once its pane is closed (`team-release` runs it). Keeps both for an agent herdr still lists, and accepts only plain names and plain session ids. |
+| `team-release <name>` | Release one agent: take the lock `.team/releasing/<name>` (a held lock exits 5), find its pane by session id now, `/clear`, close the pane, `team-forget`. `/team:release` and the mod's auto-release both run it. A failed step exits 1 with `<step>: <reason>` on stderr. |
 
 ## Roles
 
@@ -158,8 +159,8 @@ Every 15 s the **orchestrator half**:
   minutes (the timer resets on `working` or `blocked`), when it has no open or
   assumed card and its pane is in a team tab (one `team-start` made, listed in
   `tabs.json`) that is not the orchestrator's, the envoy's or the human's. It
-  runs the steps of `/team:release <name>` (`/clear`, close the pane,
-  `team-forget`), then sends `released <name> (<pane>) after 30 min idle`.
+  runs `team-release <name>` (the script `/team:release <name>` runs too:
+  `/clear`, close the pane, `team-forget`), then sends `released <name> (<pane>) after 30 min idle`.
   A step that fails sends `WATCH <name>: auto-release failed at <step>: <reason>`
   and is not tried again until the agent worked, blocked or lost its report, or
   herdr was down (then after a fresh 30 minutes). An agent without a report

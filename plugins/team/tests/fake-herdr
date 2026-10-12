@@ -82,6 +82,9 @@ case "$group $sub" in
         emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":50},"panes":[]}}}' ;;
     esac ;;
   "pane close")
+    if [ -n "${FAKE_PANE_CLOSE_FAILS:-}" ]; then
+      fail "{\"error\":{\"code\":\"pane_busy\",\"message\":\"$FAKE_PANE_CLOSE_FAILS\"}}"
+    fi
     emit '{"result":{"ok":true}}' ;;
   "tab create")
     if [ "$scenario" = "tab_create_fails" ]; then
@@ -126,6 +129,13 @@ case "$group $sub" in
     fi
     emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "agent prompt")
+    if [ -n "${FAKE_PROMPT_FAILS:-}" ]; then
+      fail "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"$FAKE_PROMPT_FAILS\"}}"
+    fi
+    # /clear never starts a turn, so the real herdr answers it with agent_prompt_stalled.
+    if [ -n "${FAKE_PROMPT_STALLED:-}" ]; then
+      fail '{"error":{"code":"agent_prompt_stalled","message":"prompt did not start a turn"}}'
+    fi
     emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
   "agent list")
     case "$scenario" in
@@ -171,6 +181,13 @@ case "$group $sub" in
           emit 'not json'
         else
           emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}}]}}'
+        fi ;;
+      release_live)
+        # sid-scout is live in w1:p5 until a call closes that pane.
+        if grep -qx 'pane close w1:p5' "$log" 2>/dev/null; then
+          emit '{"result":{"agents":[]}}'
+        else
+          emit '{"result":{"agents":[{"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-scout"}}]}}'
         fi ;;
       resurrect_cleared)
         emit '{"result":{"agents":[

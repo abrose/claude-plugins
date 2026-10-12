@@ -209,7 +209,7 @@ export async function watchTick(
   }
   for (const name of due) {
     const pane = facts.find(f => f.name === name)?.pane ?? ''
-    const released = await releaseAgent(io, name, pane)
+    const released = await releaseAgent(io, name)
     out.push(released.ok ? releasedLine(name, pane) : releaseFailedLine(name, released.step, released.reason))
   }
   return out

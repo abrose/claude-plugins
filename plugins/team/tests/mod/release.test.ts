@@ -109,7 +109,9 @@ describe('releaseDue', () => {
 describe('auto-release in the tick', () => {
   const REPORT = 'REPORT app-1-scout x: done\n'
   const sub = (argv: string[]) => argv.slice(1).join(' ')
-  const herdrCalls = (w: World) => w.runs.map(sub).filter(s => /^(agent prompt|pane close)/.test(s))
+  /** The mod's only release step: one `team-release <name>` call. The script owns /clear, the pane close and the forget. */
+  const releases = (w: World) => w.runs.filter(argv => (argv[0] ?? '').endsWith('/bin/team-release')).map(sub)
+  const rawSteps = (w: World) => w.runs.map(sub).filter(s => /^(agent prompt|pane close)/.test(s))
   const forgets = (w: World) => w.runs.filter(argv => (argv[0] ?? '').endsWith('/bin/team-forget'))
   const notices = (w: World) => w.submits.flatMap(s => s.split('\n')).filter(l => !l.startsWith('REPORT'))
 
@@ -128,22 +130,36 @@ describe('auto-release in the tick', () => {
     return w
   }
 
-  test('after 30 minutes idle it clears, closes the pane, forgets the agent and tells the orchestrator once', async ($, on) => {
+  test('after 30 minutes idle it runs team-release once and tells the orchestrator once', async ($, on) => {
     const w = await idleWorker($, on)
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual(['agent prompt w1:p2 /clear --wait', 'pane close w1:p2'])
-    expect(forgets(w).map(argv => argv.slice(1))).toEqual([['app-1-scout']])
+    expect(releases(w)).toEqual(['app-1-scout'])
     expect(w.files.has(`${w.team}/app-1-scout.json`)).toBe(false)
     expect(notices(w)).toEqual(['released app-1-scout (w1:p2) after 30 min idle'])
     await w.clock.advance(15000)
     expect(notices(w)).toEqual(['released app-1-scout (w1:p2) after 30 min idle'])
-    expect(herdrCalls(w)).toHaveLength(2)
+    expect(releases(w)).toHaveLength(1)
+  })
+
+  test('the mod runs none of the steps itself: /clear, the pane close and the forget belong to team-release', async ($, on) => {
+    const w = await idleWorker($, on)
+    await w.clock.advance(15000)
+    expect(releases(w)).toEqual(['app-1-scout'])
+    expect(rawSteps(w)).toEqual([])
+    expect(forgets(w)).toEqual([])
+  })
+
+  test('the release call carries the agent name, not the pane the mod found', async ($, on) => {
+    const w = await idleWorker($, on)
+    await w.clock.advance(15000)
+    const call = w.runs.find(argv => (argv[0] ?? '').endsWith('/bin/team-release'))
+    expect(call?.slice(1)).toEqual(['app-1-scout'])
   })
 
   test('one millisecond short of 30 minutes releases nothing', async ($, on) => {
     const w = await idleWorker($, on, 30 * MIN - 1)
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     expect(notices(w)).toEqual([])
   })
 
@@ -151,11 +167,11 @@ describe('auto-release in the tick', () => {
     const w = await idleWorker($, on)
     w.files.delete(`${w.team}/watch-state.json`)
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     await w.clock.advance(30 * MIN - 15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual(['agent prompt w1:p2 /clear --wait', 'pane close w1:p2'])
+    expect(releases(w)).toEqual(['app-1-scout'])
   })
 
   test('working in between resets the timer', async ($, on) => {
@@ -164,7 +180,7 @@ describe('auto-release in the tick', () => {
     await w.clock.advance(15000)
     w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     await w.clock.advance(2 * MIN)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     expect(w.json(`${w.team}/watch-state.json`)._release_since['app-1-scout']).toBeGreaterThan(w.clock.now() - 2 * MIN - 15000)
   })
 
@@ -174,7 +190,7 @@ describe('auto-release in the tick', () => {
     await w.clock.advance(15000)
     w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     await w.clock.advance(2 * MIN)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('an agent without a REPORT is never released', async ($, on) => {
@@ -182,7 +198,7 @@ describe('auto-release in the tick', () => {
     w.files.delete(`${w.cwd}/scratchpad/current/reports/app-1-scout-.md`)
     await w.clock.advance(15000)
     await w.clock.advance(45 * MIN)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     expect(notices(w).some(l => l.startsWith('released'))).toBe(false)
   })
 
@@ -190,57 +206,57 @@ describe('auto-release in the tick', () => {
     const w = await idleWorker($, on)
     w.write(`${w.cwd}/scratchpad/current/brief-app-1-scout-.md`, '# Brief\n', 5000)
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('an open card of that agent holds the release back; once it is answered the release goes', async ($, on) => {
     const w = await idleWorker($, on)
     card(w, 1, { from: 'app-1-scout' })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     card(w, 1, { from: 'app-1-scout', status: 'answered', decision: 2 })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual(['agent prompt w1:p2 /clear --wait', 'pane close w1:p2'])
+    expect(releases(w)).toEqual(['app-1-scout'])
   })
 
   test('a parked (assumed) card also holds the release back', async ($, on) => {
     const w = await idleWorker($, on)
     card(w, 1, { from: 'app-1-scout', status: 'assumed' })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('the card of another agent does not hold it back', async ($, on) => {
     const w = await idleWorker($, on)
     card(w, 1, { from: 'app-1-tester' })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toHaveLength(2)
+    expect(releases(w)).toHaveLength(1)
   })
 
   test('a pane in the orchestrator tab is never released', async ($, on) => {
     const w = await idleWorker($, on)
     w.writeJson(`${w.team}/config.json`, { ...w.json(`${w.team}/config.json`), orchestrator_tab: 'w1:t2' })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('a pane in the envoy tab is never released', async ($, on) => {
     const w = await idleWorker($, on)
     w.writeJson(`${w.team}/config.json`, { ...w.json(`${w.team}/config.json`), envoy_tab: 'w1:t2' })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('a pane in a tab that is not a team tab (not in tabs.json) is never released', async ($, on) => {
     const w = await idleWorker($, on)
     w.writeJson(`${w.team}/tabs.json`, ['w1:t7'])
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     expect(forgets(w)).toEqual([])
     expect(notices(w)).toEqual([])
     w.files.delete(`${w.team}/tabs.json`)
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('a worker record that carries the mod\'s own session id is never released', async ($, on) => {
@@ -256,7 +272,7 @@ describe('auto-release in the tick', () => {
     })
     await w.clock.advance(15000)
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     expect(forgets(w)).toEqual([])
     expect(w.files.has(`${w.team}/app-1-me.json`)).toBe(true)
     expect(notices(w)).toEqual([])
@@ -271,7 +287,7 @@ describe('auto-release in the tick', () => {
     w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])
     w.writeJson(`${w.team}/watch-state.json`, { agents: {}, _flagged: {}, _idle_since: {}, _release_since: { 'app-1-scout': -99 * MIN } })
     await w.clock.advance(15000)
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
   test('herdr going down drops the timers', async ($, on) => {
@@ -279,53 +295,117 @@ describe('auto-release in the tick', () => {
     w.herdrFails = 'server_unavailable'
     await w.clock.advance(15000)
     expect(w.json(`${w.team}/watch-state.json`)._release_since).toEqual({})
-    expect(herdrCalls(w)).toEqual([])
+    expect(releases(w)).toEqual([])
   })
 
-  describe('a failed step', () => {
+  describe('a failed release', () => {
     const line = (step: string, reason: string) => `WATCH app-1-scout: auto-release failed at ${step}: ${reason}`
 
-    test('/clear failing stops the release: the pane stays and a WATCH line names the step', async ($, on) => {
+    test('a failed step of the script raises a WATCH line that names the step and keeps the record', async ($, on) => {
       const w = await idleWorker($, on)
-      w.fails.set('agent prompt', 'pane not found')
+      w.fails.set('team-release', 'clear: pane not found')
       await w.clock.advance(15000)
-      expect(herdrCalls(w)).toEqual(['agent prompt w1:p2 /clear --wait'])
-      expect(forgets(w)).toEqual([])
+      expect(releases(w)).toEqual(['app-1-scout'])
       expect(w.files.has(`${w.team}/app-1-scout.json`)).toBe(true)
       expect(notices(w)).toEqual([line('clear', 'pane not found')])
     })
 
-    test('closing the pane failing stops the release before the record goes', async ($, on) => {
+    test('the step close pane reaches the WATCH line', async ($, on) => {
       const w = await idleWorker($, on)
-      w.fails.set('pane close', 'pane busy')
+      w.fails.set('team-release', 'close pane: pane busy')
       await w.clock.advance(15000)
-      expect(forgets(w)).toEqual([])
-      expect(w.files.has(`${w.team}/app-1-scout.json`)).toBe(true)
       expect(notices(w)).toEqual([line('close pane', 'pane busy')])
     })
 
-    test('team-forget refusing raises a WATCH line and sends no release notice', async ($, on) => {
+    test('the step forget reaches the WATCH line and sends no release notice', async ($, on) => {
       const w = await idleWorker($, on)
-      w.fails.set('team-forget', 'cannot delete the index entry')
+      w.fails.set('team-release', 'forget: cannot delete the index entry')
       await w.clock.advance(15000)
-      expect(notices(w)).toEqual([line('team-forget', 'cannot delete the index entry')])
+      expect(notices(w)).toEqual([line('forget', 'cannot delete the index entry')])
+    })
+
+    test('the step find pane reaches the WATCH line', async ($, on) => {
+      const w = await idleWorker($, on)
+      w.fails.set('team-release', 'find pane: server_unavailable')
+      await w.clock.advance(15000)
+      expect(notices(w)).toEqual([line('find pane', 'server_unavailable')])
+    })
+
+    test('a held lock (exit 5) is a failed release too, named by its step', async ($, on) => {
+      const w = await idleWorker($, on)
+      w.fails.set('team-release', 'lock: release of app-1-scout already runs')
+      await w.clock.advance(15000)
+      expect(notices(w)).toEqual([line('lock', 'release of app-1-scout already runs')])
+      expect(notices(w).some(l => l.startsWith('released'))).toBe(false)
+    })
+
+    test('a failure without a step prefix still raises a line, under the step "release"', async ($, on) => {
+      const w = await idleWorker($, on)
+      w.fails.set('team-release', 'boom')
+      await w.clock.advance(15000)
+      expect(notices(w)).toEqual([line('release', 'boom')])
+    })
+
+    test('the reason is one line of at most 160 characters', async ($, on) => {
+      const w = await idleWorker($, on)
+      w.fails.set('team-release', `clear: ${'x'.repeat(400)}`)
+      await w.clock.advance(15000)
+      const reason = notices(w)[0]!.slice(line('clear', '').length)
+      expect(reason.length).toBeLessThanOrEqual(160)
     })
 
     test('it is never retried in a loop: no second attempt, no second line', async ($, on) => {
       const w = await idleWorker($, on)
-      w.fails.set('pane close', 'pane busy')
+      w.fails.set('team-release', 'close pane: pane busy')
       for (let i = 0; i < 6; i++) await w.clock.advance(15000)
-      expect(herdrCalls(w).filter(c => c.startsWith('agent prompt'))).toHaveLength(1)
+      expect(releases(w)).toHaveLength(1)
       expect(notices(w)).toHaveLength(1)
     })
 
     test('an agent that worked and went quiet again is tried afresh', async ($, on) => {
       const w = await idleWorker($, on)
-      w.fails.set('pane close', 'pane busy')
+      w.fails.set('team-release', 'close pane: pane busy')
       await w.clock.advance(15000)
       w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
       await w.clock.advance(15000)
       expect(w.json(`${w.team}/watch-state.json`)._release_tried).toEqual({})
+    })
+  })
+
+  describe('overlapping ticks', () => {
+    const deferred = () => {
+      let resolve!: () => void
+      const promise = new Promise<void>(res => { resolve = res })
+      return { promise, resolve }
+    }
+
+    test('a release held open while three ticks pass runs once: one team-release call, one notice', async ($, on) => {
+      const w = await idleWorker($, on)
+      const held = deferred()
+      w.holdReleases = [held.promise]
+      for (let i = 0; i < 3; i++) await w.clock.advance(15000)
+      expect(releases(w)).toEqual(['app-1-scout'])
+      expect(rawSteps(w)).toEqual([])
+      expect(notices(w)).toEqual([])
+
+      held.resolve()
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+      expect(releases(w)).toEqual(['app-1-scout'])
+      expect(rawSteps(w)).toEqual([])
+      expect(notices(w)).toEqual(['released app-1-scout (w1:p2) after 30 min idle'])
+    })
+
+    test('a held release that then fails raises one line and is not started again', async ($, on) => {
+      const w = await idleWorker($, on)
+      const held = deferred()
+      w.holdReleases = [held.promise]
+      w.fails.set('team-release', 'close pane: pane busy')
+      for (let i = 0; i < 3; i++) await w.clock.advance(15000)
+      held.resolve()
+      for (let i = 0; i < 3; i++) await w.clock.advance(15000)
+      expect(releases(w)).toHaveLength(1)
+      expect(notices(w)).toEqual(['WATCH app-1-scout: auto-release failed at close pane: pane busy'])
     })
   })
 })

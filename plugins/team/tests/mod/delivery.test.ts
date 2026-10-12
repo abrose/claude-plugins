@@ -285,6 +285,7 @@ describe('a broken delivered.json does not stop the rest of the tick', () => {
   const MIN = 60_000
   const sub = (argv: string[]) => argv.slice(1, 3).join(' ')
   const closes = (w: { runs: string[][] }) => w.runs.filter(a => sub(a) === 'pane close').map(a => a[3])
+  const releases = (w: { runs: string[][] }) => w.runs.filter(a => (a[0] ?? '').endsWith('/bin/team-release')).map(a => a[1])
   const lines = (w: { submits: string[] }) => w.submits.flatMap(s => s.split('\n'))
   const BLOCKED = `WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`
 
@@ -328,7 +329,7 @@ describe('a broken delivered.json does not stop the rest of the tick', () => {
     const w = await idleWorker($, on, 30 * MIN)
     w.write(`${w.team}/delivered.json`, 'not json')
     await w.clock.advance(TICK)
-    expect(closes(w)).toEqual(['w1:p2'])
+    expect(releases(w)).toEqual(['app-1-scout'])
     expect(lines(w)).toContain('released app-1-scout (w1:p2) after 30 min idle')
   })
 
@@ -340,7 +341,7 @@ describe('a broken delivered.json does not stop the rest of the tick', () => {
     w.writeJson(delivered, {})
     await w.clock.advance(TICK)
     await w.clock.advance(TICK)
-    expect(closes(w)).toEqual([])
+    expect(releases(w)).toEqual([])
     expect(lines(w)).toContain(RECOVERED)
   })
 

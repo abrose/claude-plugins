@@ -22,7 +22,11 @@ export type World = {
   agents: HerdrAgent[]
   panes: HerdrPane[]
   herdrFails: string | null
-  /** Calls that fail with this stderr, by "agent prompt", "pane close", "team-forget" or "team-orch-start". */
+  /**
+   * Calls that fail with this stderr, by "agent prompt", "pane close", "team-forget", "team-release" or
+   * "team-orch-start". A "team-release" value is the script's stderr, `<step>: <reason>`; one that starts
+   * with `lock:` stands for the held lock (exit 5), any other for a failed step (exit 1).
+   */
   fails: Map<string, string>
   /** team-orch-start finds the start lock of another start and refuses with exit 5. */
   orchLocked: boolean
@@ -34,6 +38,8 @@ export type World = {
   holdSubmits: Promise<void>[]
   /** The next `herdr agent list` waits on this, once: it holds a tick open. */
   holdList: Promise<void> | null
+  /** The next team-release calls each wait on one of these, in order: the call is recorded in `runs` at once, answers when the promise settles. */
+  holdReleases: Promise<void>[]
   /** The next fs.write throws, once. */
   writeFails: boolean
   /** Every fs.write to a path that starts with one of these throws, until the entry is removed. */
@@ -201,6 +207,7 @@ export function world(on: On): World {
     submitFails: false,
     holdSubmits: [],
     holdList: null,
+    holdReleases: [],
     writeFails: false,
     writeFailsAt: new Set(),
     unreadable: new Set(),
@@ -322,6 +329,22 @@ export function world(on: On): World {
       if (w.agents.some(a => a.agent_session?.value === session)) return out('', 1, `${name} is still live: close its pane first`)
       w.files.delete(`${w.team}/${name}.json`)
       return out(`forgot ${name}\n`)
+    }
+    if (bin.endsWith('/bin/team-release')) {
+      // Stands for the script: it clears, closes the pane and forgets the record of the named agent.
+      const name = argv[1] ?? ''
+      const answer = () => {
+        const failure = w.fails.get('team-release')
+        if (failure) return out('', failure.startsWith('lock:') ? 5 : 1, failure)
+        const record = w.files.has(`${w.team}/${name}.json`) ? w.json(`${w.team}/${name}.json`) : undefined
+        if (!record) return out(`no record: ${name}\n`)
+        w.agents = w.agents.filter(a => a.agent_session?.value !== record.session)
+        w.panes = w.panes.filter(p => p.pane_id !== record.pane)
+        w.files.delete(`${w.team}/${name}.json`)
+        return out(`forgot ${name}\n`)
+      }
+      const hold = w.holdReleases.shift()
+      return hold ? hold.then(answer) : answer()
     }
     if (bin.endsWith('/bin/team-orch-start')) {
       // Stands for team-start in a new tab, then the config writes of the real script.

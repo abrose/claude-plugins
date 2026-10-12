@@ -115,7 +115,8 @@ claude-plugins/                          # marketplace repo (exists)
         │   ├── team-slice
         │   ├── team-status
         │   ├── team-resurrect
-        │   └── team-forget
+        │   ├── team-forget
+        │   └── team-release
         ├── lib/
         │   ├── teamlib.py               # records and agent state, shared by bin/
         │   └── plugin-dir.sh            # --plugin-dir for team-start and team-resurrect
@@ -685,6 +686,39 @@ the record stays so a retry finds both, exit 1. A symlink is removed, never
 followed. A name with no record prints `no record: <name>`. Exit codes: 0 ok, 1
 refused, 2 bad arguments, 4 herdr error.
 
+### `team-release`
+
+```
+team-release <name>
+```
+
+Releases one agent: the one implementation of the release steps that
+`/team:release <name>` and the mod's auto-release both call. Only a plain name
+is accepted (exit 2). The steps, in order:
+
+1. Take the lock with `mkdir .team/releasing/<name>`. A held lock means another
+   release of that name runs: nothing else happens, the lock stays, exit 5.
+   Every other exit removes the lock.
+2. A name with no record `.team/<name>.json` prints `no record: <name>` and
+   exits 0.
+3. Read the `session` of the record and find its pane in `herdr agent list` at
+   this moment. The pane in the record is never used: herdr can reuse a pane
+   id. A session herdr no longer lists has no pane; the pane steps are skipped.
+4. `herdr agent prompt <pane> /clear --wait`. The answer `agent_prompt_stalled`
+   is expected (`/clear` starts no turn), not a failure.
+5. `herdr pane close <pane>`.
+6. `team-forget <name>` (the session index entry, then the record). Its output
+   is the script's output.
+
+The first step that fails stops the release. stderr then starts with
+`<step>: <reason>`, `<step>` one of `find pane`, `clear`, `close pane` or
+`forget`, and the exit is 1. A held lock prints `lock: release of <name>
+already runs (<path>)`. A lock left by a killed script (SIGKILL) stays until a
+human removes the directory named in that message; a normal exit and a
+SIGTERM or SIGINT remove it. The overlay's `release_check` is not run here:
+`/team:release` runs it before the script, and the mod never ran it. Exit
+codes: 0 ok, 1 a step failed, 2 bad arguments, 5 lock held.
+
 ### Commands
 
 Markdown files under `commands/`; each loads only the SKILL section it needs.
@@ -694,7 +728,7 @@ Markdown files under `commands/`; each loads only the SKILL section it needs.
 | `/team:init <ticket>` | Runs in the session the human talks to, which becomes the envoy: loads the `team-orchestration` and `team-role-envoy` skills. Never asks which roles (agents start on demand). Runs `team-init <ticket> --envoy-pane <this pane>` (see [`team-init`](#team-init): it archives the previous run, writes `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates, records this session as `envoy_session` and starts the orchestrator in a worker tab; a ticket that is not a plain name is refused with exit 2 before anything is archived; `--help` prints its usage). After exit 4 the command still tells the human the file paths, and it tells apart a failed tab lookup (the orchestrator runs: carry on), a startup dialog (answer it, close the pane, run `/team:init` again; never `team-start` by hand) and any other failed start. After a successful start, `team-status` writes the first roster, and the envoy asks the human what the orchestrator should start with and sends the answer with `relay`. After any exit 4 the command still runs `team-status`; after a failed start it skips the question and the `relay`. The `Team` and `Questions` tabs open on the mod's next tick. |
 | `/team:brief <name> <topic> [--template]` | `team-brief compose`, then the orchestrator fills the task section (must name exact files and tool paths, per lessons), then the `brief_send` tool, then notes the status line in `progress-<ticket>.md`. The orchestrator runs it and never reports to the human (rule 16). |
 | `/team:status` | Runs in the envoy session. `team-status --read-idle`, then the roster block plus a two-line status per agent and any 401, permission dialog, or context above 70 percent. The roster lists the orchestrator and the workers; it leaves out the envoy and the calling session. |
-| `/team:release [name ...|all]` | `all` (the end of a session) runs in the envoy session; a named release runs in the orchestrator or the envoy session. For each agent `team-status` lists (never the envoy, never the session it runs in, also for `all`): check for a report, `agent prompt <pane> "/clear"` (pane found by session id), run the overlay's `release_check` command if defined (orphan processes), close the pane (closing the last pane closes the tab), then `team-forget <name>`, which deletes its session index entry and its record. With `all`, also removes `.team/tabs.json`, `watch-state.json`, `layout-flags.json`, `toasted.json` and `last-relay.txt`, and keeps `delivered.json` (its `_decision` mark stops the next orchestrator tick from sending every DECISION line of the run again). Refuses to release an agent that is `working`, and lists as refused an agent `team-forget` keeps because herdr still shows it. |
+| `/team:release [name ...|all]` | `all` (the end of a session) runs in the envoy session; a named release runs in the orchestrator or the envoy session. For each agent `team-status` lists (never the envoy, never the session it runs in, also for `all`): check for a report, run the overlay's `release_check` command if defined (orphan processes), then `team-release <name>` (see [`team-release`](#team-release): lock, pane found by session id at that moment, `/clear`, close the pane, `team-forget`). An exit 5 means another release of that name runs and is listed as busy. With `all`, also removes `.team/tabs.json`, `watch-state.json`, `layout-flags.json`, `toasted.json` and `last-relay.txt`, and keeps `delivered.json` (its `_decision` mark stops the next orchestrator tick from sending every DECISION line of the run again). Refuses to release an agent that is `working`, and lists as refused an agent `team-forget` keeps because herdr still shows it. |
 | `/team:resurrect` | Runs in the envoy session. `team-resurrect` relaunches the orchestrator and the workers whose `.team/restored/` mark the `SessionStart` hook set, then the command reports which it relaunched, which were healthy, and which are missing. It starts no agent that has no record. |
 | `/team-overview` | A mod command: hides or shows both envoy tabs, `Team` and `Questions`; the choice is kept per team. |
 | `/team-envoy` | A mod command, run in a session the human talks to, to re-attach it to the live run (decision 15). Without `.team/config.json` it refuses and names `/team:init`; in the orchestrator session it refuses (rule 16). Otherwise it writes this session as `envoy_session`, so the envoy half (tabs, status line, toasts, `queue`, `decide`, `relay`) runs here from the next tick and the old envoy session loses it. Then it checks the orchestrator in `herdr agent list`. It counts as alive when a listed agent has the session `orchestrator_session`, or the herdr name `orchestrator` from the config (`team-start` gives it through `herdr agent start <name>`), or the pane `pane` of the orchestrator record `.team/<orchestrator>.json`; the last two cover the moment after an orchestrator `/clear`, when the config can still name the old session. herdr can reuse a pane id, so an agent in that pane counts only when it is neither this session nor the `session` of another team record in `.team/`. Alive, it is left alone; gone (or no `orchestrator_session` recorded), `team-orch-start` starts a new one from zero (OQ3) and the output names it, `<name> (<pane>, <session>)`. When `team-orch-start` exits 5, the output says an orchestrator is starting (another start holds the lock) or that an orchestrator runs in `<pane>` (found live under the lock), and it is left alone. A failed `herdr agent list` starts nothing and says the orchestrator state is unknown. A failed start says why; for a startup dialog it says to answer it, close the pane and run `/team-envoy` again. The command waits for the start (up to 300 s): a `$` call does not count against the hook's 10 s budget. |
@@ -843,14 +877,16 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   is not exempt (the orchestrator's own, `orchestrator_tab`, `envoy_tab`), and
   it is not the mod's own session. An agent placed with `team-start --pane` or
   `--split` in a tab `tabs.json` does not list is never released. An agent without a report is never released:
-  the `idle, no report` flag stays. The steps are those of `/team:release
-  <name>`, once each, in order: `herdr agent prompt <pane> /clear --wait`
-  (`agent_prompt_stalled` is the expected answer), `herdr pane close <pane>`,
-  then `team-forget <name>` (the session index entry, then the record). The
-  release is marked tried in `_release_tried` before the first step, so a tick
-  that overlaps, or a step that fails, never starts it twice. A failed step
+  the `idle, no report` flag stays. The mod runs `team-release <name>` once
+  (see [`team-release`](#team-release)). The script owns the steps (the lock,
+  the pane by session id, `/clear`, the pane close, `team-forget`), the same
+  ones `/team:release <name>` runs, so the two paths cannot overlap or drift.
+  The release is marked tried in `_release_tried` before the call, so a tick
+  that overlaps, or a step that fails, never starts it twice. A failed script
   stops the release and sends `WATCH <name>: auto-release failed at <step>:
-  <reason>` (`clear`, `close pane` or `team-forget`); the tried mark stays
+  <reason>`, the step and reason from the first stderr line of the script
+  (`find pane`, `clear`, `close pane`, `forget` or `lock`; `release` when it
+  has no `<step>: ` prefix); the tried mark stays
   while the agent stays idle or done with its report, and clears when it
   worked, blocked or lost its report, or when herdr was down in between (the
   tick clears every timer and mark then); the agent is then tried again after
@@ -1101,7 +1137,9 @@ answers from canned JSON selected by `FAKE_HERDR_SCENARIO`. Cases, at minimum:
    record, exit 4 paths, the start lock: held, stale at twice the mod's
    timeout, removed on every exit; the re-check under the lock by session,
    name and record pane, a reused pane id, herdr not answering; config
-   written by rename), `team-forget` (record, index entry, safety), `team-status`
+   written by rename), `team-forget` (record, index entry, safety),
+   `team-release` (lock held, lock removed on every exit, pane by session id at
+   step time, step names, a gone record), `team-status`
    (one line per session, envoy and caller skipped), `--plugin-dir` in
    `team-start` and `team-resurrect`.
 9. A hook error (unreadable transcript) exits 0 and logs one line.
@@ -1579,6 +1617,13 @@ Changes made after the plan, while the envoy was built and live-checked:
   also removes `toasted.json` and `last-relay.txt`; it keeps `delivered.json`,
   so the `_decision` mark survives and the orchestrator gets no old DECISION
   line again.
+- New script `team-release`: the one implementation of the release steps. It
+  takes a per-name lock (`mkdir .team/releasing/<name>`), finds the pane by
+  session id at step time, then clears, closes the pane and runs
+  `team-forget`. `/team:release <name>` and the mod's auto-release both call
+  it, so a second release of a name is refused (exit 5) and a reused pane id
+  cannot close the wrong agent. The overlay's `release_check` stays in the
+  command.
 - `brief_send` refuses outside the orchestrator session with a message that
   says so.
 - The human talks only to the envoy, so `/team:resurrect`, `/team:status` and
@@ -1606,8 +1651,8 @@ again. It also carried no evidence of what the mod saw.
   (`RELEASE_AFTER_MIN`, `release.ts`) of continuous `idle` or `done` with a
   fresh report, when it has no open or assumed card and its pane is in a team
   tab (`tabs.json`) that is not exempt. The timer is `_release_since` in `watch-state.json`, the same
-  pattern as `_idle_since`. The steps are those of `/team:release <name>`:
-  `/clear`, close the pane, `team-forget`. The mod sends `released <name>
+  pattern as `_idle_since`. It runs `team-release <name>`, the script of
+  `/team:release <name>` (`/clear`, close the pane, `team-forget`). The mod sends `released <name>
   (<pane>) after 30 min idle` after each, and `WATCH <name>: auto-release
   failed at <step>: <reason>` when a step fails; it never retries in a loop
   (`_release_tried`; the mark clears when the agent worked, blocked or lost its

@@ -2129,6 +2129,157 @@ class TeamForget(Base):
         self.assertTrue(os.path.isdir(self.index_path("sid-scout")))
 
 
+class TeamRelease(Base):
+    """One release script for /team:release and the mod's auto-release: lock, pane by session id, steps."""
+
+    LIVE = {"FAKE_PROMPT_STALLED": "1"}
+
+    def release(self, *args, scenario="release_live", env_extra=None):
+        return self.run_script("team-release", *args, scenario=scenario,
+                               env_extra={**self.LIVE, **(env_extra or {})})
+
+    def exists(self, name):
+        return os.path.lexists(self.sp(".team", name + ".json"))
+
+    def lock(self, name):
+        return self.sp(".team", "releasing", name)
+
+    def action_calls(self):
+        return [c for c in self.herdr_calls() if c.startswith(("agent prompt", "pane close"))]
+
+    def test_clears_closes_and_forgets_the_agent(self):
+        self.write_record("scout", "investigator", session="sid-scout", pane="w1:p2")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.action_calls(), ["agent prompt w1:p5 /clear --wait", "pane close w1:p5"])
+        self.assertFalse(self.exists("scout"))
+        self.assertIn("forgot scout", p.stdout)
+
+    def test_the_pane_comes_from_the_session_at_step_time_not_from_the_record(self):
+        # The record still says w1:p2; herdr lists the session in w1:p5 and may have given w1:p2 away.
+        self.write_record("scout", "investigator", session="sid-scout", pane="w1:p2")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("w1:p2", " ".join(self.action_calls()))
+        self.assertIn("agent list", self.herdr_calls()[0])
+
+    def test_the_agent_list_is_read_before_the_first_step(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.release("scout")
+        calls = self.herdr_calls()
+        self.assertEqual(calls[0], "agent list")
+        self.assertLess(calls.index("agent list"), calls.index("agent prompt w1:p5 /clear --wait"))
+
+    def test_a_held_lock_refuses_and_touches_nothing(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(self.lock("scout"))
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
+        self.assertIn("already runs", p.stderr)
+        self.assertEqual(self.herdr_calls(), [])
+        self.assertTrue(self.exists("scout"))
+        self.assertTrue(os.path.isdir(self.lock("scout")), "the lock of the other release stays")
+
+    def test_the_lock_of_one_agent_does_not_hold_another(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(self.lock("maker"))
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_the_lock_is_gone_after_a_release(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.lock("scout")))
+
+    def test_the_lock_is_gone_after_a_failed_step(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", env_extra={"FAKE_PROMPT_STALLED": None, "FAKE_PROMPT_FAILS": "pane not found"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(self.lock("scout")))
+
+    def test_a_failed_clear_stops_before_the_close(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", env_extra={"FAKE_PROMPT_STALLED": None, "FAKE_PROMPT_FAILS": "pane not found"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "clear")
+        self.assertIn("pane not found", p.stderr)
+        self.assertEqual(self.action_calls(), ["agent prompt w1:p5 /clear --wait"])
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_stalled_clear_is_the_expected_answer(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("pane close w1:p5", self.herdr_calls())
+
+    def test_a_failed_close_keeps_the_record(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", env_extra={"FAKE_PANE_CLOSE_FAILS": "pane busy"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "close pane")
+        self.assertIn("pane busy", p.stderr)
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_refused_forget_names_the_forget_step(self):
+        # The static "resurrect" list shows sid-scout live after its pane closed: team-forget refuses.
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", scenario="resurrect")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "forget")
+        self.assertIn("still live", p.stderr)
+        self.assertTrue(self.exists("scout"))
+
+    def test_an_unreadable_agent_list_fails_before_any_step(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        for scenario in ("list_fails", "bad_list"):
+            with self.subTest(scenario=scenario):
+                p = self.release("scout", scenario=scenario)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "find pane")
+                self.assertEqual(self.action_calls(), [])
+                self.assertTrue(self.exists("scout"))
+
+    def test_a_gone_record_is_not_a_failure(self):
+        os.makedirs(self.sp(".team"))
+        p = self.release("ghost")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["no record: ghost"])
+        self.assertEqual(self.herdr_calls(), [])
+        self.assertFalse(os.path.exists(self.lock("ghost")))
+
+    def test_an_agent_herdr_no_longer_lists_is_forgotten_without_a_pane_step(self):
+        self.write_record("scout", "investigator", session="sid-gone")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.action_calls(), [])
+        self.assertFalse(self.exists("scout"))
+
+    def test_only_a_plain_name_is_accepted(self):
+        os.makedirs(self.sp(".team"))
+        for bad in ("../victim", "sub/victim", "/etc/passwd", ".hidden", "-x", "a b"):
+            with self.subTest(name=bad):
+                p = self.release(bad)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertEqual(self.herdr_calls(), [])
+        self.assertFalse(os.path.exists(self.sp(".team", "releasing")))
+
+    def test_a_state_file_is_no_record(self):
+        os.makedirs(self.sp(".team"))
+        write_text(self.sp(".team", "config.json"), "{}")
+        p = self.release("config")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertTrue(self.exists("config"))
+        self.assertEqual(self.action_calls(), [])
+
+    def test_usage_and_help(self):
+        p = self.release()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("usage: team-release <name>", p.stderr)
+        p = self.release("--help")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("usage: team-release <name>", p.stdout)
+
 class TeamId(Base):
     def test_slug_lowercases_and_dashes(self):
         p = self.run_script("team-id", "slug", "APP-5066")
@@ -2374,6 +2525,19 @@ class LinkedWorktreeRoot(Base):
         self.assertNotIn("{{", text)
         # No run-dir path is left relative: strip every absolute one, then none may remain.
         self.assertNotIn("scratchpad/current/", text.replace(self.want, ""))
+
+    def test_release_takes_its_lock_and_finds_the_record_in_the_main_run_dir(self):
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                self.main_record("scout", session="sid-scout")
+                p = self.script_from(cwd, "team-release", "scout", scenario="release_live",
+                                     TEAM_INDEX_DIR=os.path.join(self.proj, "_index"),
+                                     FAKE_PROMPT_STALLED="1", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertFalse(os.path.exists(os.path.join(self.want, ".team", "scout.json")))
+                self.assertFalse(os.path.exists(os.path.join(self.want, ".team", "releasing", "scout")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
+                open(self.herdr_log, "w").close()
 
     def test_forget_removes_a_record_that_lives_in_the_main_run_dir(self):
         for cwd, extra in self.three_cwds():

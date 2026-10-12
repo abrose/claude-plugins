@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Release one agent: /clear it, close its pane, then forget its record and index entry.
+# /team:release and the mod's auto-release both run this script, so the steps exist once.
+# A lock directory .team/releasing/<name> (mkdir is atomic) lets one release of a name run at a
+# time. The pane is found by the session id of the record at step time, never taken from an
+# earlier lookup: herdr reuses pane ids. A session herdr no longer lists has no pane to clear or
+# close, so only the forget runs. A name with no record is not a failure.
+# The overlay's release_check is not run here: /team:release runs it before this script.
+# On a failed step stderr starts with `<step>: <reason>`, step one of find pane, clear,
+# close pane, forget, lock.
+# Exit codes: 0 ok, 1 a step failed, 2 bad arguments, 5 another release of this name holds the lock.
+set -euo pipefail
+
+usage_text="usage: team-release <name>"
+usage() { echo "$usage_text" >&2; exit 2; }
+fail() { printf '%s: %s\n' "$1" "$2" >&2; exit 1; }
+oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-200; }
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/run-dir.sh
+. "$here/../lib/run-dir.sh"
+
+[ $# -eq 1 ] || usage
+case "$1" in
+  -h|--help) echo "$usage_text"; exit 0 ;;
+esac
+name="$1"
+[[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "bad name: $name" >&2; exit 2; }
+
+teamdir="$(team_run_dir)/.team"
+lock="$teamdir/releasing/$name"
+mkdir -p "$teamdir/releasing"
+if ! mkdir "$lock" 2>/dev/null; then
+  [ -d "$lock" ] || fail lock "cannot take $lock"
+  printf 'lock: release of %s already runs (%s)\n' "$name" "$lock" >&2
+  exit 5
+fi
+trap 'rmdir "$lock"' EXIT
+
+record="$teamdir/$name.json"
+if [ ! -e "$record" ] && [ ! -L "$record" ]; then
+  echo "no record: $name"
+  exit 0
+fi
+
+session="$(python3 -c '
+import json, sys
+try:
+    s = json.load(open(sys.argv[1])).get("session")
+except Exception:
+    s = None
+print(s if isinstance(s, str) else "")' "$record")"
+
+pane=""
+if [ -n "$session" ]; then
+  out="$(herdr agent list 2>&1)" || fail "find pane" "$(oneline "$out")"
+  pane="$(LIST="$out" SESSION="$session" python3 -c '
+import json, os
+agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
+for a in agents:
+    s = a.get("agent_session")
+    if isinstance(s, dict) and s.get("value") == os.environ["SESSION"]:
+        print(a.get("pane_id", ""))
+        break' 2>/dev/null)" || fail "find pane" "bad output from herdr agent list"
+fi
+
+if [ -n "$pane" ]; then
+  # /clear never starts a turn, so herdr answers it with agent_prompt_stalled: that is expected.
+  if ! out="$(herdr agent prompt "$pane" /clear --wait 2>&1)"; then
+    case "$out" in
+      *agent_prompt_stalled*) ;;
+      *) fail clear "$(oneline "$out")" ;;
+    esac
+  fi
+  out="$(herdr pane close "$pane" 2>&1)" || fail "close pane" "$(oneline "$out")"
+fi
+
+out="$("$here/team-forget" "$name" 2>&1)" || fail forget "$(oneline "$out")"
+printf '%s\n' "$out"
