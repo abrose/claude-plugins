@@ -13,11 +13,23 @@ It keeps the teaching depth: the "why" behind each change. Code, commands, and q
 
 The plugin ships an output style at
 [`output-styles/adhd-friendly-ste.md`](output-styles/adhd-friendly-ste.md). Unlike a hook,
-an output style **replaces the system prompt**. This style sets `keep-coding-instructions: true`,
-so Claude Code keeps its software-engineering instructions and only adds the shaping rules.
+an output style **changes the system prompt**. This style sets `keep-coding-instructions: true`.
+On the full system prompt, Claude Code then keeps its software-engineering instructions and adds the shaping rules.
+The field has no effect on the shorter system prompt. To rely on the field, set `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` to `0`.
+
+Precedence: the built-in Claude Code instructions outrank this style. This style tells Claude to
+follow it over your `CLAUDE.md` when the two conflict, including a rule such as "sacrifice
+grammar for concision".
+At the first such conflict in a session, the style adds one warning line at the end of the reply.
+
+Scope: the style shapes the main conversation and forks. Other subagents do not get it. Team
+agents started as main sessions do get it.
+
+Dependency: the style asks for a status-bar line only if a rule in your `CLAUDE.md` requires one.
+Without such a rule, the style adds no status line.
 
 ```
-plugin enabled → style appears in /config → you select it → it shapes the main conversation
+plugin enabled → style appears in /config → you select it → it shapes the main conversation and forks
 ```
 
 ## Select it
@@ -28,8 +40,8 @@ Only one output style is active at a time. Choose this one from the menu:
 /config    → Output style → ADHD-friendly Simple Technical English
 ```
 
-The change takes effect after `/clear` or in a new session (the system prompt is cached at
-session start). To go back, select **Default** in the same menu.
+The new style applies from your next message (Claude Code v2.1.251 or later). If you edit the
+style file, restart Claude Code. To go back, select **Default** in the same menu.
 
 ## Credit
 
