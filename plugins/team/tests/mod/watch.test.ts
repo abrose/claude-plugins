@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { idleTabs, layoutActions } from '../../hooks/mod/layout'
 import { watchLines } from '../../hooks/mod/watch'
-import { team } from './world'
+import { DIALOG_SNAPSHOT, DIALOG_TEXT, team } from './world'
 
 const fact = (over: object) => ({
   name: 'a', state: 'working', pane: 'w1:p2', reportPath: '/r/a-t.md',
@@ -149,7 +149,19 @@ describe('watch in the tick', () => {
     await w.clock.advance(15000)
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
     await w.clock.advance(15000)
-    expect(w.submits).toEqual(['WATCH app-1-scout: working -> blocked: Allow Bash(rm -rf build)? [y/n]'])
+    expect(w.submits).toEqual([`WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`])
+  })
+
+  test('blocked line shows the bottom of the snapshot, never its old top row', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(DIALOG_SNAPSHOT.split('\n')[0]).toBe('❯ /compact')
+    expect(w.submits).toHaveLength(1)
+    expect(w.submits[0]).not.toContain('/compact')
   })
 
   test('herdr down sends one line until it is back', async ($, on) => {
@@ -253,7 +265,7 @@ describe('watch in the tick', () => {
     w.write(`${w.cwd}/scratchpad/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
     await w.clock.advance(15000)
     expect(w.submits).toEqual([
-      'REPORT app-1-maker build: green\nWATCH app-1-scout: working -> blocked: Allow Bash(rm -rf build)? [y/n]',
+      `REPORT app-1-maker build: green\nWATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`,
     ])
   })
 })

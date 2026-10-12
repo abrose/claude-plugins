@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { decisionLine, pickDecisions } from '../../hooks/mod/decisions'
-import { start, team } from './world'
+import { DIALOG_TEXT, start, team } from './world'
 
 const entry = (n: number, more: object = {}) => ({
   n, answer: 'Use real fixtures.', rationale: 'r', overrides: [], at: 0,
@@ -50,7 +50,7 @@ describe('DECISION delivery in the tick', () => {
     expect(w.submits).toEqual([[
       'REPORT app-1-maker build: green',
       'DECISION 1 (Q-1 app-1-scout/fixtures, Q-2 app-1-tester/fixtures): Use real fixtures.',
-      'WATCH app-1-scout: working -> blocked: Allow Bash(rm -rf build)? [y/n]',
+      `WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`,
     ].join('\n')])
     expect(w.json(`${w.team}/delivered.json`)).toMatchObject({ _decision: 1 })
   })

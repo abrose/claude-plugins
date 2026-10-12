@@ -40,9 +40,39 @@ export async function herdrPanes(io: Io): Promise<HerdrPane[] | null> {
   }
 }
 
+const DIALOG_CAP = 200
+const nonEmpty = (rows: string[]) => rows.map(l => l.trim()).filter(l => l !== '')
+const isFrameRule = (row: string) => row.length >= 20 && /^─+$/.test(row)
+const isDashedRule = (row: string) => /^╌+$/.test(row)
+
+/**
+ * The text of the dialog in a `herdr agent read` snapshot (the bottom 20 screen rows, old history on top).
+ * A permission dialog sits below the last full-width `─` rule and replaces the input box and footer:
+ * - title row / command row (between the two `╌` rules) / last row ending with `?`, or
+ * - when the frame has no `╌` pair or no `?` row: every row below the frame, minus `╌` rules and a
+ *   last `Esc to cancel` row.
+ * With no frame rule the last 3 non-empty rows are returned. The result is capped at 200 characters.
+ */
+export function dialogText(snapshot: string): string {
+  const rows = snapshot.split('\n').map(l => l.trim())
+  const frame = rows.map(isFrameRule).lastIndexOf(true)
+  if (frame === -1) return nonEmpty(rows).slice(-3).join(' / ').slice(0, DIALOG_CAP)
+  const below = nonEmpty(rows.slice(frame + 1))
+  const dashed = below.flatMap((row, i) => (isDashedRule(row) ? [i] : []))
+  const question = below.findLastIndex(row => row.endsWith('?'))
+  if (dashed.length >= 2 && question !== -1) {
+    const command = below.slice(dashed[0] + 1, dashed[1])[0] ?? ''
+    return [below[0], command, below[question]].join(' / ').slice(0, DIALOG_CAP)
+  }
+  const kept = below.filter(row => !isDashedRule(row))
+  if (kept.at(-1)?.startsWith('Esc to cancel')) kept.pop()
+  return kept.join(' / ').slice(0, DIALOG_CAP)
+}
+
+/** The dialog a blocked agent shows, for the WATCH line. Empty when the snapshot is empty or the call fails. */
 export async function herdrDialog(io: Io, pane: string): Promise<string> {
   const r = await herdr(io, ['agent', 'read', pane, '--source', 'detection', '--lines', '20'])
-  return r.stdout.split('\n').find(l => l.trim() !== '')?.trim() ?? ''
+  return r.exitCode === 0 ? dialogText(r.stdout) : ''
 }
 
 /** Focuses the agent's pane; the failure reason, or '' when it worked. */

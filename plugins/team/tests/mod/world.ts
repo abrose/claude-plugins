@@ -68,6 +68,55 @@ export type World = {
 
 export const CWD = '/proj'
 
+/**
+ * What `herdr agent read --lines 20` returns for a blocked pane: the bottom of the screen. History
+ * is on top (the first non-empty row is old input), the dialog is in the last non-empty rows,
+ * and empty rows follow.
+ */
+export const DIALOG_SNAPSHOT = [
+  '❯ /compact',
+  '● Read(src/a.ts)',
+  '  ⎿  Read 12 lines',
+  '● Bash(rm -rf build)',
+  '  Bash command',
+  '    rm -rf build',
+  '  Allow Bash(rm -rf build)? [y/n]',
+  '',
+  '',
+].join('\n')
+
+/** The WATCH text `herdrDialog` makes from DIALOG_SNAPSHOT: the last three non-empty rows. */
+export const DIALOG_TEXT = 'Bash command / rm -rf build / Allow Bash(rm -rf build)? [y/n]'
+
+/**
+ * A real Claude Code Bash permission dialog as `herdr agent read --source detection --lines 20`
+ * returns it. The input box and footer are gone: the framed dialog is the bottom block.
+ */
+export const BASH_DIALOG_SNAPSHOT = [
+  ' #1 ❯ Run this exact Bash command and nothing else: python3 -c "print(1)"',
+  '',
+  ' · | 🤖 Run python print test | 💬 | - | - | - |',
+  '                                                                                    Ran 1 command · last: python3 -c "print(1)" ●',
+  '',
+  '─'.repeat(126),
+  ' Bash command',
+  ' Run python3 print command',
+  '╌'.repeat(126),
+  ' python3 -c "print(1)"',
+  '╌'.repeat(126),
+  ' │ python3 runs inline code, which cannot be checked against the read block; under the read block',
+  ' │ (permissions.blockReadsOutsideWorkingDirectories) a command the shell parser cannot analyze asks the person',
+  '',
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. No',
+  '',
+  ' Esc to cancel · Tab to amend',
+].join('\n')
+
+/** The WATCH text `herdrDialog` makes from BASH_DIALOG_SNAPSHOT. */
+export const BASH_DIALOG_TEXT = 'Bash command / python3 -c "print(1)" / Do you want to proceed?'
+
 export const start = ($: any) => $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
 
 /** A started orchestrator session with an active team and one worker record. */
@@ -271,7 +320,7 @@ export function world(on: On): World {
       return hold ? hold.then(() => answer) : answer
     }
     if (sub === 'pane list') return out(JSON.stringify({ result: { panes: w.panes } }))
-    if (sub === 'agent read') return out('Allow Bash(rm -rf build)? [y/n]\n')
+    if (sub === 'agent read') return out(DIALOG_SNAPSHOT)
     // /clear never starts a turn, so herdr answers a prompt of it with agent_prompt_stalled.
     if (sub === 'agent prompt') return out('', 1, w.fails.get(sub) ?? 'agent_prompt_stalled')
     if (sub === 'pane close') {
