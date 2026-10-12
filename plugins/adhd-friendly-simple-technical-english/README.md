@@ -22,8 +22,8 @@ follow it over your `CLAUDE.md` when the two conflict, including a rule such as 
 grammar for concision".
 At the first such conflict in a session, the style adds one warning line at the end of the reply.
 
-Scope: the style shapes the main conversation and forks. Other subagents do not get it. Team
-agents started as main sessions do get it.
+Scope: the style shapes the main conversation and forks. Other subagents do not get it. A
+session that starts with this style active gets it.
 
 Dependency: the style asks for a status-bar line only if a rule in your `CLAUDE.md` requires one.
 Without such a rule, the style adds no status line.
