@@ -21,6 +21,7 @@ describe('parsePlan', () => {
   test('reads title and items per section', () => {
     expect(parsePlan(TEXT)).toEqual({
       title: 'APP-1',
+      waits: [],
       done: [{ mark: 'x', text: '1. Analysis - app-1-inv' }, { mark: 'x', text: '2. Design reviewed' }],
       running: [{ mark: '>', text: '3. Implementation - app-1-impl' }],
       next: [{ mark: ' ', text: '4. Gate' }],
@@ -37,6 +38,28 @@ describe('parsePlan', () => {
     expect(plan.running.map((i) => i.text)).toEqual(['e'])
     expect(plan.next.map((i) => i.text)).toEqual(['you: c'])
   })
+
+  test('a [?] item goes to waits, whatever the heading', () => {
+    const plan = parsePlan('# T\n\n## WAITS ON YOU\n- [?] 5. Pick the fixture set\n\n## RUNNING\n- [?] 6. Approve the merge\n- [>] 7. Build\n')
+    expect(plan.waits).toEqual([
+      { mark: '?', text: '5. Pick the fixture set' },
+      { mark: '?', text: '6. Approve the merge' },
+    ])
+    expect(plan.running.map((i) => i.text)).toEqual(['7. Build'])
+  })
+
+  test('flipping [?] to [x] in place moves the item to done', () => {
+    const waiting = parsePlan('# T\n\n## WAITS ON YOU\n- [?] 5. Pick the fixture set\n')
+    expect(waiting.waits).toHaveLength(1)
+    const answered = parsePlan('# T\n\n## WAITS ON YOU\n- [x] 5. Pick the fixture set\n')
+    expect(answered.waits).toEqual([])
+    expect(answered.done).toEqual([{ mark: 'x', text: '5. Pick the fixture set' }])
+  })
+
+  test('another unknown mark is still dropped', () => {
+    const plan = parsePlan('# T\n\n## RUNNING\n- [!] a\n- [~] b\n')
+    expect(plan).toEqual({ title: 'T', waits: [], done: [], running: [], next: [] })
+  })
 })
 
 describe('fitPlan', () => {
@@ -46,5 +69,13 @@ describe('fitPlan', () => {
     expect(fitted.hiddenDone).toBe(1)
     expect(fitted.plan.running).toHaveLength(1)
     expect(fitted.plan.next).toHaveLength(1)
+  })
+
+  test('waits take room before DONE and are never cut', () => {
+    const plan = parsePlan('# T\n## WAITS ON YOU\n- [?] w1\n- [?] w2\n## DONE\n- [x] a\n- [x] b\n## RUNNING\n- [>] r\n')
+    const fitted = fitPlan(plan, 4)
+    expect(fitted.plan.waits).toHaveLength(2)
+    expect(fitted.plan.done).toEqual([{ mark: 'x', text: 'b' }])
+    expect(fitted.hiddenDone).toBe(1)
   })
 })

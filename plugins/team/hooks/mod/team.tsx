@@ -12,6 +12,7 @@ import type { HerdrListing } from './herdr'
 import { closeHides, drawPane, drawQuestions, hiddenKey, pruneExpanded, QUESTIONS_PANE, TEAM_PANE } from './pane'
 import { mainCheckout, runDir, teamDir } from './paths'
 import { parsePlan } from './plan'
+import { pluginVersion } from './version'
 import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
 import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
 import { reattach } from './reattach'
@@ -33,6 +34,7 @@ const expanded = atom({ plugin: 'team', key: 'expandedCards' } as const, [] as s
 const urgent = atom({ plugin: 'team', key: 'urgent' } as const, 0)
 const planPath = atom({ plugin: 'team', key: 'planPath' } as const, '')
 const tickAt = atom({ plugin: 'team', key: 'tickAt' } as const, '')
+const version = atom({ plugin: 'team', key: 'version' } as const, '')
 const error = atom({ plugin: 'team', key: 'error' } as const, '')
 // One tick loop per module: a second session.start replaces it, never adds one.
 let tickTimer: Timer | null = null
@@ -341,6 +343,9 @@ export const register: Register = on => {
     const io = makeIo($)
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     lastBadge = null
+    // Read once: the footer shows the copy that runs, the one under the plugin root.
+    const found = pluginVersion(await io.readText(`${io.pluginRoot}/.claude-plugin/plugin.json`))
+    await update($, version, () => found ?? '')
     await $.command.register({ name: 'team-overview', description: 'Show or hide the Team and Questions tabs' })
     await $.command.register({
       name: 'team-envoy',
@@ -431,6 +436,7 @@ export const register: Register = on => {
       teamId: (await envoyConfig(makeIo($)))?.team_id ?? '',
       planPath: await read($, planPath),
       tickAt: await read($, tickAt),
+      version: await read($, version),
       error: await read($, error),
       rows: e.viewport?.rows ?? 30,
     }, async a => {

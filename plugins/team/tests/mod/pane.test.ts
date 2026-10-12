@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { closeHides, drawQuestions, pruneExpanded } from '../../hooks/mod/pane'
+import { closeHides, drawPane, drawQuestions, pruneExpanded } from '../../hooks/mod/pane'
 import { agentRows, card, CWD, start, team, world } from './world'
 
 describe('closeHides', () => {
@@ -32,6 +32,56 @@ const sample = (over: object = {}) => ({
   id: 'Q-1', n: 1, from: 'app-1-tester', tag: 'auth', context: 'ctx', question: 'Q?',
   options: [{ option: 'a', cost: '1 h' }], recommendation: 'a', blocks: 'x', door: 'two-way' as const,
   rework: '1 h', urgent: false, refs: [], status: 'open' as const, at: 0, ...over,
+})
+
+const paneView = (over: object = {}) => ({
+  agents: [], idle: [], cards: [], teamId: 'app-1', planPath: '/p', tickAt: '12:00:01', error: '', rows: 40,
+  version: '', plan: { title: 'APP-1', waits: [], done: [], running: [], next: [] }, ...over,
+})
+
+describe('drawPane plan sections', () => {
+  const plan = {
+    title: 'APP-1',
+    waits: [{ mark: '?', text: '5. Pick the fixture set' }],
+    done: [{ mark: 'x', text: '1. Analysis' }],
+    running: [{ mark: '>', text: '3. Build' }],
+    next: [{ mark: ' ', text: '4. Gate' }],
+  }
+
+  test('WAITS ON YOU is drawn first, before DONE, RUNNING and NEXT', () => {
+    const all = strings(drawPane(fakes, paneView({ plan }) as never))
+    const at = (t: string) => all.indexOf(t)
+    expect(at('WAITS ON YOU')).toBeGreaterThan(-1)
+    expect(at('WAITS ON YOU')).toBeLessThan(at('DONE'))
+    expect(at('DONE')).toBeLessThan(at('RUNNING'))
+    expect(at('RUNNING')).toBeLessThan(at('NEXT'))
+  })
+
+  test('a waiting item has its own glyph, not the urgent !', () => {
+    const line = strings(drawPane(fakes, paneView({ plan }) as never)).join('')
+    expect(line).toContain('5. Pick the fixture set')
+    expect(line).not.toContain('! 5. Pick')
+    expect(line).toMatch(/[^ ] 5\. Pick the fixture set/)
+  })
+
+  test('an empty WAITS ON YOU section draws nothing', () => {
+    const all = strings(drawPane(fakes, paneView({ plan: { ...plan, waits: [] } }) as never))
+    expect(all).not.toContain('WAITS ON YOU')
+    expect(all).toContain('DONE')
+  })
+})
+
+describe('drawPane footer', () => {
+  const footer = (over: object) =>
+    strings(drawPane(fakes, paneView(over) as never)).join('|').match(/(?:team [^|]*)?tick [^|]*/)?.[0]
+
+  test('carries the plugin version before the tick time', () => {
+    expect(footer({ version: '0.8.0' })).toBe('team 0.8.0  tick 12:00:01')
+  })
+
+  test('without a version the footer is the old one', () => {
+    expect(footer({ version: '' })).toBe('tick 12:00:01')
+  })
 })
 
 describe('drawQuestions glyphs', () => {
@@ -202,6 +252,27 @@ describe('Team pane', () => {
                                   requestId: 'team', props: { bodyColumns: 60 } } as never)
     expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /▶ 3\. Build/ })).toBeDefined()
+  })
+
+  test('the footer shows the version read from plugin.json at session start', async ($, on) => {
+    const w = world(on)
+    w.pluginJson = JSON.stringify({ name: 'team', version: '0.8.0' })
+    await start($)
+    w.writeJson(`${w.team}/config.json`, {
+      team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch', orchestrator_session: w.id,
+    })
+    await w.clock.advance(15000)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'team', props: { bodyColumns: 60 } } as never)
+    expect(await ui.find({ type: 'Text', text: /^team 0\.8\.0 +tick \d/ })).toBeDefined()
+  })
+
+  test('the footer has no version when plugin.json cannot be read', async ($, on) => {
+    await activeTeam($, on)
+    const ui = await $.ui.mount({ plugin: 'team', surface: 'terminal', component: 'Pane',
+                                  requestId: 'team', props: { bodyColumns: 60 } } as never)
+    expect(await ui.find({ type: 'Text', text: /^tick \d/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^team \d/ })).toBeUndefined()
   })
 
   test('/team-overview hides and shows both tabs, and the choice is stored', async ($, on) => {

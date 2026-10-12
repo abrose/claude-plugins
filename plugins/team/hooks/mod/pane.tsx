@@ -19,6 +19,8 @@ export type PaneView = {
   teamId: string
   planPath: string
   tickAt: string
+  /** The plugin version for the footer; '' draws none. */
+  version: string
   error: string
   rows: number
 }
@@ -27,6 +29,8 @@ const MARK = {
   x: { glyph: '✓', color: 'green', dim: true },
   '>': { glyph: '▶', color: 'yellow', dim: false },
   ' ': { glyph: '○', color: undefined, dim: false },
+  /** An item that waits on the human. Not `!`: that is the urgent card mark. */
+  '?': { glyph: '◆', color: 'magenta', dim: false },
 } as const
 
 export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>, view: PaneView,
@@ -41,7 +45,9 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
       .filter(s => tally(g.cards, s) > 0)
       .map(s => `${tally(g.cards, s)} ${s}`)].join('  ')
   const questionRows = (unresolved.length === 0 ? 1 : 1 + urgent.length + groups.length) + 1
-  const room = Math.max(view.rows - view.agents.length - view.idle.length - 12 - questionRows, 3)
+  // The WAITS ON YOU heading is one more row, drawn only when an item waits.
+  const waitsHeading = view.plan !== null && view.plan.waits.length > 0 ? 1 : 0
+  const room = Math.max(view.rows - view.agents.length - view.idle.length - 12 - questionRows - waitsHeading, 3)
   const fitted = view.plan ? fitPlan(view.plan, room) : null
   const item = (i: TeamPlanItem) => (
     <Text wrap="truncate-end" dimColor={MARK[i.mark].dim}>
@@ -60,6 +66,7 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
       {fitted ? (
         <Box flexDirection="column">
           <Text bold wrap="truncate-end">{fitted.plan.title || 'Plan'}</Text>
+          {fitted.plan.waits.length > 0 && section('WAITS ON YOU', fitted.plan.waits)}
           {section(fitted.hiddenDone ? `DONE (+${fitted.hiddenDone} earlier)` : 'DONE', fitted.plan.done)}
           {section('RUNNING', fitted.plan.running)}
           {section('NEXT', fitted.plan.next)}
@@ -91,7 +98,7 @@ export function drawPane({ Box, Text, Button }: Pick<Elements['terminal'], 'Box'
       ))}
       {view.idle.map(row => <Text key={row} dimColor wrap="truncate-end">{row}</Text>)}
       {view.error !== '' && <Text color="red" wrap="truncate-end">{view.error}</Text>}
-      <Text dimColor>tick {view.tickAt || '-'}</Text>
+      <Text dimColor>{`${view.version === '' ? '' : `team ${view.version}  `}tick ${view.tickAt || '-'}`}</Text>
     </Box>
   )
 }

@@ -245,11 +245,15 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     as a turn.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
-    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
-    role in parentheses, `fix round 2 (impl)`. The mark alone sets where the
-    pane shows an item: flip the mark in place, never move lines between the
-    DONE, RUNNING and NEXT headings. Update it after every REPORT, before
-    every `brief_send`, and whenever a card asks the human to act.
+    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next, `- [?]`
+    waits on the human; name the role in parentheses, `fix round 2 (impl)`.
+    Mark an item `- [?]` when it waits on the human (an open card, a manual
+    test, a go); the pane draws it first, in its own WAITS ON YOU section.
+    When the human answers, flip it to `- [x]` in place. RUNNING holds only
+    agents at work. The mark alone sets where the pane shows an item: flip the
+    mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING
+    and NEXT headings. Update it after every REPORT, before every
+    `brief_send`, and whenever a card asks the human to act.
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `team-slice`, which uses the repo's own
@@ -900,14 +904,19 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   draw, the idle worker tabs, and keeps the urgent badge (below). It sends no prompt, so in a
   separate envoy session the mod never starts a turn. (In the single-session
   fallback the orchestrator half of the same session still submits its lines.)
-- Panes, in the envoy session. `team` (title `Team`): the plan (DONE, RUNNING,
-  NEXT as glyph rows, bucketed by mark, not by heading, in file order; items
-  count only under those three headings; DONE gives up its oldest items when
-  short), the open questions (urgent cards first, then a row per tag with its
-  open and assumed counts), agents, one row per idle worker tab (`tab w4:t19
+- Panes, in the envoy session. `team` (title `Team`): the plan (WAITS ON YOU,
+  DONE, RUNNING, NEXT as glyph rows, bucketed by mark, not by heading, in file
+  order; WAITS ON YOU holds the `[?]` items, drawn first with a `◆` glyph and
+  left out when empty; items count only under those four headings; DONE gives
+  up its oldest items when short), the open questions (urgent cards first,
+  then a row per tag with its open and assumed counts), agents, one row per
+  idle worker tab (`tab w4:t19
   idle, consider release (w4:p3K done)`: every pane there idle or done, every
   briefed agent with a fresh report, the pane statuses seen; it is no WATCH
-  line), last error, tick time. An urgent row shows the sender without its
+  line), last error, and a footer `team <version>  tick <time>`. The mod reads
+  the version once at session start from `<plugin root>/.claude-plugin/plugin.json`,
+  so the footer names the copy that runs; with no readable version the footer
+  is `tick <time>` alone. An urgent row shows the sender without its
   `<team_id>-` prefix. `questions` (title
   `Questions`): the question log, every card of the run newest first, one
   collapsible row (a plain Button), exactly one line, cut with `…` at the pane
@@ -1439,8 +1448,8 @@ Adds an overview pane right of the orchestrator that shows run progress at
 the orchestrator level.
 
 The orchestrator keeps a plan file, `progress-<ticket>.md` next to the
-decisions file, as a markdown checklist under DONE, RUNNING and NEXT
-(`[x]`, `[>]`, `[ ]`; human actions start with `you:`). `/team:init` creates
+decisions file, as a markdown checklist under WAITS ON YOU, DONE, RUNNING and
+NEXT (`[?]`, `[x]`, `[>]`, `[ ]`; human actions start with `you:`). `/team:init` creates
 it from `templates/progress.md`, and SKILL.md rule 17 says when to update it.
 Workers never write it.
 

@@ -1,7 +1,9 @@
 export type TeamAgentRow = { name: string; state: string; pane: string }
-export type TeamPlanItem = { mark: 'x' | '>' | ' '; text: string }
+export type TeamPlanItem = { mark: 'x' | '>' | ' ' | '?'; text: string }
 export type TeamPlan = {
   title: string
+  /** Items marked `[?]`: they wait on the human. */
+  waits: TeamPlanItem[]
   done: TeamPlanItem[]
   running: TeamPlanItem[]
   next: TeamPlanItem[]
@@ -41,6 +43,8 @@ declare module 'claude-code' {
       urgent: number
       planPath: string
       tickAt: string
+      /** The plugin version read from plugin.json at session start; '' when unknown. */
+      version: string
       error: string
     }
   }

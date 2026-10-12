@@ -119,11 +119,15 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     as a turn.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
-    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next; name the
-    role in parentheses, `fix round 2 (impl)`. The mark alone sets where the
-    pane shows an item: flip the mark in place, never move lines between the
-    DONE, RUNNING and NEXT headings. Update it after every REPORT, before
-    every `brief_send`, and whenever a card asks the human to act.
+    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next, `- [?]`
+    waits on the human; name the role in parentheses, `fix round 2 (impl)`.
+    Mark an item `- [?]` when it waits on the human (an open card, a manual
+    test, a go); the pane draws it first, in its own WAITS ON YOU section.
+    When the human answers, flip it to `- [x]` in place. RUNNING holds only
+    agents at work. The mark alone sets where the pane shows an item: flip the
+    mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING
+    and NEXT headings. Update it after every REPORT, before every
+    `brief_send`, and whenever a card asks the human to act.
 18. The run's files live only in `scratchpad/current/`. Never read, list or
     search `scratchpad/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `team-slice`, which uses the repo's own

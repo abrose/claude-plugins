@@ -46,6 +46,8 @@ export type World = {
   writeFailsAt: Set<string>
   /** Paths that exist (stat answers) but whose read is refused, like a permission error. */
   unreadable: Set<string>
+  /** The text of the plugin's own `.claude-plugin/plugin.json`; null means the file is missing. */
+  pluginJson: string | null
   /** Runs after each fs.read answered, to stand for a writer in another process. */
   afterRead?: (path: string) => void
   /** Directories made with mkdir, which have no file under them. */
@@ -213,6 +215,7 @@ export function world(on: On): World {
     writeFails: false,
     writeFailsAt: new Set(),
     unreadable: new Set(),
+    pluginJson: null,
     dirs: new Set(),
     raceMkdir: new Set(),
     statuses: [],
@@ -250,6 +253,9 @@ export function world(on: On): World {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('fs.read', ($, e) => {
+    if (e.path.endsWith('/.claude-plugin/plugin.json')) {
+      return w.pluginJson === null ? { deny: `ENOENT: ${e.path}` } : { value: w.pluginJson }
+    }
     const f = w.files.get(e.path)
     w.afterRead?.(e.path)
     if (f && w.unreadable.has(e.path)) return { deny: `EACCES: ${e.path}` }
