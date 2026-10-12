@@ -23,6 +23,8 @@ export type TeamRecord = {
   session?: string
   cwd?: string
   brief_sent_session?: string
+  /** The session `brief_send` last briefed. Unlike `brief_sent_session`, a /compact keeps it; a /clear moves `session` past it. */
+  watch_session?: string
 }
 
 const NON_RECORD = new Set(['config.json', 'watch-state.json', 'tabs.json', 'layout-flags.json', 'delivered.json', 'toasted.json'])

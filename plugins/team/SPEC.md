@@ -219,7 +219,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
 14. The team mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
-    turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
+    turns blocked, or that was briefed in its current session and stays quiet
+    for 2 minutes without a REPORT (an agent not yet briefed owes none), and keeps the
     layout within budget. Other state changes show only in the `Team` pane,
     which also lists an idle worker tab as `consider release`. The orchestrator's
     mod releases an agent by itself after 30 minutes idle with a fresh REPORT and
@@ -368,7 +369,7 @@ creates and reads these; the overlay never does.
 | `brief-<name>-<topic>.md` | `team-brief compose` | the assignment; `-revN` for follow-ups |
 | `reports/<name>-<topic>.md` | agent (via hook) | deliverable summary, deterministic path |
 | `.team/config.json` | `team-init`, `team-orch-start`, `/team-envoy` | `{team_id, ticket, orchestrator, envoy_session, envoy_tab, orchestrator_session, orchestrator_tab}`; `envoy_tab` only with `--envoy-pane`; `orchestrator_session` and `orchestrator_tab` once the orchestrator is up (`team-orch-start` writes both). The team mod also rewrites `orchestrator_session` or `envoy_session` when that session runs `/clear` (`hooks/mod/activation.ts`), and `/team-envoy` rewrites `envoy_session` to the session that runs it (`hooks/mod/reattach.ts`); nothing else follows a new session id. `/team-envoy` leaves `envoy_tab` as it is |
-| `.team/<name>.json` | `team-start`, `team-brief`, `brief_send`; deleted by `team-forget` | `{role, topic, brief, pane, started, cwd, session, model, effort, mode}`; `brief_send` adds `brief_sent_session` (the `SessionStart` hook removes it on `/compact`) |
+| `.team/<name>.json` | `team-start`, `team-brief`, `brief_send`; deleted by `team-forget` | `{role, topic, brief, pane, started, cwd, session, model, effort, mode}`; `brief_send` adds `brief_sent_session` (the `SessionStart` hook removes it on `/compact`) and `watch_session` (the session the no-report watch follows; a `/compact` keeps it, a `/clear` moves `session` past it) |
 | `.team/roster.md` | `team-status` | last rendered roster, which the envoy shows on `/team:status` |
 | `.team/questions/Q-<n>.json` | the `ask` tool | one card |
 | `.team/questions/claims/<n>` | the `ask` tool | a directory per claimed card number |
@@ -776,7 +777,7 @@ writes the payload's `session_id` into the record's `session`, writes the new
 index entry and deletes the old one. On `source: compact` with `TEAM_NAME` set
 and a record whose `session` is the payload's `session_id` (a `/compact` keeps
 the id), it drops the record's `brief_sent_session`, so `brief_send` accepts
-the next brief. On `source: resume` without `TEAM_NAME`
+the next brief; it leaves `watch_session`, so the no-report watch continues. On `source: resume` without `TEAM_NAME`
 (a herdr restore) and an index entry whose record names this session, it
 creates `.team/restored/<name>` for `/team:resurrect`. Anything else: exit 0,
 silently.
@@ -884,7 +885,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   is not exempt (the orchestrator's own, `orchestrator_tab`, `envoy_tab`), and
   it is not the mod's own session. An agent placed with `team-start --pane` or
   `--split` in a tab `tabs.json` does not list is never released. An agent without a report is never released:
-  the `idle, no report` flag stays. The mod runs `team-release <name>` once
+  the `idle, no report` flag stays; it applies only to an agent briefed in its
+  current session (`watch_session` equals `session`, so a `/compact` keeps the watch and a `/clear` ends it). The mod runs `team-release <name>` once
   (see [`team-release`](#team-release)). The script owns the steps (the lock,
   the pane by session id, `/clear`, the pane close, `team-forget`), the same
   ones `/team:release <name>` runs, so the two paths cannot overlap or drift.
@@ -975,7 +977,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
 - Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): refuses
   outside the orchestrator session; runs
   `team-brief prepare`, sends the printed kick-off with
-  `$.session.send({ to: { sessionId } })`, writes `brief_sent_session`, and
+  `$.session.send({ to: { sessionId } })`, writes `brief_sent_session` and
+  `watch_session` (both the target session) in one write, and
   returns `<name>: <state>`. When the record's `brief_sent_session` equals its
   `session`, it waits up to 6 s for a `/clear` or `/compact` to land (a new
   `session`, or a dropped `brief_sent_session`), then refuses (a hook

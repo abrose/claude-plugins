@@ -93,7 +93,8 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
 13. Anything an agent produces is a file. The chat carries summaries and
     decisions only.
 14. The team mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
-    turns blocked or stays quiet for 2 minutes without a REPORT, and keeps the
+    turns blocked, or that was briefed in its current session and stays quiet
+    for 2 minutes without a REPORT (an agent not yet briefed owes none), and keeps the
     layout within budget. Other state changes show only in the `Team` pane,
     which also lists an idle worker tab as `consider release`. The orchestrator's
     mod releases an agent by itself after 30 minutes idle with a fresh REPORT and

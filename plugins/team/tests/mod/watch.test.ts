@@ -5,7 +5,7 @@ import { DIALOG_SNAPSHOT, DIALOG_TEXT, team } from './world'
 
 const fact = (over: object) => ({
   name: 'a', state: 'working', pane: 'w1:p2', reportPath: '/r/a-t.md',
-  hasFreshReport: false, quietSinceStop: false, ...over,
+  hasFreshReport: false, quietSinceStop: false, watched: true, ...over,
 })
 const empty = { agents: {}, _flagged: {}, _idle_since: {} }
 
@@ -30,6 +30,22 @@ describe('watchLines', () => {
   test('a fresh report is never flagged', () => {
     const r = watchLines([fact({ state: 'idle', hasFreshReport: true })], empty, 999_999, 120)
     expect(r.lines).toEqual([])
+  })
+  test('an unbriefed idle agent gets no line and no idle timer', () => {
+    const r = watchLines([fact({ state: 'idle', watched: false })], empty, 1000, 120)
+    expect(r.mem._idle_since).toEqual({})
+    const later = watchLines([fact({ state: 'idle', watched: false })], r.mem, 1000 + 240_000, 120)
+    expect(later.lines).toEqual([])
+    expect(later.mem._flagged).toEqual({})
+  })
+  test('an unbriefed agent quiet since its stop gets no line', () => {
+    const r = watchLines([fact({ quietSinceStop: true, watched: false })], empty, 0, 120)
+    expect(r.lines).toEqual([])
+  })
+  test('an unbriefed agent that turns blocked is still flagged', () => {
+    const r = watchLines([fact({ state: 'blocked', watched: false })], { ...empty, agents: { a: 'working' } }, 0, 120)
+    expect(r.blocked).toEqual(['a'])
+    expect(r.lines).toEqual(['WATCH a: working -> blocked'])
   })
 })
 
@@ -99,6 +115,16 @@ describe('idleTabs', () => {
   })
 })
 
+/** What `brief_send` does to the scout's record: it is now watched in its current session. */
+const markBriefed = (w: any) => w.writeJson(`${w.team}/app-1-scout.json`, {
+  role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout',
+  brief_sent_session: 'sid-scout', watch_session: 'sid-scout',
+})
+/** What a /compact leaves: the SessionStart hook dropped `brief_sent_session`, `watch_session` stays. */
+const markCompacted = (w: any) => w.writeJson(`${w.team}/app-1-scout.json`, {
+  role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout', watch_session: 'sid-scout',
+})
+
 describe('quiet since the last stop', () => {
   const iso = (ms: number) => new Date(ms).toISOString()
   const turn = (type: string, ms: number) => JSON.stringify({ type, timestamp: iso(ms) })
@@ -106,6 +132,7 @@ describe('quiet since the last stop', () => {
 
   async function stoppedWorker($: any, on: any) {
     const w = await team($, on)
+    markBriefed(w)
     w.writeJson(`${w.team}/delivered.json`, {})
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
     w.write(TR, turn('assistant', 999_000) + '\n')
@@ -136,6 +163,15 @@ describe('quiet since the last stop', () => {
   test('a brief newer than the stop belongs to a new task', async ($, on) => {
     const w = await stoppedWorker($, on)
     w.write(`${w.cwd}/scratchpad/current/brief-app-1-scout-.md`, '# Brief\n', 1_005_000)
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(flags(w)).toEqual([])
+  })
+
+  test('an old stop file plus a fresh unbriefed record gives no line', async ($, on) => {
+    const w = await stoppedWorker($, on)
+    w.writeJson(`${w.team}/app-1-scout.json`, {
+      role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout',
+    })
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(flags(w)).toEqual([])
   })
@@ -181,14 +217,75 @@ describe('watch in the tick', () => {
     expect(w.submits).toEqual(['WATCH herdr unreachable: server_unavailable', 'WATCH herdr unreachable: again'])
   })
 
-  test('an idle worker without a report is flagged after the grace period', async ($, on) => {
+  test('an unbriefed idle agent gets no line', async ($, on) => {
     const w = await team($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([])
+  })
+
+  test('idle 2 min before the brief gives no line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    markBriefed(w)
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([])
+  })
+
+  test('briefed in this session, then idle 2 min, gives one line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    markBriefed(w)
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(w.submits).toEqual([
       'WATCH app-1-scout: idle, no report - read /proj/scratchpad/current/reports/app-1-scout-.md',
     ])
+  })
+
+  test('an automatic compact mid-task (brief_sent_session dropped, watch_session kept) stays watched', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    markCompacted(w)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([
+      'WATCH app-1-scout: idle, no report - read /proj/scratchpad/current/reports/app-1-scout-.md',
+    ])
+  })
+
+  test('a /compact with a fresh REPORT and the next brief pending gives no line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    markCompacted(w)
+    w.write(`${w.cwd}/scratchpad/current/reports/app-1-scout-.md`, 'REPORT app-1-scout : done\n')
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits.filter(s => s.includes('no report'))).toEqual([])
+  })
+
+  test('after a /clear (new session, old watch_session) there is no line until the next brief', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/app-1-scout.json`, {
+      role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-new', watch_session: 'sid-scout',
+    })
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-new' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([])
+  })
+
+  test('an unbriefed agent that turns blocked still flags', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([`WATCH app-1-scout: idle -> blocked: ${DIALOG_TEXT}`])
   })
 
   test('the orchestrator tab from the config gets no layout flags while herdr does not know the session', async ($, on) => {
@@ -242,6 +339,7 @@ describe('watch in the tick', () => {
 
   test('a report file without a REPORT line still counts as no report', async ($, on) => {
     const w = await team($, on)
+    markBriefed(w)
     w.writeJson(`${w.team}/delivered.json`, {})
     w.write(`${w.cwd}/scratchpad/current/reports/app-1-scout-.md`, 'still waiting on two subagents\n')
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]

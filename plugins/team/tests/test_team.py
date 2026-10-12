@@ -1696,6 +1696,28 @@ class SessionStartHook(Base):
         self.assertNotIn("brief_sent_session", rec)
         self.assertEqual(rec["session"], "s-1")
 
+    def test_compact_keeps_the_watch_session(self):
+        self.setup_briefed_worker("s-1")
+        rec = self.team_json("scout"); rec["watch_session"] = "s-1"
+        write_text(self.sp(".team", "scout.json"), json.dumps(rec))
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertNotIn("brief_sent_session", rec)
+        self.assertEqual(rec["watch_session"], "s-1")
+
+    def test_clear_keeps_the_old_watch_session_beside_the_new_session(self):
+        self.setup_worker("old-1")
+        rec = self.team_json("scout"); rec["watch_session"] = "old-1"
+        write_text(self.sp(".team", "scout.json"), json.dumps(rec))
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["session"], "new-2")
+        self.assertEqual(rec["watch_session"], "old-1")
+
     def test_compact_of_another_session_keeps_the_brief_mark(self):
         self.setup_briefed_worker("s-1")
         p = self.run_hook({"session_id": "other", "source": "compact", "cwd": self.proj},

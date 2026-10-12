@@ -54,7 +54,7 @@ export async function briefSend(io: Io, name: string, topic: string): Promise<To
   if (!sent.isDelivered) return fail(`not delivered: ${sent.reason ?? 'unknown reason'}`)
 
   const latest = (await readJson<TeamRecord>(io, path)) ?? rec
-  await writeJson(io, path, { ...latest, brief_sent_session: rec.session })
+  await writeJson(io, path, { ...latest, brief_sent_session: rec.session, watch_session: rec.session })
   const listed = await herdrAgents(io)
   const state = listed.ok ? bySession(listed.agents).get(rec.session)?.agent_status ?? 'gone' : 'unknown'
   return { result: `${name}: ${state}` }

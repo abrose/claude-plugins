@@ -7,7 +7,7 @@ import type { World } from './world'
 const MIN = 60_000
 const fact = (over: object) => ({
   name: 'a', state: 'idle', pane: 'w1:p2', reportPath: '/r/a-t.md',
-  hasFreshReport: true, quietSinceStop: false, ...over,
+  hasFreshReport: true, quietSinceStop: false, watched: true, ...over,
 })
 const empty = { agents: {}, _flagged: {}, _idle_since: {} }
 

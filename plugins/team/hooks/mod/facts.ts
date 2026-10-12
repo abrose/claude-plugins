@@ -10,6 +10,8 @@ export type AgentFacts = {
   reportPath: string
   hasFreshReport: boolean
   quietSinceStop: boolean
+  /** Watched: briefed in its current session (`brief_send` ran, no /clear since; a /compact keeps it). Only then it owes a report. */
+  watched: boolean
 }
 
 function lastTurnAt(tail: string): number | null {
@@ -53,5 +55,6 @@ export async function gatherFacts(
     const last = lastTurnAt(await tailText(io, stop.transcript, 262144))
     quietSinceStop = last === null || last <= stop.at * 1000
   }
-  return { name, state, pane: rec.pane, reportPath, hasFreshReport, quietSinceStop }
+  const watched = rec.session !== undefined && rec.watch_session === rec.session
+  return { name, state, pane: rec.pane, reportPath, hasFreshReport, quietSinceStop, watched }
 }

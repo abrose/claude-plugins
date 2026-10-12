@@ -13,6 +13,7 @@ describe('brief_send', () => {
     expect(w.sends).toEqual([{ to: 'sid-scout',
                                text: 'Read scratchpad/current/brief-app-1-scout-dig.md and execute it fully.' }])
     expect(w.json(`${w.team}/app-1-scout.json`).brief_sent_session).toBe('sid-scout')
+    expect(w.json(`${w.team}/app-1-scout.json`).watch_session).toBe('sid-scout')
   })
 
   test('refuses in a session that is not the team orchestrator', async ($, on) => {

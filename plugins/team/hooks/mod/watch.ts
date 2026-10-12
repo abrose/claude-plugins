@@ -36,7 +36,8 @@ export function watchLines(
       blocked.push(f.name)
       lines.push(`WATCH ${f.name}: ${old} -> blocked`)
     }
-    if (f.state === 'blocked' || f.hasFreshReport) continue
+    // An agent not briefed in its current session owes no report: no timer, no flag. `blocked` flagged above.
+    if (f.state === 'blocked' || f.hasFreshReport || !f.watched) continue
     const idle = f.state === 'idle' || f.state === 'done'
     if (idle) next._idle_since[f.name] = mem._idle_since[f.name] ?? now
     const since = next._idle_since[f.name]
