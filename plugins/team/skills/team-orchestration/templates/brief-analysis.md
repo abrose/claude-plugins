@@ -25,6 +25,6 @@ analyse, and write documents only.
 <add or refine steps here; exact file paths and field names, no "explore">
 
 ## Output
-- `scratchpad/current/analysis-{{topic}}.md`: digest, concept inventory, candidate split.
-- `scratchpad/current/open-questions-{{topic}}.md`: numbered questions, options with
+- `{{run_dir}}/analysis-{{topic}}.md`: digest, concept inventory, candidate split.
+- `{{run_dir}}/open-questions-{{topic}}.md`: numbered questions, options with
   evidence file:line, trade-offs, one recommendation each.

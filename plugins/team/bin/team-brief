@@ -18,10 +18,6 @@ overlay="${TEAM_OVERLAY:-.claude/team}"
 scratch="$(team_run_dir)"
 # The run dir as an agent standing in the project root names it (the form prepare records).
 scratch_ref="${TEAM_SCRATCH:-scratchpad/current}"
-case "$scratch_ref" in
-  /*) agent_base="$PWD" ;;
-  *) agent_base="$(team_project_root)" ;;
-esac
 teamdir="$scratch/.team"
 
 json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }
@@ -88,14 +84,15 @@ compose)
       decisions=*) decisions="${kv#decisions=}" ;;
     esac
   done
-  [ -n "$decisions" ] || decisions="decisions-${ticket}.md"
+  # Absolute, so an agent in a worktree reads the live file in the main run dir.
+  [ -n "$decisions" ] || decisions="$scratch/decisions-${ticket}.md"
 
-  VARS_JSON="$(python3 - "$name" "$topic" "$role" "$ticket" "$orchestrator" "$decisions" "${extra[@]:-}" <<'PY'
+  VARS_JSON="$(python3 - "$name" "$topic" "$role" "$ticket" "$orchestrator" "$decisions" "$scratch" "${extra[@]:-}" <<'PY'
 import sys, json
-name, topic, role, ticket, orch, decisions = sys.argv[1:7]
+name, topic, role, ticket, orch, decisions, run_dir = sys.argv[1:8]
 d = {"name": name, "topic": topic, "role": role, "ticket": ticket,
-     "orchestrator": orch, "decisions": decisions}
-for kv in sys.argv[7:]:
+     "orchestrator": orch, "decisions": decisions, "run_dir": run_dir}
+for kv in sys.argv[8:]:
     if "=" in kv:
         k, v = kv.split("=", 1)
         d[k] = v
@@ -148,34 +145,11 @@ d["brief"] = os.environ["BRIEF"]
 json.dump(d, open(f, "w"))
 PY
 
-  # A worktree agent's record carries an absolute cwd outside this repo. Read
-  # the brief and the decisions file from the orchestrator's own tree, then
-  # never hand the agent a path outside its own working directory:
-  # `blockReadsOutsideWorkingDirectories` would block on a dialog. Mirror both
-  # into the worktree's own run dir (scratchpad/current), and name the brief
-  # by the path the agent sees from its own cwd.
-  agent_cwd="$(json_get cwd <"$jf" 2>/dev/null || true)"
-  base_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$agent_base")"
-  # A caller standing elsewhere than the project root names the brief by its absolute path.
-  brief_ref="$rec_brief"
-  [ "$(python3 -c "import os;print(os.path.realpath('.'))")" = "$base_abs" ] || brief_ref="$brief"
-  if [ -n "$agent_cwd" ]; then
-    agent_cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$agent_cwd")"
-    if [ "$agent_cwd_abs" != "$base_abs" ]; then
-      target_scratch="$agent_cwd_abs/scratchpad/current"
-      mkdir -p "$target_scratch"
-      cp "$brief" "$target_scratch/"
-      ticket=""
-      [ -f "$teamdir/config.json" ] && ticket="$(json_get ticket <"$teamdir/config.json")"
-      decisions_file="$scratch/decisions-$ticket.md"
-      [ -n "$ticket" ] && [ -f "$decisions_file" ] && cp "$decisions_file" "$target_scratch/"
-      brief_ref="scratchpad/current/$(basename "$brief")"
-    else
-      brief_ref="$rec_brief"  # the agent stands in the project root: the relative form is right
-    fi
-  fi
-
-  echo "Read $brief_ref and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
+  # Every agent, worktree or main checkout, gets the brief by its absolute path in
+  # the main run dir. Nothing is copied: a worktree agent's claude is started with
+  # `--add-dir <run dir>` (team-start, team-resurrect), so it reads the live brief
+  # and decisions file there and writes its outputs there, where the orchestrator looks.
+  echo "Read $brief and execute it fully. Report back as it describes. You are in execution mode; if your session shows plan mode, say so immediately."
   ;;
 
 *) usage ;;

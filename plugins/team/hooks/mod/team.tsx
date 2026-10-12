@@ -63,7 +63,7 @@ async function projectRoot($: EngineInterface): Promise<string> {
 }
 
 function makeIo($: EngineInterface): Io {
-  return {
+  const io: Io = {
     sessionId: () => $.session.id(),
     root: () => projectRoot($),
     envGet: async name =>
@@ -92,9 +92,17 @@ function makeIo($: EngineInterface): Io {
         return null
       }
     },
+    // Every team script resolves its run dir from the main checkout (lib/run-dir.sh). The mod hands
+    // it the absolute run dir and the main checkout as cwd, so a script never depends on the env or
+    // the cwd the engine inherits. An absolute TEAM_SCRATCH needs no git (see main-checkout.test.ts):
+    // it passes the env alone and leaves the cwd to the engine.
     run: async (argv, timeoutMs = 10000) => {
       try {
-        return await $.process.run(argv, { timeoutMs })
+        const scratch = await $.env.get('TEAM_SCRATCH')
+        if (scratch?.startsWith('/')) return await $.process.run(argv, { env: { TEAM_SCRATCH: scratch }, timeoutMs })
+        const cwd = await projectRoot($)
+        const env = { TEAM_SCRATCH: await runDir(io) }
+        return await $.process.run(argv, { cwd, env, timeoutMs })
       } catch (err) {
         return { exitCode: -1, stdout: '', stderr: String(err) }
       }
@@ -107,6 +115,7 @@ function makeIo($: EngineInterface): Io {
     },
     pluginRoot: $.plugin.root,
   }
+  return io
 }
 
 // Both tabs open on the first activation and on show; the last one opened is the one shown.

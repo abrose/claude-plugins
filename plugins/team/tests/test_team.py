@@ -350,6 +350,34 @@ class TeamStart(Base):
         self.assertIn("--model claude-opus-5-5", p.stdout)
         self.assertIn('--settings \'{"crossSessionInbound":"accept"}\'', p.stdout)
 
+    # Decision 1 (option A): a worktree agent reads and writes the main run dir by absolute
+    # path, so its claude gets the run dir as an added directory. The main checkout needs none.
+    def worktree(self):
+        wt = os.path.join(self.proj, "wt")
+        os.makedirs(wt)
+        return wt
+
+    def test_a_worktree_agent_gets_the_main_run_dir_as_an_added_dir(self):
+        wt = self.worktree()
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", wt,
+                            env_extra=self.bar_env("Sonnet 5.5", cwd=wt))
+        self.assertIn(" --add-dir %s --name maker " % self.abs_scratch(), self.started_argv(p))
+
+    def test_the_main_checkout_agent_gets_no_added_dir(self):
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", self.proj,
+                            env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+        self.assertNotIn("--add-dir", self.started_argv(p))
+
+    def test_dry_run_shows_the_added_dir_for_a_worktree_only(self):
+        wt = self.worktree()
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", wt, "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--add-dir %s" % self.abs_scratch(), p.stdout)
+        p = self.run_script("team-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", self.proj,
+                            "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("--add-dir", p.stdout)
+
     def test_writes_team_record(self):
         p = self.run_script("team-start", "scout", "investigator", "--pane", "w1:p2",
                             "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
@@ -981,9 +1009,12 @@ class TeamBriefCompose(Base):
 
 
 class TeamBriefPrepare(Base):
-    KICKOFF = ("Read scratchpad/current/brief-scout-digest.md and execute it fully. "
-               "Report back as it describes. You are in execution mode; if your session "
-               "shows plan mode, say so immediately.")
+    def kickoff(self, name="scout", topic="digest"):
+        # The kick-off names the brief by its absolute path in the main run dir, for every agent.
+        return ("Read %s and execute it fully. "
+                "Report back as it describes. You are in execution mode; if your session "
+                "shows plan mode, say so immediately."
+                % os.path.join(os.path.realpath(self.sp()), "brief-%s-%s.md" % (name, topic)))
 
     def prep(self, name="scout", topic="digest"):
         self.write_record(name, "investigator", topic=topic)
@@ -996,7 +1027,7 @@ class TeamBriefPrepare(Base):
         write_text(self.sp("brief-scout-digest.md"), "brief")
         p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.strip(), self.KICKOFF)
+        self.assertEqual(p.stdout.strip(), self.kickoff())
         rec = self.team_json("scout")
         self.assertEqual((rec["topic"], rec["brief"]), ("digest", "scratchpad/current/brief-scout-digest.md"))
         self.assertEqual(self.herdr_calls(), [])
@@ -1013,11 +1044,10 @@ class TeamBriefPrepare(Base):
         self.assertEqual(p.returncode, 2)
         self.assertIn("no brief", p.stderr)
 
-    def test_mirrors_brief_and_decisions_into_worktree_scratch(self):
-        # A worktree agent's record carries an absolute cwd outside self.proj.
-        # prepare must copy the brief and the decisions file into that
-        # worktree's own scratchpad, and reference the brief by a path relative
-        # to it, so the agent never reads outside its own working directory.
+    def test_a_worktree_agent_gets_the_absolute_brief_path_and_no_copy(self):
+        # Decision 1 (option A): a worktree agent reads the brief and the decisions file
+        # in the main run dir by absolute path (its session gets --add-dir for it).
+        # prepare copies nothing into the worktree, so the agent never reads a stale snapshot.
         wt = tempfile.mkdtemp()
         try:
             self.write_record("scout", "investigator", topic="digest", cwd=wt)
@@ -1030,18 +1060,17 @@ class TeamBriefPrepare(Base):
             p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
 
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "current", "brief-scout-digest.md")), "brief body\n")
-            self.assertEqual(read_text(os.path.join(wt, "scratchpad", "current", "decisions-APP-1.md")), "1. decision\n")
-            self.assertEqual(p.stdout.strip(), self.KICKOFF)
-            self.assertNotIn(wt, p.stdout)
+            self.assertEqual(p.stdout.strip(), self.kickoff())
+            self.assertFalse(os.path.exists(os.path.join(wt, "scratchpad")), os.listdir(wt))
+            self.assertEqual(os.listdir(wt), [])
         finally:
             shutil.rmtree(wt, ignore_errors=True)
 
-    def test_no_mirroring_when_cwd_is_the_main_repo(self):
+    def test_the_main_repo_agent_gets_the_absolute_brief_path_too(self):
         self.prep()
         p = self.run_script("team-brief", "prepare", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(p.stdout.strip(), self.KICKOFF)
+        self.assertEqual(p.stdout.strip(), self.kickoff())
 
 
 class TeamSlice(Base):
@@ -1761,6 +1790,21 @@ class TeamResurrect(Base):
                            capture_output=True, text=True, env=env, cwd=self.proj)
         self.assertNotIn("--plugin-dir", self.resurrect_argv(p))
 
+    def test_a_worktree_worker_relaunches_with_the_main_run_dir_as_an_added_dir(self):
+        self.setup_team()
+        wt = os.path.join(self.proj, "wt")
+        os.makedirs(wt)
+        rec = self.team_json("scout")
+        write_text(self.sp(".team", "scout.json"), json.dumps({**rec, "cwd": wt}))
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertIn(" --permission-mode auto --add-dir %s --name scout " % os.path.realpath(self.sp()),
+                      self.resurrect_argv(p))
+
+    def test_a_main_checkout_worker_relaunches_without_an_added_dir(self):
+        self.setup_team()
+        p = self.run_script("team-resurrect", scenario="resurrect")
+        self.assertNotIn("--add-dir", self.resurrect_argv(p))
+
     def test_unmarked_worker_is_healthy_and_untouched(self):
         self.setup_team()
         p = self.run_script("team-resurrect", scenario="resurrect")
@@ -2301,14 +2345,35 @@ class LinkedWorktreeRoot(Base):
                 self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
                 self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
 
-    def test_brief_prepare_for_an_agent_in_the_main_checkout_copies_nothing_onto_itself(self):
+    def test_brief_prepare_for_an_agent_in_the_main_checkout_names_the_absolute_brief(self):
         self.main_record("scout", topic="digest", cwd=self.main)
         write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
         p = self.script_from(self.wt, "team-brief", "prepare", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("Read scratchpad/current/brief-scout-digest.md and execute", p.stdout)
+        self.assertIn("Read %s and execute" % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
         rec = json.loads(read_text(os.path.join(self.want, ".team", "scout.json")))
         self.assertEqual(rec["brief"], "scratchpad/current/brief-scout-digest.md")
+
+    def test_brief_prepare_for_a_worktree_agent_copies_nothing_into_its_worktree(self):
+        self.main_record("scout", topic="digest", cwd=self.wt)
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        write_text(os.path.join(self.want, "decisions-APP-1.md"), "1. d\n")
+        write_text(os.path.join(self.want, ".team", "config.json"), json.dumps({"ticket": "APP-1"}))
+        p = self.script_from(self.main, "team-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Read %s and execute" % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
+
+    def test_brief_compose_renders_decisions_and_run_dir_as_absolute_paths(self):
+        self.main_record("maker", role="implementer")
+        p = self.script_from(self.wt, "team-brief", "compose", "maker", "build", "--var", "ticket=APP-1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        text = read_text(p.stdout.strip())
+        self.assertIn("1. %s  - binds you" % os.path.join(self.want, "decisions-APP-1.md"), text)
+        self.assertIn("`%s/impl-notes-build.md`" % self.want, text)
+        self.assertNotIn("{{", text)
+        # No run-dir path is left relative: strip every absolute one, then none may remain.
+        self.assertNotIn("scratchpad/current/", text.replace(self.want, ""))
 
     def test_forget_removes_a_record_that_lives_in_the_main_run_dir(self):
         for cwd, extra in self.three_cwds():

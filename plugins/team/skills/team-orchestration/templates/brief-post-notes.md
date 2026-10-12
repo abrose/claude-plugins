@@ -24,5 +24,5 @@ You must NOT: invent findings, or post anything not on the approved list below.
    tracker.
 
 ## Output
-- `scratchpad/current/post-notes-{{topic}}.md`: one row per note, the target and the
+- `{{run_dir}}/post-notes-{{topic}}.md`: one row per note, the target and the
   exact text posted. No summary verdict.

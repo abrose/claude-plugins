@@ -287,7 +287,7 @@ follow the role default.
 
 | Role | Agent file | Model | Effort | Mode | Read-only | Used for |
 |---|---|---|---|---|---|---|
-| investigator | `team-investigator` | Opus 5.5 | medium | auto | yes for code (Write scoped to `scratchpad/current/`) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health; tracker writes (Jira) on a numbered decision |
+| investigator | `team-investigator` | Opus 5.5 | medium | auto | yes for code (Write scoped to the run dir) | digests, analysis with numbered open questions, canvas, crit on own doc, code review, code health; tracker writes (Jira) on a numbered decision |
 | implementer | `team-implementer` | Sonnet 5.5 | medium | auto | no | code in a worktree, fix rounds, MR creation on its own decision, tracker writes (Jira) on a numbered decision |
 | tester | `team-tester` | Sonnet 5.5 | low | auto | yes (except test files) | diff review + gate, live rounds, finding classification, manual-test partner |
 | orchestrator | `team-orchestrator` | Opus 5.5 | medium | auto | by rule 1 (no tool filter) | runs the team from a worker tab: briefs, reads reports, acts on RELAY and DECISION lines; started by `team-init`, never talks to the human |
@@ -336,8 +336,8 @@ by editing the decisions file. `team-start` knows the roles `investigator`,
 The Investigator's read-only guarantee for code holds through two halves:
 `disallowedTools` blocks `Edit`/`MultiEdit`/`NotebookEdit` so it can never
 change an existing file, and `Write` stays available but scoped by
-`team-role-investigator`'s rule to creating new files under `scratchpad/current/`
-only (so a long deliverable does not need a Bash heredoc, which can exceed
+`team-role-investigator`'s rule to creating new files in the run dir, by the
+absolute paths the brief gives, only (so a long deliverable does not need a Bash heredoc, which can exceed
 the shell parser limit and trip a permission dialog). A brief must not try to
 lift either half. The Bash tool stays available to every role; destructive
 commands are governed by the role skill and the plugin hook (see below), not
@@ -421,8 +421,14 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    the run dir, `.claude/settings.local.json` and the orchestrator's cwd agree
    after a `cd`.
    `team-resurrect` adds it to its export too.
-4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --session-id <uuid> --model <model id> --effort <lvl> --permission-mode <mode> --name <name> --settings '{"crossSessionInbound":"accept"}' [--plugin-dir <plugin root>]`.
-   `--name` gives `claude` the same resolved name Herdr knows it by, so
+4. `herdr agent start <name> --kind claude --pane <pane> --timeout 90000 -- --agent team-<role> --session-id <uuid> --model <model id> --effort <lvl> --permission-mode <mode> [--add-dir <main run dir>] --name <name> --settings '{"crossSessionInbound":"accept"}' [--plugin-dir <plugin root>]`.
+   `--add-dir <main run dir>` (the absolute `team_run_dir`) is passed only when
+   the agent's cwd is not the main checkout root, that is, for a worktree
+   agent. The brief and the decisions file are read, and the outputs are
+   written, in the main run dir by absolute path, and a `claude` in a worktree
+   blocks reads outside its working directories unless it is told of the
+   run dir. `team-resurrect` passes the same flag for a record whose `cwd` is
+   not the main checkout root. `--name` gives `claude` the same resolved name Herdr knows it by, so
    `ListAgents`/`SendMessage` reach it by that name. `--settings` accepts
    cross-session messages so a peer question is never held pending approval.
    `--plugin-dir` (from `lib/plugin-dir.sh`, which `team-resurrect` sources
@@ -473,8 +479,10 @@ team-brief prepare <name> [--topic <topic>]
 `compose` writes `brief-<name>-<topic>.md` by concatenating, in this order:
 
 1. `templates/<t>.md` (default: the role's default template, e.g. tester ->
-   `brief-tester.md`), with `{{ticket}}`, `{{decisions}}`, `{{name}}`,
-   `{{topic}}`, `{{orchestrator}}` and any `--var` substituted;
+   `brief-tester.md`), with `{{ticket}}`, `{{decisions}}` (the absolute path of
+   the decisions file), `{{run_dir}}` (the absolute main run dir, the root of
+   every output path), `{{name}}`, `{{topic}}`, `{{orchestrator}}` and any
+   `--var` substituted;
 2. the overlay's `roles/<role>.md` fragment if present;
 3. the overlay's `env.md` and `gate.md` if present (as sections "Environment"
    and "Gate");
@@ -484,17 +492,16 @@ It prints the brief's absolute path (in the main checkout's run dir, from any cw
 with its own tools. `compose` refuses to overwrite an existing brief (use
 `-rev2` via `--topic`).
 
-`prepare` records `topic` and `brief` in `.team/<name>.json`. If the agent's
-record `cwd` is set and differs from `prepare`'s own cwd (a worktree agent), it
-first copies the brief and, when the team's `ticket` names one, the decisions
-file into `<cwd>/scratchpad/current/`, so the agent never reads a path outside its
-own working directory; the kick-off then names the brief relative to that
-cwd instead of the orchestrator's path. `prepare` reads the record and the brief from the
-same main run dir. An agent that stands in the project root gets the brief by its
-run-dir-relative form (`scratchpad/current/brief-...`); a caller that stands elsewhere and
-records no agent cwd gets the absolute path.
+`prepare` records `topic` and `brief` in `.team/<name>.json`. It reads the
+record and the brief from the main run dir and copies nothing: the kick-off
+always names the brief by its absolute path in that run dir, for a worktree
+agent and for an agent in the main checkout alike. A worktree agent reaches the
+run dir because `team-start` and `team-resurrect` start its `claude` with
+`--add-dir <main run dir>` (only when the agent's cwd is not the main checkout
+root). The agent then reads the live brief and decisions file, and writes its
+outputs, in the run dir, where the orchestrator looks.
 
-It then prints the kick-off, "Read <brief-ref> and execute it fully. Report
+It then prints the kick-off, "Read <absolute brief path> and execute it fully. Report
 back as it describes. You are in execution mode; if your session shows plan
 mode, say so immediately.", and exits 0; a missing record or brief exits 2.
 It calls no herdr. The team mod's `brief_send` tool runs `prepare` and sends
@@ -771,6 +778,10 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   project root can move on `/cd` or a worktree move; the mod then follows it
   (a new cache key), so an absolute `TEAM_SCRATCH` (which `team-start` and
   `team-resurrect` stamp onto agent panes) is the fixed choice.
+- Subprocesses: `io.run` (over `$.process.run`) passes the scripts the run dir
+  and the main checkout explicitly, so a script never depends on the env or the
+  cwd the engine inherits: `{ cwd: <main checkout>, env: { TEAM_SCRATCH: <absolute run dir> } }`.
+  With an absolute `TEAM_SCRATCH` it passes `env` alone and runs no git.
 - Tick, orchestrator half: maps records to herdr agents by session id (writing
   moved pane ids back), runs the watch rules, closes empty record-named panes
   in worker tabs (never a pending one, never in the orchestrator's own tab: the

@@ -11,8 +11,9 @@ express a path, so hold it yourself.
 
 - Read files with the Read tool, never a Bash `cat`/`find`/heredoc. Create and
   change test and scenario files with Write/Edit only. Never read, search, or
-  write outside your own worktree; if a step seems to need that, stop and
-  report instead. Never read, list, or search `scratchpad/.archive/`; it holds
+  write outside your own worktree, except the run dir, at the absolute paths
+  the brief gives; if a step seems to need more, stop and report instead.
+  Never read, list, or search `scratchpad/.archive/`; it holds
   earlier runs.
 - Fill the environment table first: what runs where, which ports, which login
   state. Test against real services, never a mock.

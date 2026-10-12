@@ -132,6 +132,14 @@ if [ -z "$cwd" ] && [ -n "$pane" ]; then
 fi
 [ -n "$cwd" ] || cwd="$PWD"
 
+# A worktree agent reads the brief and the decisions file, and writes its outputs, in the
+# main run dir by absolute path. Its claude blocks reads outside its working directories
+# (blockReadsOutsideWorkingDirectories), so the run dir is added with --add-dir. An agent
+# whose cwd is the main checkout root needs none. Same resolver as the scripts: team_run_dir.
+add_dir_args=()
+realpath_of() { python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$1"; }
+[ "$(realpath_of "$cwd")" = "$(realpath_of "$(team_project_root)")" ] || add_dir_args=(--add-dir "$scratch_abs")
+
 label="$name"
 if [ -f "$teamcfg" ]; then
   team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
@@ -152,7 +160,7 @@ fi
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/plugin-dir.sh"
 
 if [ -n "$dry_run" ]; then
-  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode --name $name --settings '{\"crossSessionInbound\":\"accept\"}'${plugin_args[*]:+ ${plugin_args[*]}}"
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent team-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode${add_dir_args[*]:+ ${add_dir_args[*]}} --name $name --settings '{\"crossSessionInbound\":\"accept\"}'${plugin_args[*]:+ ${plugin_args[*]}}"
   exit 0
 fi
 
@@ -279,7 +287,8 @@ start() {
   # a peer question never sits held pending human approval.
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
     --agent "team-$role" --session-id "$session_id" --model "$model" --effort "$effort" \
-    --permission-mode "$permission_mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' \
+    --permission-mode "$permission_mode" ${add_dir_args[@]+"${add_dir_args[@]}"} \
+    --name "$name" --settings '{"crossSessionInbound":"accept"}' \
     ${plugin_args[@]+"${plugin_args[@]}"}
 }
 

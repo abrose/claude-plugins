@@ -48,11 +48,11 @@ for name, rec in sorted(recs.items()):
     else:
         kind = "missing"
     print("\t".join([kind, name, pane or "-", sid, old, rec.get("role", ""), rec.get("model", ""),
-                     rec.get("effort", ""), rec.get("mode", "")]))
+                     rec.get("effort", ""), rec.get("mode", ""), rec.get("cwd") or "-"]))
 restored = os.path.join(teamdir, "restored")
 for name in sorted(os.listdir(restored) if os.path.isdir(restored) else []):
     if name not in recs:
-        print("\t".join(["stale", name] + ["-"] * 7))
+        print("\t".join(["stale", name] + ["-"] * 8))
 PY
 )"
 
@@ -62,10 +62,19 @@ pending_dir="$teamdir/pending"
 pending_file=""
 trap '[ -z "$pending_file" ] || rm -f "$pending_file"' EXIT
 
-# relaunch <name> <pane> <session> <role> <model> <effort> <mode>; returns 1
+realpath_of() { python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$1"; }
+project_root_real="$(realpath_of "$(team_project_root)")"
+
+# relaunch <name> <pane> <session> <role> <model> <effort> <mode> <cwd>; returns 1
 # when the running Claude does not exit.
 relaunch() {
-  local name="$1" pane="$2" sid="$3" role="$4" model="$5" effort="$6" mode="$7"
+  local name="$1" pane="$2" sid="$3" role="$4" model="$5" effort="$6" mode="$7" cwd="$8"
+  # A worktree agent reads and writes the main run dir by absolute path: add it, as
+  # team-start does. An agent in the main checkout root needs none.
+  local -a add_dir_args=()
+  if [ -n "$cwd" ] && [ "$cwd" != "-" ] && [ "$(realpath_of "$cwd")" != "$project_root_real" ]; then
+    add_dir_args=(--add-dir "$scratch_abs")
+  fi
   mkdir -p "$pending_dir"
   pending_file="$pending_dir/$(printf '%s' "$pane" | tr ':/' '__')"
   : >"$pending_file"
@@ -78,7 +87,8 @@ relaunch() {
   herdr pane run "$pane" "export TEAM_NAME=$(printf %q "$name") TEAM_SCRATCH=$(printf %q "$scratch_abs")$profile_export" >/dev/null || exit 4
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
     --resume "$sid" --agent "team-$role" --model "$model" --effort "$effort" \
-    --permission-mode "$mode" --name "$name" --settings '{"crossSessionInbound":"accept"}' \
+    --permission-mode "$mode" ${add_dir_args[@]+"${add_dir_args[@]}"} \
+    --name "$name" --settings '{"crossSessionInbound":"accept"}' \
     ${plugin_args[@]+"${plugin_args[@]}"} >/dev/null || exit 4
   rm -f "$pending_file"; pending_file=""
   rm -f "$teamdir/restored/$name"
@@ -102,7 +112,7 @@ except OSError:
 PY
 }
 
-while IFS=$'\t' read -r kind name pane sid old role model effort mode; do
+while IFS=$'\t' read -r kind name pane sid old role model effort mode cwd; do
   [ -n "$kind" ] || continue
   case "$kind" in
     missing)
@@ -112,11 +122,11 @@ while IFS=$'\t' read -r kind name pane sid old role model effort mode; do
     stale) rm -f "$teamdir/restored/$name" ;;
     healthy) echo "healthy $name" ;;
     relaunch)
-      relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" || continue
+      relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" "$cwd" || continue
       echo "relaunched $name ($pane)"
       ;;
     adopt)
-      relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" || continue
+      relaunch "$name" "$pane" "$sid" "$role" "$model" "$effort" "$mode" "$cwd" || continue
       adopt_session "$name" "$sid" "$old"
       echo "relaunched $name ($pane), adopted session $sid"
       ;;

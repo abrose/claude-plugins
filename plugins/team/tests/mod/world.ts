@@ -50,6 +50,8 @@ export type World = {
   /** Pane ids that open but stay undrawn (isPlaced false), like in a herdr pane under 144 columns. */
   unplaced: Set<string>
   runs: string[][]
+  /** The options object of each process.run, parallel to `runs` (undefined when the call passed none). */
+  inits: ({ cwd?: string; env?: Record<string, string>; timeoutMs?: number } | undefined)[]
   /** What `git rev-parse` answers: the common git dir and the top level. null means "not a repo" (exit 128). */
   git: { common: string | null; top: string | null }
   /** The cwd of each git call, in order. */
@@ -204,6 +206,7 @@ export function world(on: On): World {
     titles: new Map(),
     unplaced: new Set(),
     runs: [],
+    inits: [],
     git: { common: null, top: null },
     gitCwds: [],
     submits: [],
@@ -268,6 +271,7 @@ export function world(on: On): World {
   on('process.run', ($, e) => {
     const argv = [...e.argv]
     w.runs.push(argv)
+    w.inits.push(e.init)
     const out = (stdout: string, exitCode = 0, stderr = '') => ({
       value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
     })
