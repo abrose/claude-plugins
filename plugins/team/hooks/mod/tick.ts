@@ -27,7 +27,10 @@ export type TeamRecord = {
   watch_session?: string
 }
 
-const NON_RECORD = new Set(['config.json', 'watch-state.json', 'tabs.json', 'layout-flags.json', 'delivered.json', 'toasted.json'])
+const NON_RECORD = new Set([
+  'config.json', 'watch-state.json', 'tabs.json', 'layout-flags.json', 'delivered.json', 'toasted.json',
+  'next-action.json',
+])
 
 export async function readRecords(io: Io, teamdir: string): Promise<Record<string, TeamRecord>> {
   const out: Record<string, TeamRecord> = {}

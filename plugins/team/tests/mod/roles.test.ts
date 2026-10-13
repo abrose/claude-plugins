@@ -18,7 +18,7 @@ describe('roleOf', () => {
 })
 
 describe('the two halves', () => {
-  test('the envoy session draws and never submits', async ($, on) => {
+  test('the envoy session draws and submits no REPORT line', async ($, on) => {
     const w = await envoyTeam($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
     w.write(`${w.cwd}/scratchpad/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))

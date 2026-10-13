@@ -15,9 +15,12 @@ that build, not on older ones).
 ## How it works
 
 - You talk to one **envoy** session: the session where you run `/team:init`.
-  It is pull-driven. It speaks when you speak to it, shows the question queue,
-  records your decisions with `decide`, and passes operational requests to the
-  orchestrator with `relay`. Nothing pushes a turn into it.
+  It speaks when you speak to it, and when the team mod sends it a
+  next-action message about a run change: a card or step that waits on you,
+  a step done, the run idle on you, a blocked worker, the run finished. So
+  when you come back, the pane already says where the run stands and what
+  you do next. It shows the question queue, records your decisions with
+  `decide`, and passes operational requests to the orchestrator with `relay`.
 - `/team:init` starts an **orchestrator** in its own worker tab. It plans,
   briefs, reads reports, and acts on `DECISION` and `RELAY` lines. It never
   talks to you in chat: anything it needs from you becomes a card. It never
@@ -32,7 +35,8 @@ that build, not on older ones).
   about an hour of rework or less and continues; it waits on the others. The
   envoy shows cards grouped by tag, and `decide` closes one or several with one
   numbered decision. An urgent card shows as a status line and one toast in the
-  envoy session, never as a turn.
+  envoy session, and its next-action message goes out at the next check,
+  without the quiet wait.
 - A **brief** is a file in `scratchpad/current/`, composed by `team-brief` from
   templates plus your project overlay. The orchestrator sends the one-line
   kick-off with the `brief_send` tool.
@@ -235,7 +239,9 @@ archives the previous run and loose scratchpad entries to `scratchpad/.archive/`
 `.team/config.json`, `.team/tabs.json`, `.team/watch-state.json`,
 `.team/layout-flags.json`, `.team/delivered.json`, `.team/toasted.json` (ids of
 urgent cards seen or toasted, plus the `stall:` timer and `stall-toast:` marks of the stall flag), `.team/last-relay.txt` (the last relayed text and its
-orchestrator session), `.team/questions/` (one `Q-<n>.json` per card, and
+orchestrator session), `.team/next-action.json` (the marks of the next-action
+message), `.team/denials/` (one `<name>.json` per agent with its last auto-mode
+denial), `.team/questions/` (one `Q-<n>.json` per card, and
 `claims/`), `.team/decisions/` (one `<n>.json` per decision, which the
 orchestrator's tick reads), `.team/stops/`, `.team/restored/`, `.team/roster.md`.
 

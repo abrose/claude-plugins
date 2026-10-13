@@ -34,8 +34,9 @@ named agent (or every agent when `all`):
    Never run `/clear`, `herdr pane close` or `team-forget` by hand for an
    agent you release; the script owns those steps and the lock.
 4. When releasing `all`, also remove `.team/tabs.json`, `.team/watch-state.json`,
-   `.team/layout-flags.json`, `.team/toasted.json` and `.team/last-relay.txt`,
-   all under `${TEAM_SCRATCH:-scratchpad/current}`. Keep `.team/delivered.json`:
+   `.team/layout-flags.json`, `.team/toasted.json`, `.team/next-action.json`,
+   `.team/denials/` and `.team/last-relay.txt`, all under
+   `${TEAM_SCRATCH:-scratchpad/current}`. Keep `.team/delivered.json`:
    its `_decision` mark stops the orchestrator from getting every DECISION line
    of the run again. The team mod stays active in the envoy session until
    `/team:init` starts another run.

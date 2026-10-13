@@ -137,3 +137,99 @@ describe('ask', () => {
     expect(w.json(`${w.team}/questions/Q-1.json`)).toMatchObject({ urgent: true, refs: ['Q-3', 'brief-scout.md'] })
   })
 })
+
+describe('urgent by tool', () => {
+  const BRIEF = (w: any) => `${w.cwd}/scratchpad/current/brief-app-1-scout-fixtures.md`
+  const denied = ($: any) =>
+    $.classic.PermissionDenied({
+      tool_name: 'mcp__gitlab__save_note', tool_input: {}, tool_use_id: 'tu-1', reason: 'auto mode',
+    } as never)
+
+  test('a card filed after a fresh denial is urgent, and its context says why', async ($, on) => {
+    const w = await asScout($, on)
+    w.write(BRIEF(w), 'brief')
+    await w.clock.advance(60_000)
+    await denied($)
+    await w.clock.advance(120_000)
+
+    expect(await call($, 'ask', CARD)).toMatchObject({ result: 'Q-1' })
+
+    const filed = w.json(`${w.team}/questions/Q-1.json`)
+    expect(filed.urgent).toBe(true)
+    expect(filed.context).toBe(
+      `${CARD.context}\nThe tool marked this card urgent: auto mode denied \`mcp__gitlab__save_note\` 2 min before it.`)
+  })
+
+  test('a denial older than the brief does not make a card urgent', async ($, on) => {
+    const w = await asScout($, on)
+    await denied($)
+    await w.clock.advance(60_000)
+    w.write(BRIEF(w), 'brief')
+
+    await call($, 'ask', CARD)
+
+    const filed = w.json(`${w.team}/questions/Q-1.json`)
+    expect(filed.urgent).toBe(false)
+    expect(filed.context).toBe(CARD.context)
+  })
+
+  test('a denial of another agent does not make the card urgent', async ($, on) => {
+    const w = await asScout($, on)
+    w.writeJson(`${w.team}/denials/app-1-other.json`, { tool: 'Bash', reason: 'auto mode', at: w.clock.now() })
+
+    await call($, 'ask', CARD)
+
+    expect(w.json(`${w.team}/questions/Q-1.json`).urgent).toBe(false)
+  })
+
+  test('approved_by naming an existing decision makes the card urgent, and its context says why', async ($, on) => {
+    const w = await asScout($, on)
+    w.writeJson(`${w.team}/decisions/2.json`, { n: 2, cards: [], answer: 'Post the 9 comments.', rationale: 'r', overrides: [], at: 1 })
+
+    expect(await call($, 'ask', { ...CARD, approved_by: 2 })).toMatchObject({ result: 'Q-1' })
+
+    const filed = w.json(`${w.team}/questions/Q-1.json`)
+    expect(filed.urgent).toBe(true)
+    expect(filed.context).toBe(`${CARD.context}\nThe tool marked this card urgent: it blocks work approved in decision 2.`)
+  })
+
+  test('approved_by naming no decision files the card non-urgent and warns the filer', async ($, on) => {
+    const w = await asScout($, on)
+
+    const r = await call($, 'ask', { ...CARD, approved_by: 9 })
+
+    expect(r.isError).toBeUndefined()
+    expect(r.result).toBe('Q-1\nWarning: approved_by names decision 9, which does not exist. It did not make the card urgent.')
+    const filed = w.json(`${w.team}/questions/Q-1.json`)
+    expect(filed.urgent).toBe(false)
+    expect(filed.context).toBe(`${CARD.context}\napproved_by names decision 9, which does not exist.`)
+  })
+
+  test('approved_by that is no positive whole number is never read as a path: non-urgent, warned', async ($, on) => {
+    const w = await asScout($, on)
+    w.writeJson(`${w.team}/decisions/abc.json`, { n: 0, cards: [], answer: 'a', rationale: 'r', overrides: [], at: 1 })
+    w.writeJson(`${w.team}/decisions/0.json`, { n: 0, cards: [], answer: 'a', rationale: 'r', overrides: [], at: 1 })
+
+    const text = await call($, 'ask', { ...CARD, approved_by: 'abc' })
+    const zero = await call($, 'ask', { ...CARD, approved_by: 0 })
+
+    const warning = '\nWarning: approved_by is not a decision number (a positive whole number). It did not make the card urgent.'
+    expect(text).toMatchObject({ result: `Q-1${warning}` })
+    expect(zero).toMatchObject({ result: `Q-2${warning}` })
+    for (const id of ['Q-1', 'Q-2']) {
+      const filed = w.json(`${w.team}/questions/${id}.json`)
+      expect(filed.urgent).toBe(false)
+      expect(filed.context).toBe(`${CARD.context}\napproved_by is not a decision number (a positive whole number).`)
+    }
+  })
+
+  test('a filer that sets urgent stays urgent, with no line added', async ($, on) => {
+    const w = await asScout($, on)
+
+    await call($, 'ask', { ...CARD, urgent: true })
+
+    const filed = w.json(`${w.team}/questions/Q-1.json`)
+    expect(filed.urgent).toBe(true)
+    expect(filed.context).toBe(CARD.context)
+  })
+})

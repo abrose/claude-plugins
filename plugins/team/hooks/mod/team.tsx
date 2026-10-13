@@ -14,6 +14,8 @@ import { mainCheckout, runDir, teamDir } from './paths'
 import { parsePlan } from './plan'
 import { pluginVersion } from './version'
 import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
+import { recordDenial } from './denial'
+import { gatherInput, markShown, noteTurnEnd, noteTurnStart, pushNextAction, resetNextAction } from './next-action-push'
 import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
 import { reattach } from './reattach'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
@@ -123,6 +125,14 @@ function makeIo($: EngineInterface): Io {
     sendTo: async (sessionId, text) => {
       const sent = await $.session.send({ to: { sessionId }, text })
       return sent.isDelivered ? { isDelivered: true } : { isDelivered: false, reason: sent.reason }
+    },
+    submit: text => $.prompt.submit({ text }),
+    draft: async () => {
+      try {
+        return (await $.prompt.read()).text
+      } catch {
+        return ''
+      }
     },
     pluginRoot: $.plugin.root,
   }
@@ -252,15 +262,21 @@ export const testing = {
   sendLines,
 }
 
-/** The envoy half: the plan, the cards and the agent rows the panes draw. */
+/**
+ * The envoy half: the plan, the cards and the agent rows the panes draw, then the next-action message.
+ * `canPush` is false in a session that also holds the orchestrator role: rule 16 forbids the orchestrator
+ * to speak to the human, so such a session gets no next-action turn.
+ */
 async function envoyHalf(
   $: EngineInterface, io: Io, cfg: TeamConfig, teamdir: string,
-  records: Record<string, TeamRecord>, listed: HerdrListing,
+  records: Record<string, TeamRecord>, listed: HerdrListing, canPush: boolean,
 ): Promise<void> {
-  const path = `${await runDir(io)}/progress-${cfg.ticket}.md`
+  const run = await runDir(io)
+  const path = `${run}/progress-${cfg.ticket}.md`
   const text = await io.readText(path)
+  const parsed = text === null ? null : parsePlan(text)
   await update($, planPath, () => path)
-  await update($, plan, () => (text === null ? null : parsePlan(text)))
+  await update($, plan, () => parsed)
   const found = await readCards(io, teamdir)
   await update($, cards, () => found)
   const rows = agentRows(records, listed)
@@ -269,7 +285,7 @@ async function envoyHalf(
   const idleRows = await idleTabRows(io, await runDir(io), teamdir, records, listed, myId, exemptTabs(cfg))
   await update($, idle, () => idleRows.rows)
   await update($, error, () => (listed.ok ? '' : `herdr: ${listed.reason}`))
-  // The orchestrator has no record: herdr's listing, by the session the config names, tells its state.
+  // The orchestrator has a record, but its state comes from herdr's listing, by the session the config names.
   const orchestrator = listed.ok && cfg.orchestrator_session
     ? bySession(listed.agents).get(cfg.orchestrator_session)?.agent_status
     : undefined
@@ -280,6 +296,12 @@ async function envoyHalf(
     orchestrator,
   })
   await urgentBadge($, io, teamdir, found, stall)
+  if (!canPush) return
+  const input = await gatherInput(io, {
+    run, cfg, teamdir, records, rows, listed, cards: found, plan: parsed, stalled: stall !== null, myId,
+    now: await $.clock.now(),
+  })
+  await pushNextAction(io, teamdir, input)
 }
 
 /**
@@ -330,7 +352,7 @@ async function tickOnce($: EngineInterface, io: Io): Promise<void> {
   const listed = await herdrAgents(io)
   const records = await readRecords(io, teamdir)
   // The envoy half first: the orchestrator half may report a failed prompt, which must not be cleared.
-  if (role.envoy) await envoyHalf($, io, cfg, teamdir, records, listed)
+  if (role.envoy) await envoyHalf($, io, cfg, teamdir, records, listed, !role.orchestrator)
   if (role.orchestrator) await orchestratorHalf($, io, cfg, teamdir, records, listed, !role.envoy)
 
   const at = new Date(await $.clock.now()).toISOString().slice(11, 19)
@@ -343,6 +365,7 @@ export const register: Register = on => {
     const io = makeIo($)
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     lastBadge = null
+    resetNextAction()
     // Read once: the footer shows the copy that runs, the one under the plugin root.
     const found = pluginVersion(await io.readText(`${io.pluginRoot}/.claude-plugin/plugin.json`))
     await update($, version, () => found ?? '')
@@ -371,11 +394,35 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'mcp__team__ask' }, async ($, e) => askTool(makeIo($), e))
 
-  on('tool.call', { tool: 'mcp__team__queue' }, async ($, e) => queueTool(makeIo($), e))
+  // A queue call shows the cards to the envoy: the next-action message does not repeat what it just read.
+  on('tool.call', { tool: 'mcp__team__queue' }, async ($, e) => {
+    const io = makeIo($)
+    const shown = await queueTool(io, e)
+    if (!shown.isError) await markShown(io, await teamDir(io))
+    return shown
+  })
+
+  // The envoy is mid-turn between these two events: a next-action message waits for the end.
+  on('turn.start', async ($, e, next) => {
+    noteTurnStart(await $.clock.now())
+    return next(e)
+  })
+
+  // A subagent's turn ends with an `agentId`; only the main loop's end frees the envoy.
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) noteTurnEnd()
+    return next(e)
+  })
 
   on('tool.call', { tool: 'mcp__team__decide' }, async ($, e) => decideTool(makeIo($), e))
 
   on('tool.call', { tool: 'mcp__team__relay' }, async ($, e) => relayTool(makeIo($), e))
+
+  // Auto mode denied a tool call: record it, and pass the event on unchanged (no `retry`).
+  on('classic.PermissionDenied', async ($, e, next) => {
+    await recordDenial(makeIo($), e.tool_name, e.reason)
+    return next(e)
+  })
 
   on('command.run', { command: 'team-overview' }, async $ => {
     const cfg = await envoyConfig(makeIo($))

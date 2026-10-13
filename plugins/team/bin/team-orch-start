@@ -62,7 +62,8 @@ live_orchestrator() {
   AGENTS="$1" python3 - "$config" "$teamdir" <<'PY'
 import json, os, sys
 config, teamdir = sys.argv[1], sys.argv[2]
-non_record = {"config.json", "watch-state.json", "tabs.json", "layout-flags.json", "delivered.json", "toasted.json"}
+non_record = {"config.json", "watch-state.json", "tabs.json", "layout-flags.json", "delivered.json", "toasted.json",
+              "next-action.json"}
 try:
     agents = json.loads(os.environ["AGENTS"])["result"]["agents"] or []
 except (ValueError, KeyError, TypeError):

@@ -34,6 +34,8 @@ export type World = {
   orchRunsIn: string
   /** The next prompt.submit throws, once. */
   submitFails: boolean
+  /** What `$.prompt.read()` answers: the draft in the prompt box ('' for none). */
+  draft: string
   /** The next prompt.submit calls each wait on one of these, in order: it is recorded in `submits` at once, answers when the promise settles. */
   holdSubmits: Promise<void>[]
   /** The next `herdr agent list` waits on this, once: it holds a tick open. */
@@ -209,6 +211,7 @@ export function world(on: On): World {
     orchLocked: false,
     orchRunsIn: '',
     submitFails: false,
+    draft: '',
     holdSubmits: [],
     holdList: null,
     holdReleases: [],
@@ -401,6 +404,11 @@ export function world(on: On): World {
     const hold = w.holdSubmits.shift()
     return hold ? hold.then(() => ({ text: e.text })) : { text: e.text }
   })
+  on('prompt.read', () => ({ value: { text: w.draft, cursor: w.draft.length } }))
+  // The engine's bottoms of the turn events and of the auto-mode denial: the plugin under test sits above them.
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('classic.PermissionDenied', () => ({}))
   on('session.send', ($, e) => {
     if (w.sendFails) return { isDelivered: false, reason: w.sendFails }
     w.sends.push({ to: e.to, text: e.text })

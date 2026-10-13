@@ -22,6 +22,10 @@ export type Io = {
   sleep: (ms: number) => Promise<void>
   now: () => Promise<number>
   sendTo: (sessionId: string, text: string) => Promise<{ isDelivered: boolean; reason?: string }>
+  /** Submits `text` as a prompt of its own, once the session is idle. Settles as that turn starts; rejects when refused. */
+  submit: (text: string) => Promise<unknown>
+  /** The draft in the prompt box; '' where there is none or the read fails. */
+  draft: () => Promise<string>
   pluginRoot: string
 }
 

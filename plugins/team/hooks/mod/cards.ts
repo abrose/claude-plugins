@@ -3,7 +3,7 @@ import type { TeamCard } from '../../types'
 export type AskInput = Omit<
   TeamCard,
   'id' | 'n' | 'from' | 'tag' | 'status' | 'decision' | 'reason' | 'at' | 'urgent' | 'refs'
-> & { urgent?: boolean; refs?: string[]; parked: boolean }
+> & { urgent?: boolean; refs?: string[]; parked: boolean; approved_by?: unknown }
 
 const REQUIRED_TEXT = ['context', 'question', 'recommendation', 'blocks', 'rework'] as const
 

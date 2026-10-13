@@ -115,16 +115,20 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     or `team-slice`; both register it as a team tab. `team-start --new-tab`
     puts the first agent in the tab's root pane in the caller's workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
-16. The orchestrator never speaks to the human. The envoy speaks only when the
-    human pulls; urgent cards and a stalled run (the whole team waits on an open
-    card) show as a status line and a 30 s toast in the envoy session, never
-    as a turn.
+16. The orchestrator never speaks to the human. The envoy speaks when the
+    human pulls and on every run change it judges relevant. It learns of a
+    change from a pull or from the team mod's next-action message (a card
+    or step waits on the human, a step ends, the run goes idle on the
+    human, a worker is blocked or denied, the run ends). Keep the plan file
+    current: the message reads it. Urgent cards and a stalled run also
+    show as a status line and a 30 s toast in the envoy session.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next, `- [?]`
     waits on the human; name the role in parentheses, `fix round 2 (impl)`.
     Mark an item `- [?]` when it waits on the human (an open card, a manual
     test, a go); the pane draws it first, in its own WAITS ON YOU section.
+    When a `[?]` item waits on a card, name the card id in it.
     When the human answers, flip it to `- [x]` in place. RUNNING holds only
     agents at work. The mark alone sets where the pane shows an item: flip the
     mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING

@@ -241,16 +241,20 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     or `team-slice`; both register it as a team tab. `team-start --new-tab`
     puts the first agent in the tab's root pane in the caller's workspace;
     add more agents with `--into-tab`. Never create a tab with raw `herdr`.
-16. The orchestrator never speaks to the human. The envoy speaks only when the
-    human pulls; urgent cards and a stalled run (the whole team waits on an open
-    card) show as a status line and a 30 s toast in the envoy session, never
-    as a turn.
+16. The orchestrator never speaks to the human. The envoy speaks when the
+    human pulls and on every run change it judges relevant. It learns of a
+    change from a pull or from the team mod's next-action message (a card
+    or step waits on the human, a step ends, the run goes idle on the
+    human, a worker is blocked or denied, the run ends). Keep the plan file
+    current: the message reads it. Urgent cards and a stalled run also
+    show as a status line and a 30 s toast in the envoy session.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
     it to the human. Orchestrator-level steps only, never a worker's
     sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next, `- [?]`
     waits on the human; name the role in parentheses, `fix round 2 (impl)`.
     Mark an item `- [?]` when it waits on the human (an open card, a manual
     test, a go); the pane draws it first, in its own WAITS ON YOU section.
+    When a `[?]` item waits on a card, name the card id in it.
     When the human answers, flip it to `- [x]` in place. RUNNING holds only
     agents at work. The mark alone sets where the pane shows an item: flip the
     mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING
@@ -378,6 +382,8 @@ creates and reads these; the overlay never does.
 | `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number; `_line:<name>` holds the last REPORT line sent for that agent |
 | `.team/toasted.json` | the envoy's tick | ids of urgent cards seen or toasted; `stall:<ms>:<ids>` is the stall timer (since when the whole team has waited on that set of open cards), `stall-toast:<ids>` the set already toasted |
 | `.team/last-relay.txt` | the `relay` tool | the orchestrator session on the first line, then the last `RELAY` text sent to it |
+| `.team/next-action.json` | the envoy's tick | the last key sent or shown by `queue`, the snapshot at that send, the pending trigger and since when its key held, the last draft seen |
+| `.team/denials/<name>.json` | the worker's mod (`classic.PermissionDenied`) | the last auto-mode denial of that agent: tool, reason, time |
 
 ### `team-start`
 
@@ -573,8 +579,8 @@ envoy (`envoy_session` in the config) and the session that runs the script
 each agent it names (every agent on the roster with `all`), so it never closes
 its own pane or the envoy's. An agent without a session id cannot match and is
 skipped. The state files of the mod (`config.json`, `watch-state.json`,
-`tabs.json`, `layout-flags.json`, `delivered.json`, `toasted.json`) are no
-records, by name (`lib/teamlib.py`). A file under `.team/` that holds a JSON
+`tabs.json`, `layout-flags.json`, `delivered.json`, `toasted.json`,
+`next-action.json`) are no records, by name (`lib/teamlib.py`). A file under `.team/` that holds a JSON
 list or scalar is state too, not a record. The
 "before team 0.5.0" warning prints only for a config with neither
 `orchestrator_session` nor `envoy_session`.
@@ -973,6 +979,48 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   toast goes out whichever line shows. The timer and the toast key are two
   extra marks in `.team/toasted.json` (see the state file table). Neither
   starts a model turn.
+- Next-action message, envoy half. Each tick computes the next-action
+  block (where the run stands, what waits on the human, what runs with its
+  time since the brief, what comes next) and the list of changes since the
+  last message, from the cards, the plan, the records and the agent rows.
+  A message is due when a trigger fired since the last one (a new open
+  card, a new `[?]` or `[x]` plan item, the run idle on the human, a
+  worker blocked or denied by auto mode, the orchestrator gone, the run
+  finished), its key differs from the last one sent, and the key held for
+  one tick or 60 s passed. At most one message goes out per burst. The key
+  is the block without the minutes, plus every field a trigger reads (the
+  open card ids, the `[?]` and `[x]` items, the blocked and denied agents,
+  the stall, gone and finished marks). So a fired trigger always changes
+  the key, also when the block text stays the same, and a later change
+  with no trigger of its own never carries an old trigger out late. A
+  blocked worker, a denial or a gone orchestrator sends at the next tick.
+  Every `[?]` plan step stays in the block while it is open: a step that
+  names no open card's id (a manual test, a go) counts as a thing that waits
+  and is listed after the next action; a step that names an open card's id
+  is that card and counts once. A card's filer shows by role and pane, the
+  orchestrator's too, and the orchestrator never shows under "Running now".
+  The mod submits it with `$.prompt.submit` as a framed `NEXT-ACTION`
+  prompt, only while the envoy is idle and its prompt box holds no draft
+  that changed in the last tick, and never in a session that holds the
+  orchestrator role. A closed or parked card starts no message; it shows in
+  the next one's change list. A `queue` call marks the current key as sent.
+  The first tick of the envoy role is a baseline. The marks are in
+  `.team/next-action.json`.
+- Next-action message, envoy side. The envoy learns of a run change only
+  from a pull or from this message, and never starts a turn without an
+  input. On the message it always replies: it tells the human every fact of
+  the block in its own words (where the run stands, what waits on the human
+  with its card, what runs now with time spent, what comes next), links it
+  to the topic at hand, and calls no tool but `queue`. Every run fact it
+  tells comes from the block, the change list or a `queue` read; it adds
+  none from elsewhere and marks a guess as a guess. Cards stay the
+  decision channel.
+- Urgent by tool. A worker's mod records an auto-mode denial in
+  `.team/denials/<name>.json`. The `ask` tool sets `urgent` when the filer has
+  a denial newer than its brief file, or when `approved_by` names a decision
+  that exists. A missing decision, or an `approved_by` that is no positive
+  whole number, files the card non-urgent and the `ask` result warns the
+  filer; filing never fails on it.
 - Urgent cards in the `Questions` tab draw a red `!` in place of the status
   glyph while they are open or assumed; the row layout does not change.
 - Tool `brief_send` (`mcp__team__brief_send`, `{ name, topic }`): refuses
@@ -991,8 +1039,9 @@ of closures over `$`; every other module takes `io` and never sees `$`.
 - Tool `ask` (`mcp__team__ask`; an agent whose record names this session, or the
   orchestrator; the envoy session only in a run with one session). Input: `context`, `question`, `options`
   (each `{ option, cost }`), `recommendation`, `blocks`, `door` (`one-way` or
-  `two-way`), `rework` (a concrete estimate), `parked`, and optionally `urgent`
-  and `refs`. The mod fills `id`, `from` and `tag` (the agent's brief topic, or
+  `two-way`), `rework` (a concrete estimate), `parked`, and optionally `urgent`,
+  `approved_by` (a decision number: the card is urgent when that decision
+  exists) and `refs`. The mod fills `id`, `from` and `tag` (the agent's brief topic, or
   `general` when it has none, and for the orchestrator), writes one card to
   `.team/questions/Q-<n>.json` and returns `Q-<n>`. `parked: true` gives the card
   status `assumed`, else `open`. It refuses, with the field named: outside a

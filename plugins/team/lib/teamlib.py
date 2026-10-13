@@ -9,7 +9,7 @@ import json
 import os
 
 NON_RECORD_FILES = ("config.json", "watch-state.json", "tabs.json", "layout-flags.json", "delivered.json",
-                    "toasted.json")
+                    "toasted.json", "next-action.json")
 
 
 def agent_state(agent):
