@@ -156,7 +156,12 @@ export const DECIDE_TOOL_SPEC = {
     type: 'object',
     properties: {
       cards: { type: 'array', items: { type: 'string' }, description: 'Card ids, Q-<n>.' },
-      answer: { type: 'string', description: 'The decision, as the human gave it.' },
+      answer: {
+        type: 'string',
+        description:
+          'The decision the human gave, with the chosen option by its meaning, not a bare ' +
+          'letter or a bare "yes".',
+      },
       rationale: { type: 'string', description: 'Why, in one sentence.' },
       overrides: { type: 'array', items: { type: 'string' }, description: 'Assumed cards this answer changes.' },
       obsolete: { type: 'boolean', description: 'true: mark the cards obsolete instead of answering them.' },

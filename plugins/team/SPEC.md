@@ -159,7 +159,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
    own worktree. Reading to brief or to verify is never a licence to start
    investigating - one read, then delegate.
 2. The human decides, through the envoy. A card recommends one option with one
-   sentence of reasoning.
+   sentence of reasoning. A card stands on its own: a reader who saw nothing
+   else in the conversation can decide from it.
 3. Briefs are files in `scratchpad/current/`. Prompts are one line pointing at the brief.
    Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it first.

@@ -71,23 +71,48 @@ export const ASK_TOOL_SPEC = {
   description:
     'File an open question for the human as a card. State door and rework; park (parked: true) only a ' +
     'two-way question with about an hour of rework or less, and continue on your recommendation. ' +
-    'Returns the card id, Q-<n>; name it in your REPORT line.',
+    'Returns the card id, Q-<n>; name it in your REPORT line. Write the card so it stands on its own. ' +
+    'A reader who saw nothing else in the conversation must be able to decide.',
   inputSchema: {
     type: 'object',
     properties: {
-      context: { type: 'string', description: 'What the human needs to know to decide.' },
-      question: { type: 'string' },
+      context: {
+        type: 'string',
+        description:
+          'Open with one background line: what the thing is and why it matters. Then each finding, ' +
+          'starting with a headline that states its effect. Give a file path, id or tool name only ' +
+          'after its plain meaning, in parentheses.',
+      },
+      question: {
+        type: 'string',
+        description: 'The question in plain words. It is the card title. Not an artifact name.',
+      },
       options: {
         type: 'array',
         items: {
           type: 'object',
-          properties: { option: { type: 'string' }, cost: { type: 'string' } },
+          properties: {
+            option: {
+              type: 'string',
+              description:
+                'The option named by its meaning. Say what it does and what it does not do. ' +
+                'Never a bare letter or id.',
+            },
+            cost: { type: 'string', description: 'What choosing this option costs, with its size.' },
+          },
           required: ['option', 'cost'],
         },
       },
-      recommendation: { type: 'string', description: 'Your pick and why.' },
+      recommendation: {
+        type: 'string',
+        description: 'The option you recommend, by its name, and why in one sentence.',
+      },
       blocks: { type: 'string', description: 'What waits on the answer.' },
-      door: { type: 'string', enum: ['one-way', 'two-way'] },
+      door: {
+        type: 'string',
+        enum: ['one-way', 'two-way'],
+        description: 'one-way: hard to undo. two-way: you can switch later.',
+      },
       rework: { type: 'string', description: 'Cost to undo the wrong pick, with its size.' },
       parked: { type: 'boolean', description: 'true: continue on your recommendation without waiting.' },
       urgent: { type: 'boolean' },
