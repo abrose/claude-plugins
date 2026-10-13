@@ -102,6 +102,12 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
     The envoy's mod flags a stall: an open card, every worker idle, done or
     gone with a fresh REPORT, and the orchestrator idle, for 2 minutes.
+    A card about a worker's permission prompt sets `prompt_of: <agent name>`
+    (the blocked `WATCH` line names it). The envoy's mod closes that card by
+    itself when the prompt is gone for 2 checks in a row, and sends
+    `WATCH Q-<n> closed (<name>): <reason>`: flip the card's `[?]` step. When
+    that line also shows a new prompt, file a card for it at once, unless an
+    open card already links that prompt.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator

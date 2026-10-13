@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { idleTabs, layoutActions } from '../../hooks/mod/layout'
 import { watchLines } from '../../hooks/mod/watch'
-import { DIALOG_SNAPSHOT, DIALOG_TEXT, team } from './world'
+import { card, DIALOG_SNAPSHOT, DIALOG_TEXT, start, team } from './world'
 
 const fact = (over: object) => ({
   name: 'a', state: 'working', pane: 'w1:p2', reportPath: '/r/a-t.md',
@@ -178,6 +178,8 @@ describe('quiet since the last stop', () => {
 })
 
 describe('watch in the tick', () => {
+  const HINT = ' - a card about this prompt sets prompt_of: app-1-scout'
+
   test('blocked line carries the dialog and goes out in the tick prompt', async ($, on) => {
     const w = await team($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
@@ -185,7 +187,31 @@ describe('watch in the tick', () => {
     await w.clock.advance(15000)
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
     await w.clock.advance(15000)
-    expect(w.submits).toEqual([`WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`])
+    expect(w.submits).toEqual([`WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}${HINT}`])
+  })
+
+  test('a blocked line names prompt_of for a card about the prompt, with the agent name', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/app-1-maker.json`, { role: 'implementer', topic: 'build', brief: '', pane: 'w1:p3', session: 'sid-maker' })
+    w.agents = [{ pane_id: 'w1:p3', agent_status: 'working', agent_session: { value: 'sid-maker' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p3', agent_status: 'blocked', agent_session: { value: 'sid-maker' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([
+      `WATCH app-1-maker: working -> blocked: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-maker`,
+    ])
+  })
+
+  test('a blocked line with no readable dialog still carries the prompt_of hint', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.fails.set('agent read', 'timed out')
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([`WATCH app-1-scout: working -> blocked${HINT}`])
   })
 
   test('blocked line shows the bottom of the snapshot, never its old top row', async ($, on) => {
@@ -285,7 +311,7 @@ describe('watch in the tick', () => {
     await w.clock.advance(15000)
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
     await w.clock.advance(15000)
-    expect(w.submits).toEqual([`WATCH app-1-scout: idle -> blocked: ${DIALOG_TEXT}`])
+    expect(w.submits).toEqual([`WATCH app-1-scout: idle -> blocked: ${DIALOG_TEXT}${HINT}`])
   })
 
   test('the orchestrator tab from the config gets no layout flags while herdr does not know the session', async ($, on) => {
@@ -347,6 +373,115 @@ describe('watch in the tick', () => {
     expect(w.submits.filter(s => s.includes('no report'))).toHaveLength(1)
   })
 
+  describe('a card the team mod closed', () => {
+    const REASON = "the permission prompt in the investigator's pane (w1:p2) is gone: the agent is now idle"
+    const LINE = `WATCH Q-1 closed (app-1-scout): ${REASON}`
+    const closedByMod = (w: any, n = 1, more: object = {}) => card(w, n, {
+      status: 'obsolete', closed_by: 'team mod', reason: `Closed by the team mod: ${REASON}.`,
+      prompt: { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: '', at: 0 },
+      ...more,
+    })
+    const closedLines = (w: any) => w.submits.flatMap((s: string) => s.split('\n')).filter((l: string) => l.includes(' closed'))
+
+    test('sends one WATCH line to the orchestrator, once', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+
+      for (let i = 0; i < 4; i++) await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('sends no second line after the orchestrator mod reloaded', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+      await w.clock.advance(15000)
+
+      await start($)
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('is sent while herdr is down, and not again when it is back', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+      w.herdrFails = 'server_unavailable'
+      await w.clock.advance(15000)
+      w.herdrFails = null
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('each closed card gets its own line', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w, 1)
+      closedByMod(w, 2)
+
+      await w.clock.advance(15000)
+      closedByMod(w, 3)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w).map((l: string) => l.slice(0, 'WATCH Q-1 closed'.length)))
+        .toEqual(['WATCH Q-1 closed', 'WATCH Q-2 closed', 'WATCH Q-3 closed'])
+    })
+
+    test('a card closed because a different prompt shows carries the new dialog and the prompt_of hint', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w, 1, { next_dialog: DIALOG_TEXT })
+
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([
+        `${LINE}; it is now blocked on a new prompt: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-scout`,
+      ])
+    })
+
+    test('the new dialog is told while herdr is down, once', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w, 1, { next_dialog: DIALOG_TEXT })
+      w.herdrFails = 'server_unavailable'
+      await w.clock.advance(15000)
+      w.herdrFails = null
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([
+        `${LINE}; it is now blocked on a new prompt: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-scout`,
+      ])
+    })
+
+    test('a card closed by a state signal names no new prompt and no hint', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('a card closed by hand sends no such line', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      card(w, 1, { status: 'obsolete', reason: 'The human answered in the pane.' })
+      card(w, 2, { status: 'answered', decision: 1 })
+
+      for (let i = 0; i < 3; i++) await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([])
+    })
+  })
+
   test('a reported REPORT and a WATCH line of one tick share one prompt, REPORT first', async ($, on) => {
     const w = await team($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
@@ -363,7 +498,7 @@ describe('watch in the tick', () => {
     w.write(`${w.cwd}/scratchpad/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
     await w.clock.advance(15000)
     expect(w.submits).toEqual([
-      `REPORT app-1-maker build: green\nWATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`,
+      `REPORT app-1-maker build: green\nWATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}${HINT}`,
     ])
   })
 })

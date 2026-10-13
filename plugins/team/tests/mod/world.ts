@@ -28,6 +28,11 @@ export type World = {
    * with `lock:` stands for the held lock (exit 5), any other for a failed step (exit 1).
    */
   fails: Map<string, string>
+  /**
+   * What `herdr agent read` answers per pane id. A pane without an entry gets DIALOG_SNAPSHOT. A "agent read"
+   * entry in `fails` makes every read fail.
+   */
+  dialogs: Map<string, string>
   /** team-orch-start finds the start lock of another start and refuses with exit 5. */
   orchLocked: boolean
   /** team-orch-start finds a live orchestrator in this pane after it takes the lock and refuses with exit 5. */
@@ -208,6 +213,7 @@ export function world(on: On): World {
     panes: [],
     herdrFails: null,
     fails: new Map(),
+    dialogs: new Map(),
     orchLocked: false,
     orchRunsIn: '',
     submitFails: false,
@@ -377,7 +383,11 @@ export function world(on: On): World {
       return hold ? hold.then(() => answer) : answer
     }
     if (sub === 'pane list') return out(JSON.stringify({ result: { panes: w.panes } }))
-    if (sub === 'agent read') return out(DIALOG_SNAPSHOT)
+    if (sub === 'agent read') {
+      const failure = w.fails.get(sub)
+      if (failure) return out('', 1, failure)
+      return out(w.dialogs.get(argv[3] ?? '') ?? DIALOG_SNAPSHOT)
+    }
     // /clear never starts a turn, so herdr answers a prompt of it with agent_prompt_stalled.
     if (sub === 'agent prompt') return out('', 1, w.fails.get(sub) ?? 'agent_prompt_stalled')
     if (sub === 'pane close') {

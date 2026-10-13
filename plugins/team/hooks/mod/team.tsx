@@ -16,6 +16,8 @@ import { pluginVersion } from './version'
 import { DECIDE_TOOL_SPEC, decideTool, QUEUE_TOOL_SPEC, queueTool } from './decide'
 import { recordDenial } from './denial'
 import { gatherInput, markShown, noteTurnEnd, noteTurnStart, pushNextAction, resetNextAction } from './next-action-push'
+import { closeStalePromptCards } from './prompt-cards'
+import { resetHolds } from './prompt-hold'
 import { ASK_TOOL_SPEC, askTool, readCards } from './questions'
 import { reattach } from './reattach'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
@@ -183,14 +185,16 @@ async function orchestratorHalf(
   await syncPanes(io, teamdir, records, listed)
   const run = await runDir(io)
   const now = await $.clock.now()
+  const filed = await readCards(io, teamdir)
   // A card still waiting for the human (open, or parked and so assumed) holds its sender's release back.
-  const waiting = new Set((await readCards(io, teamdir))
-    .filter(c => c.status === 'open' || c.status === 'assumed').map(c => c.from))
+  const waiting = new Set(filed.filter(c => c.status === 'open' || c.status === 'assumed').map(c => c.from))
+  // The cards the team mod closed by itself: each gets one WATCH line, so the orchestrator flips its `[?]` step.
+  const modClosed = filed.filter(c => c.status === 'obsolete' && c.closed_by === 'team mod')
   // A delivered.json that cannot be used holds REPORT and DECISION lines only. The watch rules, the layout
   // hygiene and the release run anyway: they have no use for the marks, and a person must see the outage.
   const reports = await newReportLines(io, run, teamdir, records)
   const watch = await watchTick(io, run, teamdir, records, listed, now, await $.session.id(), exemptTabs(cfg), waiting,
-    { broken: reports.unreadable, path: reports.path })
+    { broken: reports.unreadable, path: reports.path }, modClosed)
   let fresh = watch
   let failure: unknown = reports.unreadable ? new Error('delivered.json does not parse') : null
   if (!reports.unreadable) {
@@ -277,9 +281,14 @@ async function envoyHalf(
   const parsed = text === null ? null : parsePlan(text)
   await update($, planPath, () => path)
   await update($, plan, () => parsed)
-  const found = await readCards(io, teamdir)
-  await update($, cards, () => found)
   const rows = agentRows(records, listed)
+  // A card about a worker's permission prompt closes itself once the prompt is gone for two ticks in a row.
+  // It runs before the `canPush` return: a single-session run closes such cards too.
+  const stale = await closeStalePromptCards(io, {
+    cards: await readCards(io, teamdir), records, rows, listed, now: await $.clock.now(),
+  })
+  const found = stale.cards
+  await update($, cards, () => found)
   await update($, agents, () => rows)
   const myId = await $.session.id()
   const idleRows = await idleTabRows(io, await runDir(io), teamdir, records, listed, myId, exemptTabs(cfg))
@@ -299,7 +308,7 @@ async function envoyHalf(
   if (!canPush) return
   const input = await gatherInput(io, {
     run, cfg, teamdir, records, rows, listed, cards: found, plan: parsed, stalled: stall !== null, myId,
-    now: await $.clock.now(),
+    now: await $.clock.now(), dialogs: stale.dialogs,
   })
   await pushNextAction(io, teamdir, input)
 }
@@ -366,6 +375,7 @@ export const register: Register = on => {
     await $.env.set('TEAM_SESSION_ID', await $.session.id())
     lastBadge = null
     resetNextAction()
+    resetHolds()
     // Read once: the footer shows the copy that runs, the one under the plugin root.
     const found = pluginVersion(await io.readText(`${io.pluginRoot}/.claude-plugin/plugin.json`))
     await update($, version, () => found ?? '')

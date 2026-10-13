@@ -1,4 +1,5 @@
 import type { TeamCard } from '../../types'
+import { bySession, herdrAgents, herdrDialog } from './herdr'
 import { readRecords } from './tick'
 import { readJson, writeJson } from './io'
 import type { Io, ToolResult } from './io'
@@ -94,19 +95,66 @@ async function urgency(
   return { urgent, notes, warning: `\nWarning: ${problem}. It did not make the card urgent.` }
 }
 
+/** The herdr calls the tool makes while it files a prompt card each get this much time (design OQ8). */
+const PROMPT_READ_MS = 3000
+
+type PromptLink =
+  | { refused: string }
+  | { prompt: TeamCard['prompt']; notes: string[]; warning: string }
+
+/**
+ * What `prompt_of` makes of a card: the link to the worker's permission prompt, as the tool sees the prompt
+ * now. The filer gives one fact, the agent's name. A name that is no team agent, or the filer itself, refuses
+ * the card (a typo, safe to refile at once). The agent's state never refuses it: a blocked worker must still
+ * reach the human. A prompt the tool cannot see (not blocked, herdr down, read failed) files an empty
+ * fingerprint, and the stale rule closes the card when the prompt is gone.
+ */
+async function promptLink(io: Io, teamdir: string, who: { from: string }, input: unknown): Promise<PromptLink> {
+  const raw = (input as { prompt_of?: unknown }).prompt_of
+  if (raw === undefined || raw === null || raw === '') return { prompt: undefined, notes: [], warning: '' }
+  if (typeof raw !== 'string') return { refused: 'prompt_of must be the name of a team agent' }
+  if (raw === who.from) return { refused: `prompt_of names the filer itself: ${raw}` }
+  const rec = (await readRecords(io, teamdir))[raw]
+  if (!rec) return { refused: `prompt_of names no team agent: ${raw}` }
+
+  const listed = await herdrAgents(io, PROMPT_READ_MS)
+  const agent = listed.ok && rec.session ? bySession(listed.agents).get(rec.session) : undefined
+  const pane = agent?.pane_id ?? rec.pane
+  const blocked = agent?.agent_status === 'blocked'
+  const dialog = blocked ? await herdrDialog(io, pane, PROMPT_READ_MS) : ''
+  const prompt = { agent: raw, role: rec.role, session: rec.session ?? '', pane, dialog, at: await io.now() }
+  const notes = [
+    `The tool linked this card to the permission prompt of the ${rec.role} (${pane}). ` +
+    'It closes by itself when that prompt is gone.',
+  ]
+  if (!listed.ok) {
+    const warning = `\nWarning: herdr did not answer (${listed.reason}), so the prompt of ${raw} was not read. The card is linked anyway.`
+    return { prompt, notes, warning }
+  }
+  const warning = blocked
+    ? ''
+    : `\nWarning: ${raw} shows no permission prompt now. The card closes by itself in about 30 s unless one shows.`
+  return { prompt, notes, warning }
+}
+
 export async function askTool(io: Io, input: unknown): Promise<ToolResult> {
   const teamdir = await teamDir(io)
   const who = await asker(io, teamdir)
   if (!who) return fail('ask works only in a team session (an agent started by team-start, or the orchestrator)')
   const bad = checkAsk(input)
   if (bad) return fail(bad)
+  const link = await promptLink(io, teamdir, who, input)
+  if ('refused' in link) return fail(link.refused)
   const n = await claimNumber(io, teamdir)
   if (n === null) return fail(`no free card number after ${MAX_CLAIM_TRIES} tries`)
   const ask = input as AskInput
   const found = await urgency(io, teamdir, who, input)
-  const context = found.notes.length > 0 ? `${ask.context}\n${found.notes.join('\n')}` : ask.context
-  await writeCard(io, teamdir, buildCard({ ...ask, context, urgent: found.urgent }, n, who.from, who.tag, await io.now()))
-  return { result: `Q-${n}${found.warning}` }
+  const notes = [...found.notes, ...link.notes]
+  const context = notes.length > 0 ? `${ask.context}\n${notes.join('\n')}` : ask.context
+  const card = buildCard(
+    { ...ask, context, urgent: found.urgent, prompt: link.prompt }, n, who.from, who.tag, await io.now())
+  await writeCard(io, teamdir, card)
+  return { result: `Q-${n}${found.warning}${link.warning}` }
 }
 
 export const ASK_TOOL_SPEC = {
@@ -165,6 +213,13 @@ export const ASK_TOOL_SPEC = {
         description:
           'The number of the decision that approved the work this card is about. The tool marks the card ' +
           'urgent when that decision exists. Leave it out when no decision approved the work.',
+      },
+      prompt_of: {
+        type: 'string',
+        description:
+          'Set it on a card about a worker\'s permission prompt: the name of that worker, from the WATCH ' +
+          'line. The tool reads the prompt itself and links the card to it. The card then closes by itself ' +
+          'when the prompt is gone. Leave it out on every other card.',
       },
     },
     required: ['context', 'question', 'options', 'recommendation', 'blocks', 'door', 'rework', 'parked'],

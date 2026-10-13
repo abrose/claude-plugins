@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
-  changeList, draftHeld, nextActionBlock, nextActionDue, nextActionKey, nextActionPrompt, nextActionSnapshot,
-  nextActionView,
+  carryDialogs, changeList, draftHeld, nextActionBlock, nextActionDue, nextActionKey, nextActionPrompt,
+  nextActionSnapshot, nextActionView, triggersOf,
 } from '../../hooks/mod/next-action'
-import { call, card as fileCard, DIALOG_TEXT, envoyTeam, start, team } from './world'
+import { BASH_DIALOG_SNAPSHOT, BASH_DIALOG_TEXT, call, card as fileCard, DIALOG_TEXT, envoyTeam, start, team } from './world'
 
 const NOW = 10_000_000
 const MIN = 60_000
@@ -335,6 +335,244 @@ describe('changeList', () => {
       'The orchestrator is gone',
       'The run is finished',
     ])
+  })
+})
+
+describe('a card about a permission prompt', () => {
+  const link = (more: object = {}) =>
+    ({ agent: 'app-1-tester', role: 'tester', session: 'sid-tester', pane: 'w2:p3', dialog: 'Allow Bash?', at: 0, ...more })
+  const blocked = (more: object = {}) => agent({ state: 'blocked', dialog: 'Allow Bash?', ...more })
+
+  test('a linked open card and its blocked agent count as one thing that waits, the card leads', () => {
+    const block = nextActionBlock(input({ cards: [card(3, { prompt: link() })], agents: [blocked()] }))
+
+    expect(block.split('\n').slice(0, 2)).toEqual([
+      'Blocked on you: 1 thing waits.',
+      'Next for you: Answer: Use real fixtures? (Q-3, from the tester (w2:p3))',
+    ])
+  })
+
+  test('a blocked agent whose card is about another agent still counts as its own thing', () => {
+    const cards = [card(3, { prompt: link({ agent: 'app-1-other' }) })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked()] }))
+
+    expect(block.split('\n')[0]).toBe('Blocked on you: 2 things wait.')
+  })
+
+  test('a card linked to an earlier prompt does not cover a worker that now shows another one', () => {
+    const cards = [card(3, { prompt: link() })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked({ dialog: 'Read file / a.ts / Do you want to proceed?' })] }))
+
+    expect(block.split('\n')[0]).toBe('Blocked on you: 2 things wait.')
+  })
+
+  test('a card linked to an earlier prompt does not lead: the worker with the new prompt leads, the card closes by itself', () => {
+    const cards = [card(3, { prompt: link() })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked({ dialog: 'Read file / a.ts' })] }))
+
+    expect(block.split('\n').slice(0, 2)).toEqual([
+      'Blocked on you: 2 things wait.',
+      "Next for you: Allow or deny a permission prompt in the tester's pane (w2:p3): Read file / a.ts. " +
+        'Q-3 is about an earlier prompt in that pane and closes by itself',
+    ])
+  })
+
+  test('the other open cards stay listed after the worker and the closing card', () => {
+    const cards = [card(3, { urgent: true, prompt: link() }), card(4, { question: 'Ship it?' })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked({ dialog: 'Read file / a.ts' })] }))
+
+    expect(block.split('\n').slice(0, 2)).toEqual([
+      'Blocked on you: 3 things wait.',
+      "Next for you: Allow or deny a permission prompt in the tester's pane (w2:p3): Read file / a.ts. " +
+        'Q-3 is about an earlier prompt in that pane and closes by itself. 1 more: Q-4. Ask me to show them.',
+    ])
+  })
+
+  test('two cards linked to earlier prompts of the same worker are both named as closing by themselves', () => {
+    const cards = [card(3, { urgent: true, prompt: link() }), card(4, { prompt: link({ dialog: 'Edit file / b.ts' }) })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked({ dialog: 'Read file / a.ts' })] }))
+
+    expect(block.split('\n').slice(0, 2)).toEqual([
+      'Blocked on you: 3 things wait.',
+      "Next for you: Allow or deny a permission prompt in the tester's pane (w2:p3): Read file / a.ts. " +
+        'Q-3, Q-4 are about earlier prompts in that pane and close by themselves',
+    ])
+  })
+
+  test('a card still covers its worker when the dialog differs only in whitespace', () => {
+    const cards = [card(3, { prompt: link({ dialog: 'Bash command  /  ls' }) })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked({ dialog: ' Bash command / ls\n' })] }))
+
+    expect(block.split('\n')[0]).toBe('Blocked on you: 1 thing waits.')
+  })
+
+  test('a card still covers its worker when either dialog is empty (a failed read)', () => {
+    const noDialogAtFiling = nextActionBlock(input({ cards: [card(3, { prompt: link({ dialog: '' }) })], agents: [blocked()] }))
+    const noDialogNow = nextActionBlock(input({ cards: [card(3, { prompt: link() })], agents: [blocked({ dialog: '' })] }))
+
+    expect(noDialogAtFiling.split('\n')[0]).toBe('Blocked on you: 1 thing waits.')
+    expect(noDialogNow.split('\n')[0]).toBe('Blocked on you: 1 thing waits.')
+  })
+
+  test('a parked linked card does not cover its blocked agent', () => {
+    const cards = [card(3, { status: 'assumed', prompt: link() })]
+
+    const block = nextActionBlock(input({ cards, agents: [blocked()] }))
+
+    expect(block.split('\n').slice(0, 2)).toEqual([
+      'Blocked on you: 1 thing waits.',
+      "Next for you: Allow or deny a permission prompt in the tester's pane (w2:p3): Allow Bash?",
+    ])
+  })
+
+  test('a card the mod closed is listed as closed by the team mod, with the id after the meaning', () => {
+    const before = nextActionSnapshot(input({ cards: [card(3, { prompt: link() })], agents: [blocked()] }))
+    const now = input({
+      cards: [card(3, { prompt: link(), status: 'obsolete', closed_by: 'team mod', reason: 'Closed by the team mod: x.' })],
+      agents: [agent({ state: 'idle' })],
+    })
+
+    expect(changeList(before, now)).toEqual([
+      'Card closed by the team mod, the prompt is gone: Use real fixtures? (Q-3)',
+    ])
+  })
+
+  test('a card closed by hand keeps its own line', () => {
+    const before = nextActionSnapshot(input({ cards: [card(3, { prompt: link() })] }))
+    const now = input({ cards: [card(3, { prompt: link(), status: 'obsolete', reason: 'answered in the pane' })] })
+
+    expect(changeList(before, now)).toEqual(['Card closed as obsolete: Use real fixtures? (Q-3)'])
+  })
+
+  test('a card the mod closed is no trigger', () => {
+    const before = nextActionSnapshot(input({ cards: [card(3, { prompt: link() })], agents: [blocked()] }))
+    const now = nextActionSnapshot(input({
+      cards: [card(3, { prompt: link(), status: 'obsolete', closed_by: 'team mod' })],
+      agents: [agent({ state: 'idle' })],
+    }))
+
+    expect(triggersOf(before, now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('a card that opened and closed after the last snapshot is listed as closed, though that snapshot never held it', () => {
+    const before = nextActionSnapshot(input({ agents: [agent({ state: 'idle' })] }))
+    const now = input({
+      cards: [card(3, { prompt: link(), status: 'obsolete', closed_by: 'team mod', reason: 'Closed by the team mod: x.' })],
+      agents: [agent({ state: 'idle' })],
+    })
+
+    expect(changeList(before, now)).toEqual([
+      'Card closed by the team mod, the prompt is gone: Use real fixtures? (Q-3)',
+    ])
+  })
+
+  test('a card the mod closed before the last snapshot is not named again', () => {
+    const now = input({
+      cards: [card(3, { prompt: link(), status: 'obsolete', closed_by: 'team mod' })],
+      agents: [agent({ state: 'idle' })],
+    })
+
+    expect(changeList(nextActionSnapshot(now), now)).toEqual([])
+  })
+
+  test('a card that was open at the last snapshot and closed since is named once', () => {
+    const before = nextActionSnapshot(input({ cards: [card(3, { prompt: link() })], agents: [blocked()] }))
+    const now = input({
+      cards: [card(3, { prompt: link(), status: 'obsolete', closed_by: 'team mod' })],
+      agents: [agent({ state: 'idle' })],
+    })
+
+    expect(changeList(before, now).filter(line => line.includes('Q-3'))).toHaveLength(1)
+  })
+
+  test('a card the mod closed that the last snapshot never held is still no trigger', () => {
+    const before = nextActionSnapshot(input({ agents: [agent({ state: 'idle' })] }))
+    const now = nextActionSnapshot(input({
+      cards: [card(3, { prompt: link(), status: 'obsolete', closed_by: 'team mod' })],
+      agents: [agent({ state: 'idle' })],
+    }))
+
+    expect(triggersOf(before, now)).toEqual({ fired: [], urgent: false })
+  })
+})
+
+describe('a new prompt in a worker that stays blocked', () => {
+  const blockedOn = (dialog: string) => input({ agents: [agent({ state: 'blocked', dialog })] })
+
+  test('fires the blocked-worker trigger, urgent', () => {
+    const before = nextActionSnapshot(blockedOn('Bash command / ls / Do you want to proceed?'))
+    const now = nextActionSnapshot(blockedOn('Read file / a.ts / Do you want to proceed?'))
+
+    expect(triggersOf(before, now)).toEqual({ fired: ['T5'], urgent: true })
+  })
+
+  test('changes the key, so the duplicate rule does not hide it', () => {
+    const first = nextActionView(blockedOn('Bash command / ls / Do you want to proceed?'))
+    const second = nextActionView(blockedOn('Read file / a.ts / Do you want to proceed?'))
+
+    expect(second.key).not.toBe(first.key)
+  })
+
+  test('the same dialog in other whitespace is the same prompt: no trigger', () => {
+    const before = nextActionSnapshot(blockedOn('Bash command  /  ls'))
+    const now = nextActionSnapshot(blockedOn(' Bash command / ls\n'))
+
+    expect(triggersOf(before, now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('an empty dialog on either side is the same prompt: a failed read starts no message', () => {
+    const read = nextActionSnapshot(blockedOn('Bash command / ls'))
+    const failed = nextActionSnapshot(blockedOn(''))
+
+    expect(triggersOf(read, failed)).toEqual({ fired: [], urgent: false })
+    expect(triggersOf(failed, read)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('the change list names the worker and the new dialog; a first block keeps its own line', () => {
+    const idle = nextActionSnapshot(input({ agents: [agent({ state: 'idle' })] }))
+    const before = nextActionSnapshot(blockedOn('Bash command / ls'))
+
+    expect(changeList(before, blockedOn('Read file / a.ts'))).toEqual([
+      'The tester (w2:p3) shows a new permission prompt: Read file / a.ts',
+    ])
+    expect(changeList(idle, blockedOn('Bash command / ls'))).toEqual([
+      'The tester (w2:p3) is blocked on a permission prompt',
+    ])
+  })
+})
+
+describe('carryDialogs: a failed read keeps the last dialog of the worker', () => {
+  const blockedOn = (dialog: string, name = 'app-1-tester') =>
+    nextActionSnapshot(input({ agents: [agent({ name, state: 'blocked', dialog })] }))
+
+  test('an empty dialog takes the last non-empty one of the same worker', () => {
+    const carried = carryDialogs(blockedOn(''), blockedOn('Bash command / ls'))
+
+    expect(carried.blocked).toEqual([{ name: 'app-1-tester', dialog: 'Bash command / ls' }])
+  })
+
+  test('a dialog that was read wins over the last one', () => {
+    const carried = carryDialogs(blockedOn('Read file / a.ts'), blockedOn('Bash command / ls'))
+
+    expect(carried.blocked).toEqual([{ name: 'app-1-tester', dialog: 'Read file / a.ts' }])
+  })
+
+  test('a worker the last snapshot did not hold stays empty', () => {
+    const carried = carryDialogs(blockedOn('', 'app-1-other'), blockedOn('Bash command / ls'))
+
+    expect(carried.blocked).toEqual([{ name: 'app-1-other', dialog: '' }])
+  })
+
+  test('a later new prompt then fires the blocked-worker trigger', () => {
+    const sent = carryDialogs(blockedOn(''), blockedOn('Bash command / ls'))
+
+    expect(triggersOf(sent, blockedOn('Read file / a.ts'))).toEqual({ fired: ['T5'], urgent: true })
   })
 })
 
@@ -718,6 +956,144 @@ describe('in the envoy session', () => {
     expect(pushes(w)[0]).toContain('- The investigator (w1:p2) is blocked on a permission prompt')
   })
 
+  test('a new prompt in a worker that stays blocked sends a message at the next tick', async ($, on) => {
+    const w = await quiet($, on)
+    w.agents = [ORCH, scout('blocked')]
+    await ticks(w, 1)
+    expect(pushes(w)).toHaveLength(1)
+
+    w.dialogs.set('w1:p2', BASH_DIALOG_SNAPSHOT)
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(2)
+    expect(pushes(w)[1]).toContain(
+      `- The investigator (w1:p2) shows a new permission prompt: ${BASH_DIALOG_TEXT}`)
+    expect(pushes(w)[1]).toContain(
+      `Next for you: Allow or deny a permission prompt in the investigator's pane (w1:p2): ${BASH_DIALOG_TEXT}`)
+  })
+
+  test('the same prompt on later ticks, or a failed read of it, sends nothing more', async ($, on) => {
+    const w = await quiet($, on)
+    w.agents = [ORCH, scout('blocked')]
+    await ticks(w, 1)
+    expect(pushes(w)).toHaveLength(1)
+
+    await ticks(w, 3)
+    w.fails.set('agent read', 'timed out')
+    await ticks(w, 3)
+    w.fails.delete('agent read')
+    await ticks(w, 3)
+
+    expect(pushes(w)).toHaveLength(1)
+  })
+
+  test('a card that closes because a new prompt shows sends one message for the prompt, none for the close', async ($, on) => {
+    const w = await envoyTeam($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+    w.agents = [{ ...ORCH, agent_status: 'working' }, scout('blocked')]
+    fileCard(w, 3, { prompt })
+    await ticks(w, 1)
+
+    w.dialogs.set('w1:p2', BASH_DIALOG_SNAPSHOT)
+    await ticks(w, 1)
+    expect(pushes(w)).toHaveLength(1)
+    await ticks(w, 5)
+
+    expect(w.json(`${w.team}/questions/Q-3.json`)).toMatchObject({ status: 'obsolete', closed_by: 'team mod' })
+    expect(pushes(w)).toHaveLength(1)
+  })
+
+  test('in the hold window the new-prompt message counts the stale card and the new prompt as two things', async ($, on) => {
+    const w = await envoyTeam($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+    w.agents = [{ ...ORCH, agent_status: 'working' }, scout('blocked')]
+    fileCard(w, 3, { prompt })
+    await ticks(w, 1)
+
+    w.dialogs.set('w1:p2', BASH_DIALOG_SNAPSHOT)
+    await ticks(w, 1)
+
+    expect(w.json(`${w.team}/questions/Q-3.json`)).toMatchObject({ status: 'open' })
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('Blocked on you: 2 things wait.')
+    expect(pushes(w)[0]).toContain(
+      `Next for you: Allow or deny a permission prompt in the investigator's pane (w1:p2): ${BASH_DIALOG_TEXT}`)
+    expect(pushes(w)[0]).toContain('Q-3 is about an earlier prompt in that pane and closes by itself')
+    expect(pushes(w)[0]).toContain(
+      `- The investigator (w1:p2) shows a new permission prompt: ${BASH_DIALOG_TEXT}`)
+  })
+
+  test('a failed read on a sending tick does not hide the next new prompt', async ($, on) => {
+    const w = await quiet($, on)
+    w.agents = [ORCH, scout('blocked')]
+    await ticks(w, 1)
+    expect(pushes(w)).toHaveLength(1)
+
+    w.fails.set('agent read', 'timed out')
+    fileCard(w, 3, { question: 'Keep the old parser API?' })
+    await ticks(w, 2)
+    expect(pushes(w)).toHaveLength(2)
+    w.fails.delete('agent read')
+    w.dialogs.set('w1:p2', BASH_DIALOG_SNAPSHOT)
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(3)
+    expect(pushes(w)[2]).toContain(
+      `- The investigator (w1:p2) shows a new permission prompt: ${BASH_DIALOG_TEXT}`)
+  })
+
+  test('a worker that first shows a prompt on a failed read gets its dialog filled later, so the next new prompt is sent', async ($, on) => {
+    const w = await quiet($, on)
+    w.fails.set('agent read', 'timed out')
+    w.agents = [ORCH, scout('blocked')]
+    await ticks(w, 1)
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- The investigator (w1:p2) is blocked on a permission prompt')
+
+    w.fails.delete('agent read')
+    await ticks(w, 2)
+    expect(pushes(w)).toHaveLength(1)
+    w.dialogs.set('w1:p2', BASH_DIALOG_SNAPSHOT)
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(2)
+    expect(pushes(w)[1]).toContain(
+      `- The investigator (w1:p2) shows a new permission prompt: ${BASH_DIALOG_TEXT}`)
+  })
+
+  test('a card that opened and closed between two messages is named in the next one', async ($, on) => {
+    const w = await quiet($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+
+    fileCard(w, 3, { prompt })
+    await ticks(w, 3)
+    expect(w.json(`${w.team}/questions/Q-3.json`)).toMatchObject({ status: 'obsolete', closed_by: 'team mod' })
+    expect(pushes(w)).toEqual([])
+    fileCard(w, 4, { question: 'Keep the old parser API?' })
+    await ticks(w, 2)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- New card: Keep the old parser API? (Q-4, from the investigator (w1:p2))')
+    expect(pushes(w)[0]).toContain(
+      '- Card closed by the team mod, the prompt is gone: Use real fixtures or the snapshot? (Q-3)')
+  })
+
+  test('a mod-closed card is named once: the message after it does not repeat it', async ($, on) => {
+    const w = await quiet($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+    fileCard(w, 3, { prompt })
+    await ticks(w, 3)
+    fileCard(w, 4, { question: 'Keep the old parser API?' })
+    await ticks(w, 2)
+    expect(pushes(w)).toHaveLength(1)
+
+    fileCard(w, 5, { question: 'Ship it?' })
+    await ticks(w, 2)
+
+    expect(pushes(w)).toHaveLength(2)
+    expect(pushes(w)[1]).not.toContain('Card closed by the team mod')
+  })
+
   test('a fresh denial mark sends a NEXT-ACTION prompt at the next tick', async ($, on) => {
     const w = await quiet($, on)
 
@@ -727,6 +1103,28 @@ describe('in the envoy session', () => {
     expect(pushes(w)).toHaveLength(1)
     expect(pushes(w)[0]).toContain(
       '- Auto mode denied the investigator (w1:p2) a tool call: mcp__gitlab__save_note')
+  })
+
+  test('a card the mod closed starts no message, and rides in the change list of the next one', async ($, on) => {
+    const w = await envoyTeam($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+    w.agents = [{ ...ORCH, agent_status: 'working' }, scout('blocked')]
+    fileCard(w, 3, { prompt })
+    await ticks(w, 1)
+
+    w.agents = [{ ...ORCH, agent_status: 'working' }, scout('idle')]
+    await ticks(w, 4)
+
+    expect(w.json(`${w.team}/questions/Q-3.json`)).toMatchObject({ status: 'obsolete', closed_by: 'team mod' })
+    expect(pushes(w)).toEqual([])
+
+    fileCard(w, 4, { question: 'Keep the old parser API?' })
+    await ticks(w, 2)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- New card: Keep the old parser API? (Q-4, from the investigator (w1:p2))')
+    expect(pushes(w)[0]).toContain(
+      '- Card closed by the team mod, the prompt is gone: Use real fixtures or the snapshot? (Q-3)')
   })
 
   test('a gone orchestrator sends at the next tick', async ($, on) => {

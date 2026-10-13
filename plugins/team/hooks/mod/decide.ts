@@ -5,6 +5,7 @@ import { queueGroups } from './cards'
 import { writeJson } from './io'
 import type { Io, ToolResult } from './io'
 import { runDir, teamDir } from './paths'
+import { goneSince } from './prompt-hold'
 import { readCards, writeCard } from './questions'
 
 export type DecisionEntry = {
@@ -135,7 +136,53 @@ async function decideOnce(io: Io, input: unknown): Promise<ToolResult> {
   }
   await writeJson(io, `${teamdir}/decisions/${n}.json`, entry)
   for (const card of picked) await writeCard(io, teamdir, { ...card, status: 'answered', decision: n })
-  return { result: `Decision ${n}` }
+  return { result: [`Decision ${n}`, ...goneNotes(picked)].join('\n') }
+}
+
+/**
+ * One note for each answered card whose prompt already looks gone (the hold window of the stale rule): the
+ * decision still stands, the envoy can tell the human the prompt was probably answered in the pane.
+ */
+function goneNotes(cards: TeamCard[]): string[] {
+  const notes: string[] = []
+  for (const card of cards) {
+    const since = card.prompt ? goneSince(card.id) : undefined
+    if (since === undefined) continue
+    const at = new Date(since)
+    const two = (n: number) => String(n).padStart(2, '0')
+    const time = `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`
+    notes.push(`Note: the permission prompt behind ${card.id} looks gone since ${time}.`)
+  }
+  return notes
+}
+
+async function closeOnce(
+  io: Io, id: string, link: NonNullable<TeamCard['prompt']>, text: string, next?: string,
+): Promise<TeamCard | null> {
+  const teamdir = await teamDir(io)
+  const card = (await readCards(io, teamdir)).find(c => c.id === id)
+  if (!card || (card.status !== 'open' && card.status !== 'assumed')) return null
+  if (card.prompt?.session !== link.session || card.prompt.dialog !== link.dialog) return null
+  const closed: TeamCard = {
+    ...card, status: 'obsolete', reason: `Closed by the team mod: ${text}.`, closed_by: 'team mod',
+    ...(next ? { next_dialog: next } : {}),
+  }
+  await writeCard(io, teamdir, closed)
+  return closed
+}
+
+/**
+ * The team mod closes a card about a permission prompt that is gone. It runs on the same chain as `decide`, and
+ * re-reads the card inside the chain: a card the human answered first is left alone (`null`), and a `decide`
+ * that comes after finds the card obsolete and refuses. It writes no decision, so no DECISION line goes out.
+ * `next` is the dialog of the different prompt that now shows; it goes on the card as `next_dialog`.
+ */
+export function closeStalePrompt(
+  io: Io, id: string, link: NonNullable<TeamCard['prompt']>, text: string, next?: string,
+): Promise<TeamCard | null> {
+  const run = decideChain.then(() => closeOnce(io, id, link, text, next))
+  decideChain = run.catch(() => undefined)
+  return run
 }
 
 export const QUEUE_TOOL_SPEC = {

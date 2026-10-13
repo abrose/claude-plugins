@@ -11,6 +11,11 @@ export type WatchMemory = {
   herdr_down?: boolean
   /** True while delivered.json is broken: the latch for the one held line and the one recovery line. */
   delivered_broken?: boolean
+  /**
+   * Ids of the cards the team mod closed that the orchestrator was told about. `watchLines` builds a new memory
+   * each tick, so `watchTick` sets this key itself after it.
+   */
+  _closed_told?: string[]
 }
 
 /** WATCH lines for state changes and missing reports; `after` is in seconds. */

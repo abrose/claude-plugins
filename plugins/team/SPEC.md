@@ -228,6 +228,12 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
     The envoy's mod flags a stall: an open card, every worker idle, done or
     gone with a fresh REPORT, and the orchestrator idle, for 2 minutes.
+    A card about a worker's permission prompt sets `prompt_of: <agent name>`
+    (the blocked `WATCH` line names it). The envoy's mod closes that card by
+    itself when the prompt is gone for 2 checks in a row, and sends
+    `WATCH Q-<n> closed (<name>): <reason>`: flip the card's `[?]` step. When
+    that line also shows a new prompt, file a card for it at once, unless an
+    open card already links that prompt.
     Never sit blind: act on `WATCH` lines.
 15. Pane budgets: the human's tab is the envoy's (the `Team` and `Questions`
     tabs are panes inside the envoy session, not herdr panes); the orchestrator
@@ -376,7 +382,7 @@ creates and reads these; the overlay never does.
 | `.team/config.json` | `team-init`, `team-orch-start`, `/team-envoy` | `{team_id, ticket, orchestrator, envoy_session, envoy_tab, orchestrator_session, orchestrator_tab}`; `envoy_tab` only with `--envoy-pane`; `orchestrator_session` and `orchestrator_tab` once the orchestrator is up (`team-orch-start` writes both). The team mod also rewrites `orchestrator_session` or `envoy_session` when that session runs `/clear` (`hooks/mod/activation.ts`), and `/team-envoy` rewrites `envoy_session` to the session that runs it (`hooks/mod/reattach.ts`); nothing else follows a new session id. `/team-envoy` leaves `envoy_tab` as it is |
 | `.team/<name>.json` | `team-start`, `team-brief`, `brief_send`; deleted by `team-forget` | `{role, topic, brief, pane, started, cwd, session, model, effort, mode}`; `brief_send` adds `brief_sent_session` (the `SessionStart` hook removes it on `/compact`) and `watch_session` (the session the no-report watch follows; a `/compact` keeps it, a `/clear` moves `session` past it) |
 | `.team/roster.md` | `team-status` | last rendered roster, which the envoy shows on `/team:status` |
-| `.team/questions/Q-<n>.json` | the `ask` tool | one card |
+| `.team/questions/Q-<n>.json` | the `ask` tool; the envoy's tick closes it | one card. A card about a worker's permission prompt also holds `prompt` `{agent, role, session, pane, dialog, at}`; a card the team mod closed holds `status: obsolete`, `reason` and `closed_by: team mod`, and `next_dialog` when a different prompt showed in the same pane |
 | `.team/questions/claims/<n>` | the `ask` tool | a directory per claimed card number |
 | `.team/decisions/<n>.json` | the `decide` tool | the ledger the orchestrator's tick reads, one entry per decision |
 | `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number; `_line:<name>` holds the last REPORT line sent for that agent |
@@ -878,7 +884,16 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `REPORT <name> <topic>: <summary>`; `DECISION <n> (Q-12 tester/fixtures, Q-13
   tester/fixtures): <answer>`, with ` - overrides assumption Q-12` added when the
   envoy named assumed cards the answer changes; `RELAY <message>` (below);
-  `released <name> (<pane>) after 30 min idle` (the auto-release, below). A
+  `released <name> (<pane>) after 30 min idle` (the auto-release, below);
+  `WATCH <name>: <old> -> blocked: <dialog> - a card about this prompt sets
+  prompt_of: <name>` (a worker turned blocked; `: <dialog>` is left out when
+  the read fails); `WATCH Q-<n> closed (<name>): <reason>` (the team mod
+  closed that card, see "Stale prompt cards"; one line per card, with the ids
+  told so far in `_closed_told` of `watch-state.json`, sent also while herdr is
+  down). When the card closed because a different prompt shows in the same
+  pane, the closed line ends with `; it is now blocked on a new prompt:
+  <dialog> - a card about this prompt sets prompt_of: <name>`, because the
+  worker never left `blocked` and no blocked line follows. A
   failed submit shows as `prompt not sent: <reason>` in the `Team` pane's error
   line, and, when another session is the envoy and no pane shows it, in the
   session's status line until a submit succeeds.
@@ -910,7 +925,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   sends `released <name> (<pane>) after 30 min idle`. The overlay's
   `release_check` does not run in the mod.
 - Tick, envoy half: reads the plan file, the cards and the agent rows the panes
-  draw, the idle worker tabs, and keeps the urgent badge (below). It sends no prompt, so in a
+  draw, the idle worker tabs, closes the cards about a gone permission prompt
+  (see "Stale prompt cards"), and keeps the urgent badge (below). It sends no prompt, so in a
   separate envoy session the mod never starts a turn. (In the single-session
   fallback the orchestrator half of the same session still submits its lines.)
 - Panes, in the envoy session. `team` (title `Team`): the plan (WAITS ON YOU,
@@ -940,8 +956,8 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   glyphs for `?` `~` `+` `x`, door `1` `2` and the expand markers `>` `v`. Enter
   or a click toggles the
   row: the expanded block shows the question, context, options with cost,
-  recommendation, blocks, rework and door, and `reason` for an obsolete card.
-  The block sits in one `Box` with `paddingLeft={4}`, so wrapped lines keep the
+  recommendation, blocks, rework and door, and `reason` for an obsolete card
+  (the reason the mod wrote, for a card it closed). The block sits in one `Box` with `paddingLeft={4}`, so wrapped lines keep the
   indent. The expanded ids are in the state key `team.expandedCards`; the render
   drops ids of cards that no longer exist and writes the key only when it
   shrank. Toasts and the
@@ -994,6 +1010,17 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   the key, also when the block text stays the same, and a later change
   with no trigger of its own never carries an old trigger out late. A
   blocked worker, a denial or a gone orchestrator sends at the next tick.
+  A worker that stays blocked but shows a different prompt counts as a
+  newly blocked worker: the snapshot keys each blocked agent by name and
+  dialog (whitespace collapsed; an empty dialog, a failed read, matches
+  any), and the change list says `The <role> (<pane>) shows a new
+  permission prompt: <dialog>`. A failed read never replaces the dialog the
+  last sent snapshot holds for that worker: the snapshot carries the last
+  non-empty dialog over, so a later new prompt still fires the trigger. A
+  tick that sends nothing fills an empty dialog of the last sent snapshot
+  with the one read now (fill only, never replace; no trigger, so no
+  message). That covers a worker whose first block was sent on a failed
+  read.
   Every `[?]` plan step stays in the block while it is open: a step that
   names no open card's id (a manual test, a go) counts as a thing that waits
   and is listed after the next action; a step that names an open card's id
@@ -1003,7 +1030,21 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   prompt, only while the envoy is idle and its prompt box holds no draft
   that changed in the last tick, and never in a session that holds the
   orchestrator role. A closed or parked card starts no message; it shows in
-  the next one's change list. A `queue` call marks the current key as sent.
+  the next one's change list (`Card closed by the team mod, the prompt is
+  gone: <question> (Q-<n>)` for a card the mod closed). While its prompt
+  shows, an open card about a worker's prompt and that blocked worker count
+  as one thing that waits, and the card leads. The card covers its worker
+  only while the card's dialog is the same prompt (whitespace collapsed; an
+  empty dialog matches) as the dialog the worker shows now. In the hold
+  window of a closing card, a worker that shows a different prompt counts as
+  its own thing, so the block says two things wait. The cards keep their
+  rank. When the card of that worker's earlier prompt leads, the worker
+  leads "Next for you" instead (`Allow or deny a permission prompt in the
+  <role>'s pane (<pane>): <dialog>`). Every open card of its earlier prompts
+  follows it, named as closing by itself, then the other open cards. When
+  another card leads, that card keeps the lead and the stale card is one of
+  the other open cards; the new prompt then shows only in the count and in
+  the change list. A `queue` call marks the current key as sent.
   The first tick of the envoy role is a baseline. The marks are in
   `.team/next-action.json`.
 - Next-action message, envoy side. The envoy learns of a run change only
@@ -1015,6 +1056,44 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   tells comes from the block, the change list or a `queue` read; it adds
   none from elsewhere and marks a guess as a guess. Cards stay the
   decision channel.
+- Stale prompt cards, envoy half. A card filed with `prompt_of` holds a
+  `prompt` link (see the `ask` tool). Every tick, before the next-action
+  message and also in a single-session run, the envoy half judges each open
+  or assumed linked card, in this order: herdr did not answer (unknown, no
+  verdict); the record is gone (released); the record has another session
+  than the link; herdr no longer lists the pane; herdr reports the agent as
+  `unknown` (it cannot classify it, so the prompt may still show: no verdict,
+  the same as a failed listing); the agent is not `blocked`
+  any more; the dialog read now differs from the one stored, compared after
+  whitespace is collapsed and trimmed. An empty stored or read dialog never
+  counts as different, so an empty fingerprint closes by a state signal only.
+  A card whose prompt counts as gone on 2 ticks in a row is closed; a tick
+  that shows the prompt, or that herdr cannot answer, starts the count over.
+  The count is in module memory (`prompt-hold.ts`), keyed by card id, so a
+  reload only delays a close by one tick and no state file exists. The
+  close runs on the chain of `decide` and re-reads the card inside it: it
+  writes `status: obsolete`, `reason: Closed by the team mod: the permission
+  prompt in the <role>'s pane (<pane>) is gone: <why>.` and `closed_by: team
+  mod`, only on a card still `open` or `assumed` with the same link. It
+  writes no decision, no ledger entry and no `DECISION` line. `<why>` is one
+  of: the agent was released; the agent started a new session; the pane is
+  gone; the agent is now `<state>`; a different prompt shows there. For the
+  last reason the card also gets `next_dialog`, the dialog of the new
+  prompt. A card
+  without a link is never closed by the mod. The orchestrator's tick sends
+  one `WATCH Q-<n> closed (<name>): <reason>` line per closed card, with the
+  new dialog and the `prompt_of` hint when the card holds `next_dialog`
+  (the line formats are in the orchestrator tick bullet). The
+  card stays in the `Questions` tab as obsolete, with its reason. A `decide`
+  that arrives while the prompt looks gone (the first gone tick, before the
+  close) records the decision and adds `Note: the permission prompt behind
+  Q-<n> looks gone since <hh:mm:ss>.` to its result, in the local time of
+  the machine the mod runs on; a `decide` after the
+  close refuses with `Q-<n> is already obsolete`. The next-action message
+  lists a mod close in its change list; it is no trigger. The change list
+  names every card the mod closed since the last message, also one that
+  opened and closed between two messages (the snapshot's `closed` list
+  holds the ids of the mod-closed cards at the last message).
 - Urgent by tool. A worker's mod records an auto-mode denial in
   `.team/denials/<name>.json`. The `ask` tool sets `urgent` when the filer has
   a denial newer than its brief file, or when `approved_by` names a decision
@@ -1041,12 +1120,23 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   (each `{ option, cost }`), `recommendation`, `blocks`, `door` (`one-way` or
   `two-way`), `rework` (a concrete estimate), `parked`, and optionally `urgent`,
   `approved_by` (a decision number: the card is urgent when that decision
-  exists) and `refs`. The mod fills `id`, `from` and `tag` (the agent's brief topic, or
+  exists), `prompt_of` (the name of a team agent whose permission prompt the
+  card is about) and `refs`. The mod fills `id`, `from` and `tag` (the agent's brief topic, or
   `general` when it has none, and for the orchestrator), writes one card to
   `.team/questions/Q-<n>.json` and returns `Q-<n>`. `parked: true` gives the card
-  status `assumed`, else `open`. It refuses, with the field named: outside a
+  status `assumed`, else `open`. With `prompt_of`, the tool reads the prompt
+  itself (`herdr agent list`, then, for a blocked agent, `herdr agent read`,
+  each with a 3 s timeout) and stores the link on the card as
+  `prompt: { agent, role, session, pane, dialog, at }`; `dialog` is '' when
+  the agent shows no prompt, herdr did not answer or the read failed. It adds
+  one line to the card's context (the tool linked the card; it closes by
+  itself when the prompt is gone). The agent's state never refuses the card:
+  an agent that shows no prompt, or a herdr that did not answer, files it
+  linked and adds a `Warning:` line to the result. It refuses, with the field named: outside a
   team session; a missing text field; no option; a `door` that is neither value;
-  a `parked` that is not a boolean; a one-way card that is parked; no free card
+  a `parked` that is not a boolean; a one-way card that is parked; a
+  `prompt_of` that is no string, names no team agent or names the filer
+  itself; no free card
   number after 20 tries. Numbers are
   claimed by `mkdir` of `.team/questions/claims/<n>`, so two callers never get
   the same one.
@@ -1060,8 +1150,11 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   (amendments such as `3a` count under their number), appends
   `<n>. (<date>) <answer> Why: <rationale> Cards: <ids>.`, writes the ledger
   entry `.team/decisions/<n>.json`, marks each card `answered` with that number
-  and returns `Decision <n>`. The writes are not atomic and run in that order;
-  calls run one at a time. `overrides` lists the assumed cards the answer
+  and returns `Decision <n>`, with one `Note:` line per answered card whose
+  permission prompt already looks gone (see "Stale prompt cards"). The writes
+  are not atomic and run in that order;
+  calls run one at a time, the team mod's close of a stale prompt card on the
+  same chain. `overrides` lists the assumed cards the answer
   changes; the mod cannot judge that itself. The obsolete form marks the cards
   `obsolete` with the reason, writes no decision, and sends the orchestrator
   nothing. It refuses: outside the envoy role; an empty or malformed `cards`

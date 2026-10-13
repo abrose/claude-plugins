@@ -1,5 +1,6 @@
 import type { TeamCard, TeamPlan } from '../../types'
 import { queueGroups } from './cards'
+import { normalizeDialog, samePrompt } from './herdr'
 
 const MINUTE_MS = 60_000
 
@@ -85,7 +86,12 @@ function runningNow(input: NextActionInput): string {
 /** The block: the mod's statement of the facts. The envoy tells the human these four lines in its own words. */
 export function nextActionBlock(input: NextActionInput): string {
   const open = queueGroups(openCards(input.cards)).flatMap(g => g.cards)
-  const blocked = input.agents.filter(a => a.state === 'blocked')
+  // While its prompt shows, an open card about a worker's prompt and that blocked worker are one thing that waits.
+  // A card linked to an earlier prompt (the hold window of a closing card) does not cover a worker that now shows
+  // another one: that worker is its own thing.
+  const covered = (a: NextActionAgent) =>
+    open.some(c => c.prompt?.agent === a.name && samePrompt(c.prompt.dialog, a.dialog))
+  const blocked = input.agents.filter(a => a.state === 'blocked' && !covered(a))
   const own = ownWaits(input.plan, open)
   const things = open.length + blocked.length + own.length
   const plan = input.plan
@@ -101,26 +107,37 @@ export function nextActionBlock(input: NextActionInput): string {
           ? 'Running: nothing waits on you.'
           : 'Waiting on the team: all agents idle, no card open.'
 
+  const promptLine = (a: NextActionAgent) =>
+    `Allow or deny a permission prompt in the ${a.role}'s pane (${a.pane})${a.dialog ? `: ${a.dialog}` : ''}`
+  const then = (text: string, more: string) => `${text}${/[.?!]$/.test(text) ? ' ' : '. '}${more}`
+  const moreCards = (cards: TeamCard[]) =>
+    cards.length > 0 ? `${cards.length} more: ${cards.map(c => c.id).join(', ')}. Ask me to show them.` : ''
+
   let next = 'nothing - the team works on its own'
   let alsoInPlan = own
   const lead = open[0]
   const stuck = blocked[0]
-  if (lead) {
+  // The lead card is about an earlier prompt of a worker that now shows another one (the hold window of a closing
+  // card): the worker leads, and the cards of its earlier prompts are named as closing by themselves.
+  const newPrompt = lead?.prompt ? blocked.find(a => a.name === lead.prompt!.agent) : undefined
+  if (newPrompt) {
+    const closing = open.filter(c => c.prompt?.agent === newPrompt.name)
+    const verdict = plural(
+      closing.length, 'is about an earlier prompt in that pane and closes by itself',
+      'are about earlier prompts in that pane and close by themselves')
+    next = then(promptLine(newPrompt), `${closing.map(c => c.id).join(', ')} ${verdict}`)
+    const rest = open.filter(c => !closing.includes(c))
+    if (rest.length > 0) next = then(next, moreCards(rest))
+  } else if (lead) {
     next = `Answer: ${lead.question} (${lead.id}, ${filedBy(lead, input)})`
-    if (open.length > 1) {
-      next += `. ${open.length - 1} more: ${open.slice(1).map(c => c.id).join(', ')}. Ask me to show them.`
-    }
+    if (open.length > 1) next = then(next, moreCards(open.slice(1)))
   } else if (stuck) {
-    const dialog = stuck.dialog ? `: ${stuck.dialog}` : ''
-    next = `Allow or deny a permission prompt in the ${stuck.role}'s pane (${stuck.pane})${dialog}`
+    next = promptLine(stuck)
   } else if (own[0]) {
     next = own[0]
     alsoInPlan = own.slice(1)
   }
-  if (alsoInPlan.length > 0) {
-    const join = /[.?!]$/.test(next) ? ' ' : '. '
-    next += `${join}Also waits in the plan: ${alsoInPlan.join('; ')}`
-  }
+  if (alsoInPlan.length > 0) next = then(next, `Also waits in the plan: ${alsoInPlan.join('; ')}`)
 
   const after = (plan?.next ?? []).slice(0, 2).map(i => i.text)
   return [
@@ -144,9 +161,15 @@ export type NextActionSnapshot = {
   waits: string[]
   done: string[]
   working: string[]
-  blocked: string[]
+  /**
+   * Each blocked agent with the dialog it shows (whitespace collapsed). A new dialog on a worker that stays
+   * blocked is a new prompt, so the trigger T5 fires on it; an empty dialog (a failed read) matches any.
+   */
+  blocked: { name: string; dialog: string }[]
   /** One mark per agent's last denial: `<name>@<ms>`. */
   denials: string[]
+  /** Ids of the cards the team mod closed. A card the mod closed is no trigger, but the change list names it once. */
+  closed: string[]
   stalled: boolean
   gone: boolean
   finished: boolean
@@ -162,8 +185,11 @@ export function nextActionSnapshot(input: NextActionInput): NextActionSnapshot {
     waits: (input.plan?.waits ?? []).map(i => i.text),
     done: (input.plan?.done ?? []).map(i => i.text),
     working: named('working'),
-    blocked: named('blocked'),
+    blocked: input.agents
+      .filter(a => a.state === 'blocked')
+      .map(a => ({ name: a.name, dialog: normalizeDialog(a.dialog) })),
     denials: input.denials.map(d => `${d.name}@${d.at}`),
+    closed: input.cards.filter(c => c.status === 'obsolete' && c.closed_by === 'team mod').map(c => c.id),
     stalled: input.stalled,
     gone: input.orchestratorGone,
     finished: isFinished(input.plan),
@@ -187,7 +213,27 @@ export function nextActionView(input: NextActionInput): { block: string; snapsho
   return { block, snapshot, key: `${nextActionKey(block)}\n${triggerMarks(snapshot)}` }
 }
 
+/**
+ * A blocked worker of `target` with an empty dialog (a failed read) takes the non-empty dialog `source` holds for
+ * the same name; a dialog that was read is never replaced. Without it, a snapshot stored on a failed read holds an
+ * empty dialog, which matches any prompt, and a later new prompt in the same worker would fire no trigger.
+ * Two uses: the tick's snapshot takes the dialog of the last sent one (a failed read on this tick), and the last
+ * sent one takes the dialog read now (a failed read on the tick that sent).
+ */
+export const carryDialogs = (target: NextActionSnapshot, source: NextActionSnapshot): NextActionSnapshot => ({
+  ...target,
+  blocked: target.blocked.map(t => {
+    if (t.dialog) return t
+    const read = source.blocked.find(s => s.name === t.name && s.dialog)
+    return read ? { name: t.name, dialog: read.dialog } : t
+  }),
+})
+
 const fresh = (now: string[], before: string[]) => now.filter(x => !before.includes(x))
+
+/** The blocked agents that are new, or show a different prompt than at the last send. */
+const freshBlocked = (now: NextActionSnapshot['blocked'], before: NextActionSnapshot['blocked']) =>
+  now.filter(n => !before.some(b => b.name === n.name && samePrompt(b.dialog, n.dialog)))
 
 /** The changes between the snapshot at the last send and now, in plain words with the id after the meaning. */
 export function changeList(before: NextActionSnapshot, input: NextActionInput): string[] {
@@ -209,15 +255,26 @@ export function changeList(before: NextActionSnapshot, input: NextActionInput): 
     if (c?.status === 'answered') {
       const decision = c.decision === undefined ? '' : `decision ${c.decision}, `
       out.push(`Card answered: ${c.question} (${decision}${c.id})`)
-    } else if (c?.status === 'obsolete') {
+    } else if (c?.status === 'obsolete' && c.closed_by !== 'team mod') {
       out.push(`Card closed as obsolete: ${c.question} (${c.id})`)
     }
   }
+  // Every card the mod closed since the last send, also one the last snapshot never held (it opened and closed
+  // between two messages). The decision 11 line: the next message lists a self-closed card as closed.
+  for (const id of fresh(now.closed, before.closed)) {
+    const c = byId.get(id)!
+    out.push(`Card closed by the team mod, the prompt is gone: ${c.question} (${c.id})`)
+  }
   for (const text of fresh(now.waits, before.waits)) out.push(`Step waits on you: ${text}`)
   for (const text of fresh(now.done, before.done)) out.push(`Step done: ${text}`)
-  for (const name of fresh(now.blocked, before.blocked)) {
-    const a = agentNamed(name)
-    if (a) out.push(`The ${a.role} (${a.pane}) is blocked on a permission prompt`)
+  for (const mark of freshBlocked(now.blocked, before.blocked)) {
+    const a = agentNamed(mark.name)
+    if (!a) continue
+    const shown = before.blocked.some(b => b.name === mark.name)
+    const dialog = mark.dialog ? `: ${mark.dialog}` : ''
+    out.push(shown
+      ? `The ${a.role} (${a.pane}) shows a new permission prompt${dialog}`
+      : `The ${a.role} (${a.pane}) is blocked on a permission prompt`)
   }
   for (const d of input.denials.filter(x => !before.denials.includes(`${x.name}@${x.at}`))) {
     const a = agentNamed(d.name)
@@ -248,7 +305,7 @@ export function triggersOf(before: NextActionSnapshot, now: NextActionSnapshot):
     ['T2', fresh(now.waits, before.waits).length > 0, false],
     ['T3', fresh(now.done, before.done).length > 0, false],
     ['T4', now.stalled && !before.stalled, false],
-    ['T5', fresh(now.blocked, before.blocked).length > 0, true],
+    ['T5', freshBlocked(now.blocked, before.blocked).length > 0, true],
     ['T6', fresh(now.denials, before.denials).length > 0, true],
     ['T7', now.gone && !before.gone, true],
     ['T8', now.finished && !before.finished, false],

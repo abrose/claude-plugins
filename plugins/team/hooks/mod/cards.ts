@@ -2,8 +2,9 @@ import type { TeamCard } from '../../types'
 
 export type AskInput = Omit<
   TeamCard,
-  'id' | 'n' | 'from' | 'tag' | 'status' | 'decision' | 'reason' | 'at' | 'urgent' | 'refs'
-> & { urgent?: boolean; refs?: string[]; parked: boolean; approved_by?: unknown }
+  'id' | 'n' | 'from' | 'tag' | 'status' | 'decision' | 'reason' | 'closed_by' | 'next_dialog' | 'prompt' | 'at'
+  | 'urgent' | 'refs'
+> & { urgent?: boolean; refs?: string[]; parked: boolean; approved_by?: unknown; prompt_of?: unknown }
 
 const REQUIRED_TEXT = ['context', 'question', 'recommendation', 'blocks', 'rework'] as const
 
@@ -49,7 +50,10 @@ export function queueGroups(cards: TeamCard[], tag?: string): QueueGroup[] {
     .sort((a, b) => pressing(a.cards[0]!, b.cards[0]!))
 }
 
-export function buildCard(input: AskInput, n: number, from: string, tag: string, at: number): TeamCard {
+/** `input.prompt` is the link the `ask` tool captured; the filer never sets it (it is not in `AskInput`). */
+export function buildCard(
+  input: AskInput & { prompt?: TeamCard['prompt'] }, n: number, from: string, tag: string, at: number,
+): TeamCard {
   return {
     id: `Q-${n}`,
     n,
@@ -65,6 +69,7 @@ export function buildCard(input: AskInput, n: number, from: string, tag: string,
     urgent: input.urgent ?? false,
     refs: input.refs ?? [],
     status: input.parked ? 'assumed' : 'open',
+    ...(input.prompt ? { prompt: input.prompt } : {}),
     at,
   }
 }

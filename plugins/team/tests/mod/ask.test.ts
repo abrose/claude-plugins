@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { CARD, call, team } from './world'
+import { CARD, call, DIALOG_TEXT, team } from './world'
 
 const asScout = async ($: any, on: any) => {
   const w = await team($, on)
@@ -135,6 +135,122 @@ describe('ask', () => {
     const w = await asScout($, on)
     await call($, 'ask', { ...CARD, urgent: true, refs: ['Q-3', 'brief-scout.md'] })
     expect(w.json(`${w.team}/questions/Q-1.json`)).toMatchObject({ urgent: true, refs: ['Q-3', 'brief-scout.md'] })
+  })
+})
+
+describe('prompt_of', () => {
+  const scoutBlocked = (w: any) => {
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+  }
+  const sub = (argv: string[]) => argv.slice(1, 3).join(' ')
+
+  test('links the card to the blocked agent: session, pane and dialog captured by the tool', async ($, on) => {
+    const w = await team($, on)
+    scoutBlocked(w)
+
+    expect(await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout' })).toMatchObject({ result: 'Q-1' })
+
+    const filed = w.json(`${w.team}/questions/Q-1.json`)
+    expect(filed.prompt).toEqual({
+      agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT,
+      at: w.clock.now(),
+    })
+    expect(filed.context).toBe(
+      `${CARD.context}\nThe tool linked this card to the permission prompt of the investigator (w1:p2). ` +
+      'It closes by itself when that prompt is gone.')
+  })
+
+  test('a card without prompt_of has no prompt link', async ($, on) => {
+    const w = await team($, on)
+    scoutBlocked(w)
+
+    await call($, 'ask', CARD)
+
+    expect(w.json(`${w.team}/questions/Q-1.json`).prompt).toBeUndefined()
+  })
+
+  test('naming no team agent refuses the card', async ($, on) => {
+    const w = await team($, on)
+
+    expect(await call($, 'ask', { ...CARD, prompt_of: 'app-1-nobody' }))
+      .toMatchObject({ isError: true, result: 'prompt_of names no team agent: app-1-nobody' })
+    expect([...w.files.keys()].some(p => p.includes('/questions/'))).toBe(false)
+  })
+
+  test('naming the filer itself refuses the card', async ($, on) => {
+    const w = await asScout($, on)
+
+    expect(await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout' }))
+      .toMatchObject({ isError: true, result: 'prompt_of names the filer itself: app-1-scout' })
+    expect([...w.files.keys()].some(p => p.includes('/questions/'))).toBe(false)
+  })
+
+  test('a value that is no agent name refuses the card', async ($, on) => {
+    const w = await team($, on)
+
+    expect(await call($, 'ask', { ...CARD, prompt_of: 7 }))
+      .toMatchObject({ isError: true, result: 'prompt_of must be the name of a team agent' })
+    expect([...w.files.keys()].some(p => p.includes('/questions/'))).toBe(false)
+  })
+
+  test('an agent that shows no prompt files the card linked and warns the filer', async ($, on) => {
+    const w = await team($, on)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+
+    const r = await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout' })
+
+    expect(r.isError).toBeUndefined()
+    expect(r.result).toBe(
+      'Q-1\nWarning: app-1-scout shows no permission prompt now. The card closes by itself in about 30 s unless one shows.')
+    expect(w.json(`${w.team}/questions/Q-1.json`).prompt).toEqual({
+      agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: '', at: w.clock.now(),
+    })
+  })
+
+  test('a failed dialog read files the card with an empty fingerprint', async ($, on) => {
+    const w = await team($, on)
+    scoutBlocked(w)
+    w.fails.set('agent read', 'timed out')
+
+    const r = await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout' })
+
+    expect(r).toMatchObject({ result: 'Q-1' })
+    expect(w.json(`${w.team}/questions/Q-1.json`).prompt).toMatchObject({ agent: 'app-1-scout', dialog: '' })
+  })
+
+  test('a herdr that does not answer files the card linked and warns the filer', async ($, on) => {
+    const w = await team($, on)
+    w.herdrFails = 'server_unavailable'
+
+    const r = await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout' })
+
+    expect(r.isError).toBeUndefined()
+    expect(r.result).toBe(
+      'Q-1\nWarning: herdr did not answer (server_unavailable), so the prompt of app-1-scout was not read. ' +
+      'The card is linked anyway.')
+    expect(w.json(`${w.team}/questions/Q-1.json`).prompt).toEqual({
+      agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: '', at: w.clock.now(),
+    })
+  })
+
+  test('both herdr calls of the tool carry a 3 s timeout', async ($, on) => {
+    const w = await team($, on)
+    scoutBlocked(w)
+
+    await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout' })
+
+    const herdr = w.runs.flatMap((argv, i) =>
+      ['agent list', 'agent read'].includes(sub(argv)) ? [{ call: sub(argv), ms: w.inits[i]?.timeoutMs }] : [])
+    expect(herdr).toEqual([{ call: 'agent list', ms: 3000 }, { call: 'agent read', ms: 3000 }])
+  })
+
+  test('a card that links is still urgent by the usual rules', async ($, on) => {
+    const w = await team($, on)
+    scoutBlocked(w)
+
+    await call($, 'ask', { ...CARD, prompt_of: 'app-1-scout', urgent: true })
+
+    expect(w.json(`${w.team}/questions/Q-1.json`)).toMatchObject({ urgent: true, status: 'open' })
   })
 })
 

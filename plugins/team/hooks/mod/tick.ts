@@ -1,4 +1,4 @@
-import type { TeamAgentRow } from '../../types'
+import type { TeamAgentRow, TeamCard } from '../../types'
 import type { StallWorker } from './badge'
 import type { DecisionEntry } from './decide'
 import { gatherFacts, reportIsFresh } from './facts'
@@ -115,6 +115,27 @@ export async function readLedger(io: Io, teamdir: string): Promise<DecisionEntry
 
 const NO_REPORT_AFTER = 120
 
+/** The suffix of a blocked WATCH line: the one fact the orchestrator gives `ask` for a card about the prompt. */
+const promptOfHint = (name: string) => `a card about this prompt sets prompt_of: ${name}`
+
+const CLOSED_PREFIX = 'Closed by the team mod: '
+
+/**
+ * The WATCH line that tells the orchestrator the team mod closed its card: the card id, the agent the card
+ * was about, and the reason the mod wrote on the card (prefix and final full stop cut). When the card closed
+ * because a different prompt shows in the same pane, the line also carries that prompt's dialog and the
+ * `prompt_of` hint: the worker never left `blocked`, so no blocked line follows, and this is the orchestrator's
+ * only chance to file a card for the new prompt.
+ */
+const closedCardLine = (card: TeamCard) => {
+  const reason = (card.reason ?? '').replace(CLOSED_PREFIX, '').replace(/\.$/, '')
+  const agent = card.prompt ? ` (${card.prompt.agent})` : ''
+  const next = card.next_dialog && card.prompt
+    ? `; it is now blocked on a new prompt: ${card.next_dialog} - ${promptOfHint(card.prompt.agent)}`
+    : ''
+  return `WATCH ${card.id} closed${agent}: ${reason}${next}`
+}
+
 /** The input of the layout rules from the records and herdr's two listings; `myId` is this session's id. */
 async function layoutInput(
   io: Io, teamdir: string, records: Record<string, TeamRecord>, agents: HerdrAgent[], panes: HerdrPane[],
@@ -147,13 +168,17 @@ async function layoutInput(
 export async function watchTick(
   io: Io, run: string, teamdir: string, records: Record<string, TeamRecord>,
   listed: HerdrListing, now: number, myId: string, exemptTabs: string[], openCards: Set<string>,
-  delivery: { broken: boolean; path: string },
+  delivery: { broken: boolean; path: string }, modClosed: TeamCard[] = [],
 ): Promise<string[]> {
   const memPath = `${teamdir}/watch-state.json`
   const mem = (await readJson<WatchMemory>(io, memPath)) ?? { agents: {}, _flagged: {}, _idle_since: {} }
   const wasBroken = mem.delivered_broken === true
   const recovered = wasBroken && !delivery.broken
   const out: string[] = []
+  // A card the team mod closed gets one line, whether herdr is up or not. The mark lists every card told so far.
+  const told = mem._closed_told ?? []
+  out.push(...modClosed.filter(c => !told.includes(c.id)).map(closedCardLine))
+  mem._closed_told = modClosed.map(c => c.id)
   if (delivery.broken && !wasBroken) {
     out.push(`WATCH delivered.json does not parse: ${delivery.path} - REPORT and DECISION delivery held until it is fixed`)
   }
@@ -179,6 +204,7 @@ export async function watchTick(
   if (recovered) Object.assign(base, { _release_since: {}, _release_tried: {} })
   const result = watchLines(facts, base, now, NO_REPORT_AFTER)
   result.mem.delivered_broken = delivery.broken
+  result.mem._closed_told = mem._closed_told
   const panes = await herdrPanes(io)
   const layout = panes
     ? await layoutInput(io, teamdir, records, listed.agents,
@@ -203,8 +229,12 @@ export async function watchTick(
   for (const line of result.lines) {
     const name = line.slice('WATCH '.length).split(':')[0] ?? ''
     const pane = records[name]?.pane
-    const dialog = result.blocked.includes(name) && pane ? await herdrDialog(io, pane) : ''
-    out.push(dialog ? `${line}: ${dialog}` : line)
+    if (!result.blocked.includes(name)) {
+      out.push(line)
+      continue
+    }
+    const dialog = pane ? await herdrDialog(io, pane) : ''
+    out.push(`${line}${dialog ? `: ${dialog}` : ''} - ${promptOfHint(name)}`)
   }
 
   if (layout) {

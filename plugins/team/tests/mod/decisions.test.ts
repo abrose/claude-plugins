@@ -50,7 +50,7 @@ describe('DECISION delivery in the tick', () => {
     expect(w.submits).toEqual([[
       'REPORT app-1-maker build: green',
       'DECISION 1 (Q-1 app-1-scout/fixtures, Q-2 app-1-tester/fixtures): Use real fixtures.',
-      `WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}`,
+      `WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-scout`,
     ].join('\n')])
     expect(w.json(`${w.team}/delivered.json`)).toMatchObject({ _decision: 1 })
   })

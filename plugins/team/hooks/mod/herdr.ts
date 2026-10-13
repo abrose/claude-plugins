@@ -11,17 +11,18 @@ export type HerdrAgent = {
 export type HerdrPane = { pane_id: string; tab_id: string; agent_status: string }
 export type HerdrListing = { ok: true; agents: HerdrAgent[] } | { ok: false; reason: string }
 
-async function herdr(io: Io, args: string[]) {
+async function herdr(io: Io, args: string[], timeoutMs?: number) {
   const bin = (await io.envGet('HERDR_BIN_PATH')) ?? 'herdr'
-  return io.run([bin, ...args])
+  return io.run([bin, ...args], timeoutMs)
 }
 
 function failure(r: { exitCode: number; stdout: string; stderr: string }): string {
   return (r.stderr || r.stdout).trim().slice(0, 200) || `exit ${r.exitCode}`
 }
 
-export async function herdrAgents(io: Io): Promise<HerdrListing> {
-  const r = await herdr(io, ['agent', 'list'])
+/** `timeoutMs` bounds the call; without it the `io.run` default (10 s) applies. */
+export async function herdrAgents(io: Io, timeoutMs?: number): Promise<HerdrListing> {
+  const r = await herdr(io, ['agent', 'list'], timeoutMs)
   if (r.exitCode !== 0) return { ok: false, reason: failure(r) }
   try {
     return { ok: true, agents: JSON.parse(r.stdout)?.result?.agents ?? [] }
@@ -69,9 +70,22 @@ export function dialogText(snapshot: string): string {
   return kept.join(' / ').slice(0, DIALOG_CAP)
 }
 
+/** A dialog text with its whitespace collapsed and trimmed: what two reads of one prompt agree on. */
+export const normalizeDialog = (text: string) => text.replace(/\s+/g, ' ').trim()
+
+/**
+ * Whether two dialog texts are the same prompt: equal after whitespace is collapsed. A dialog empty on either
+ * side (a failed read, an agent that showed no prompt at filing) never counts as a different prompt.
+ */
+export function samePrompt(a: string, b: string): boolean {
+  const left = normalizeDialog(a)
+  const right = normalizeDialog(b)
+  return left === '' || right === '' || left === right
+}
+
 /** The dialog a blocked agent shows, for the WATCH line. Empty when the snapshot is empty or the call fails. */
-export async function herdrDialog(io: Io, pane: string): Promise<string> {
-  const r = await herdr(io, ['agent', 'read', pane, '--source', 'detection', '--lines', '20'])
+export async function herdrDialog(io: Io, pane: string, timeoutMs?: number): Promise<string> {
+  const r = await herdr(io, ['agent', 'read', pane, '--source', 'detection', '--lines', '20'], timeoutMs)
   return r.exitCode === 0 ? dialogText(r.stdout) : ''
 }
 

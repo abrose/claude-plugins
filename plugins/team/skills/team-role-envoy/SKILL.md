@@ -52,6 +52,24 @@ These rules bind you on every turn.
   confirmation, the confirmation goes last.
 - Relay operational requests from the human ("stop the tester") to the
   orchestrator with `relay`.
+- A card about a worker's permission prompt shows a `prompt` field in the
+  `queue` read: the worker's role and pane. The prompt is in that pane and you
+  have no tool that answers it. Tell the human to allow or deny it there, with
+  the role and the pane, and the command the dialog shows. The team mod closes
+  such a card by itself when the prompt is gone. Do not close it by hand while
+  its prompt still shows. If the prompt is gone and the card stays open (herdr
+  is down), close it by hand as obsolete.
+  - A change line `shows a new permission prompt` means the worker stays
+    blocked on a different prompt. Tell the human to answer it in that pane.
+  - A change line `Card closed by the team mod, the prompt is gone` means the
+    prompt was answered or left in the pane. Nothing is left to decide: tell
+    the human in one line and ask nothing.
+  - A `decide` that refuses with "already obsolete" on such a card means the
+    same. Tell the human the prompt is gone, with the reason from the card.
+    Relay a standing rule the human wants ("always allow this command").
+  - A `decide` result with `Note: the permission prompt behind ... looks gone`
+    means the decision is recorded and the prompt was probably answered in the
+    pane. Tell the human both facts.
 
 Record every decision with `decide`, never by editing the decisions file. Pass in
 `overrides` every assumed card whose assumption the answer changes.

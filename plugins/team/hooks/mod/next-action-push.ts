@@ -5,7 +5,7 @@ import { bySession, herdrDialog } from './herdr'
 import type { HerdrListing } from './herdr'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
-import { changeList, draftHeld, nextActionDue, nextActionPrompt, nextActionView } from './next-action'
+import { carryDialogs, changeList, draftHeld, nextActionDue, nextActionPrompt, nextActionView } from './next-action'
 import type { DraftMark, NextActionInput, NextActionMarks, NextActionSnapshot } from './next-action'
 import type { TeamRecord } from './tick'
 
@@ -36,7 +36,7 @@ export const marksPath = (teamdir: string) => `${teamdir}/next-action.json`
 function isStored(v: unknown): v is Stored {
   const s = v as Stored | null
   return typeof s?.key === 'string' && typeof s.snapshot === 'object' && s.snapshot !== null
-    && Array.isArray(s.snapshot.open) && Array.isArray(s.snapshot.denials)
+    && Array.isArray(s.snapshot.open) && Array.isArray(s.snapshot.denials) && Array.isArray(s.snapshot.closed)
 }
 
 /** What the next-action block and the change list read, from what the envoy tick already holds. */
@@ -52,6 +52,8 @@ export async function gatherInput(io: Io, from: {
   stalled: boolean
   myId: string
   now: number
+  /** Dialogs this tick already read, pane to text: a blocked agent in it is not read again. */
+  dialogs?: Map<string, string>
 }): Promise<NextActionInput> {
   const agents: NextActionInput['agents'] = []
   const filers: NextActionInput['filers'] = []
@@ -63,9 +65,11 @@ export async function gatherInput(io: Io, from: {
       continue
     }
     const briefedAt = rec.brief ? await io.mtime(`${from.run}/brief-${row.name}-${rec.topic}.md`) : null
+    const read = from.dialogs?.get(row.pane)
     agents.push({
       name: row.name, role: rec.role, pane: row.pane, topic: rec.topic, state: row.state,
-      briefed: !!rec.brief, briefedAt, dialog: row.state === 'blocked' ? await herdrDialog(io, row.pane) : '',
+      briefed: !!rec.brief, briefedAt,
+      dialog: row.state === 'blocked' ? (read ?? await herdrDialog(io, row.pane)) : '',
     })
   }
   const orchestrator = from.cfg.orchestrator_session
@@ -88,18 +92,25 @@ export async function gatherInput(io: Io, from: {
  * submit puts them back, so the next tick tries again.
  */
 export async function pushNextAction(io: Io, teamdir: string, input: NextActionInput): Promise<void> {
-  const view = nextActionView(input)
-  lastView = { key: view.key, snapshot: view.snapshot }
+  const fromInput = nextActionView(input)
+  lastView = { key: fromInput.key, snapshot: fromInput.snapshot }
   const path = marksPath(teamdir)
   const read = await readJson<unknown>(io, path)
   if (!isStored(read)) {
-    await writeJson(io, path, { key: view.key, snapshot: view.snapshot, pending: null, draft: null } satisfies Stored)
+    await writeJson(io, path, { key: fromInput.key, snapshot: fromInput.snapshot, pending: null, draft: null } satisfies Stored)
     return
   }
+  // A failed dialog read must not store an empty dialog: it would match any later prompt of that worker.
+  const view = { ...fromInput, snapshot: carryDialogs(fromInput.snapshot, read.snapshot) }
+  lastView = { key: view.key, snapshot: view.snapshot }
   const stored: Stored = { ...read, draft: read.draft ?? null }
   const draft = draftHeld(stored.draft, await io.draft())
   const due = nextActionDue(stored, view, input.now)
-  const kept: Stored = { key: stored.key, snapshot: stored.snapshot, pending: due.pending, draft: draft.mark }
+  // A tick that sends nothing still fills an empty dialog of the stored snapshot with the one read now (fill only,
+  // never replace; no trigger, so no message). The send tick of a worker's first block may have had a failed read.
+  const kept: Stored = {
+    key: stored.key, snapshot: carryDialogs(stored.snapshot, view.snapshot), pending: due.pending, draft: draft.mark,
+  }
   if (!due.due || isBusy(input.now) || draft.held) {
     if (JSON.stringify(kept) !== JSON.stringify(stored)) await writeJson(io, path, kept)
     return
