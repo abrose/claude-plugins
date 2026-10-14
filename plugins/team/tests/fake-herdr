@@ -43,7 +43,9 @@ case "$group $sub" in
   "pane split")
     emit '{"result":{"pane":{"pane_id":"w1:p9"}}}' ;;
   "pane current")
-    emit '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}' ;;
+    # FAKE_CALLER_WS puts the calling pane in another workspace.
+    ws="${FAKE_CALLER_WS:-w1}"
+    emit "{\"result\":{\"pane\":{\"pane_id\":\"$ws:p1\",\"workspace_id\":\"$ws\",\"tab_id\":\"$ws:t1\"}}}" ;;
   "pane run")
     emit '{"result":{"ok":true}}' ;;
   "pane layout")

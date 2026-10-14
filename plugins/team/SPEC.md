@@ -415,6 +415,17 @@ team-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    (`result.panes[].pane_id`, `tab_id`, `agent_status`) answers the last two. If
    herdr gives no readable answer, or does not list the pane, refuse too.
    `--new-tab` and a missing config are never refused.
+   Run mismatch guard, before the tab guard and before any write, when
+   `TEAM_SCRATCH` is unset (the run dir is then the `scratchpad/current`
+   fallback) and `.team/config.json` exists: read the calling pane's workspace
+   from `herdr pane current --current` (`result.pane.workspace_id`) and the
+   workspaces of the run's recorded tabs (`envoy_tab`, `orchestrator_tab` and
+   `tabs.json`, the part of a tab id before the colon). Refuse with exit 3 when
+   the run records at least one tab and none sits in the caller's workspace.
+   The message names the run dir, the team id, the caller's workspace and tab,
+   and the fix: set `TEAM_SCRATCH` to the right run dir, or start from the
+   run's own tab. A set `TEAM_SCRATCH`, a missing config, a config with no
+   recorded tab and an unreadable caller workspace are never refused.
 2. Resolve `--cwd`. If it was not given: for `--pane`, read the pane's real
    cwd from `herdr pane get <id>` (`result.pane.cwd`), never this script's own
    `$PWD`; for every other placement, default to `$PWD` as before.

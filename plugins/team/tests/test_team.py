@@ -604,6 +604,82 @@ class TeamStart(Base):
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": team_id, "orchestrator": orch}))
 
+    # Run mismatch guard. TEAM_SCRATCH unset puts the run at the scratchpad/current
+    # fallback of the project root (FAKE_GIT_TOPLEVEL); the fake herdr puts the
+    # caller in workspace w1 unless FAKE_CALLER_WS says otherwise.
+    def run_with_tabs(self, scenario, tabs=("w4:t1", "w4:t2"), caller="w4", scratch_unset=True,
+                      args=("--new-tab", "--cwd")):
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "orchestrator": "app-1-orch",
+             "envoy_tab": tabs[0], "orchestrator_tab": tabs[1]}))
+        write_text(os.path.join(d, "tabs.json"), json.dumps(list(tabs)))
+        extra = {**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj, "FAKE_CALLER_WS": caller}
+        if scratch_unset:
+            extra["TEAM_SCRATCH"] = None
+        return self.run_script("team-start", "scout", "investigator", *args, self.proj,
+                               env_extra=extra, scenario=scenario)
+
+    def test_refuses_a_run_that_belongs_to_another_workspace(self):
+        # The incident: a probe from a new tab of workspace w6, no TEAM_SCRATCH, the
+        # run's tabs all in w4. Nothing may change in the run.
+        p = self.run_with_tabs("ok", caller="w6")
+        self.assertEqual(p.returncode, 3, p.stderr)
+        for fact in (os.path.realpath(self.sp()), "app-1", "w4", "w6", "TEAM_SCRATCH"):
+            self.assertIn(fact, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".team", "app-1-scout.json")))
+        self.assertEqual(json.loads(read_text(self.sp(".team", "tabs.json"))), ["w4:t1", "w4:t2"])
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith(("tab create", "pane split", "agent start", "pane run")) for c in calls), calls)
+
+    def test_run_mismatch_also_refuses_into_tab_and_split(self):
+        for args in (("--into-tab", "w6:tG", "--cwd"), ("--split", "w6:p1", "down", "--cwd")):
+            with self.subTest(args=args):
+                p = self.run_with_tabs("ok", caller="w6", args=args)
+                self.assertEqual(p.returncode, 3, p.stderr)
+                self.assertFalse(any(c.startswith(("pane split", "agent start")) for c in self.herdr_calls()))
+
+    def test_run_in_the_callers_workspace_starts_with_new_tab_into_tab_and_split(self):
+        cases = {"new-tab": ("ok", ("--new-tab", "--cwd")),
+                 "into-tab": ("grid2", ("--into-tab", "w1:tG", "--cwd")),
+                 "split": ("guard", ("--split", "w1:w1", "down", "--cwd"))}
+        for label, (scenario, args) in cases.items():
+            with self.subTest(label):
+                p = self.run_with_tabs(scenario, tabs=("w1:tE", "w1:tO"), caller="w1", args=args)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertTrue(os.path.exists(self.sp(".team", "app-1-scout.json")))
+
+    def test_orchestrator_start_from_the_envoy_tab_of_a_fresh_run_passes(self):
+        # team-init: config holds only the team id and the envoy tab, in the caller's workspace.
+        d = self.sp(".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "orchestrator": "app-1-orch", "envoy_tab": "w1:t1"}))
+        p = self.run_script("team-start", "orch", "orchestrator", "--new-tab", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj,
+                                       "TEAM_SCRATCH": None})
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_a_run_with_no_recorded_tab_passes(self):
+        self.config()
+        p = self.run_script("team-start", "scout", "investigator", "--new-tab", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj,
+                                       "TEAM_SCRATCH": None, "FAKE_CALLER_WS": "w6"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_an_explicit_team_scratch_is_not_second_guessed(self):
+        # A tester's throwaway run in another workspace, TEAM_SCRATCH set on purpose.
+        p = self.run_with_tabs("ok", caller="w6", scratch_unset=False,
+                               args=("--new-tab", "--cwd"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_after_a_restart_a_new_pane_id_in_the_same_workspace_passes(self):
+        # team-resurrect relaunches by itself; the orchestrator then starts agents into a new pane.
+        p = self.run_with_tabs("ok", tabs=("w1:tE", "w1:tOLD"), caller="w1",
+                               args=("--pane", "w1:p2", "--cwd"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
     def test_refuses_name_already_live(self):
         # Starting a label whose namespaced name is already a live agent would
         # reuse its pane and cross-poison it. Refuse before touching herdr.
