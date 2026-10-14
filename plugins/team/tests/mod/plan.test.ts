@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { fitPlan, parsePlan } from '../../hooks/mod/plan'
+import { DONE_CAP, fitPlan, parsePlan } from '../../hooks/mod/plan'
 
 const TEXT = `# APP-1
 
@@ -77,5 +77,24 @@ describe('fitPlan', () => {
     expect(fitted.plan.waits).toHaveLength(2)
     expect(fitted.plan.done).toEqual([{ mark: 'x', text: 'b' }])
     expect(fitted.hiddenDone).toBe(1)
+  })
+
+  test('a tall pane still shows only the newest DONE_CAP items', () => {
+    const done = Array.from({ length: 15 }, (_, i) => `- [x] d${i + 1}`).join('\n')
+    const plan = parsePlan(`# T\n## DONE\n${done}\n## RUNNING\n- [>] r\n## NEXT\n- [ ] n\n`)
+    const fitted = fitPlan(plan, 100)
+    expect(fitted.plan.done).toEqual(plan.done.slice(5))
+    expect(fitted.plan.done).toHaveLength(DONE_CAP)
+    expect(fitted.hiddenDone).toBe(5)
+    expect(fitted.plan.running).toHaveLength(1)
+    expect(fitted.plan.next).toHaveLength(1)
+  })
+
+  test('DONE_CAP items or fewer on a tall pane all show', () => {
+    const done = Array.from({ length: 10 }, (_, i) => `- [x] d${i + 1}`).join('\n')
+    const plan = parsePlan(`# T\n## DONE\n${done}\n`)
+    const fitted = fitPlan(plan, 100)
+    expect(fitted.plan.done).toEqual(plan.done)
+    expect(fitted.hiddenDone).toBe(0)
   })
 })

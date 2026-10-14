@@ -69,6 +69,14 @@ describe('drawPane plan sections', () => {
     expect(all).not.toContain('WAITS ON YOU')
     expect(all).toContain('DONE')
   })
+
+  test('15 DONE items on a tall pane draw the newest 10 under DONE (+5 earlier)', () => {
+    const done = Array.from({ length: 15 }, (_, i) => ({ mark: 'x', text: `d${i + 1}` }))
+    const all = strings(drawPane(fakes, paneView({ rows: 100, plan: { ...plan, done } }) as never))
+    expect(all).toContain('DONE (+5 earlier)')
+    const rows = all.filter(s => /^d\d+$/.test(s))
+    expect(rows).toEqual(['d6', 'd7', 'd8', 'd9', 'd10', 'd11', 'd12', 'd13', 'd14', 'd15'])
+  })
 })
 
 describe('drawPane footer', () => {

@@ -943,8 +943,9 @@ of closures over `$`; every other module takes `io` and never sees `$`.
 - Panes, in the envoy session. `team` (title `Team`): the plan (WAITS ON YOU,
   DONE, RUNNING, NEXT as glyph rows, bucketed by mark, not by heading, in file
   order; WAITS ON YOU holds the `[?]` items, drawn first with a `◆` glyph and
-  left out when empty; items count only under those four headings; DONE gives
-  up its oldest items when short), the open questions (urgent cards first,
+  left out when empty; items count only under those four headings; DONE shows
+  at most its 10 newest items, fewer when the pane is short, with `(+N earlier)`
+  in its heading for the rest), the open questions (urgent cards first,
   then a row per tag with its open and assumed counts), agents, one row per
   idle worker tab (`tab w4:t19
   idle, consider release (w4:p3K done)`: every pane there idle or done, every

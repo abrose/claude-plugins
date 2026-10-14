@@ -24,9 +24,15 @@ export function parsePlan(text: string): TeamPlan {
   return plan
 }
 
-/** Fits the plan into `rows` item lines; DONE gives up its oldest items first. WAITS, RUNNING and NEXT are never cut. */
+/** The most DONE items the pane ever shows, however tall it is. */
+export const DONE_CAP = 10
+
+/** Fits the plan into `rows` item lines. DONE keeps at most its newest `DONE_CAP`
+ *  items, fewer when the leftover rows are short; it gives up its oldest items first.
+ *  WAITS, RUNNING and NEXT are never cut. */
 export function fitPlan(plan: TeamPlan, rows: number): { plan: TeamPlan; hiddenDone: number } {
-  const room = Math.max(rows - plan.waits.length - plan.running.length - plan.next.length, 0)
+  const left = Math.max(rows - plan.waits.length - plan.running.length - plan.next.length, 0)
+  const room = Math.min(DONE_CAP, left)
   const done = plan.done.slice(Math.max(plan.done.length - room, 0))
   return { plan: { ...plan, done }, hiddenDone: plan.done.length - done.length }
 }
