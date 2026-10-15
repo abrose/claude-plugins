@@ -85,6 +85,23 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     agent a new session id and the hooks follow it; a `/compact` keeps the id
     and the hooks lift its brief mark. `brief_send` refuses an agent that was
     neither cleared nor compacted since its last brief.
+    The same rule binds the orchestrator's own context. The team mod sends one
+    `WATCH context <n> percent` line when the context nears its limit. On that
+    line, reach a safe point: no line delivered but not acted on, the plan and
+    `orchestration-decisions.md` current, no action half done. Then write
+    `scratchpad/current/orch-handover.md` (template `orch-handover.md`): the
+    current step and the next one; each agent in flight with
+    name/pane/session/topic/brief; the last line acted on, per kind; the open
+    cards and what each blocks; the intentions not yet done. Then call
+    `reset_self` (`mcp__team__reset_self`), and end your turn. The mod compacts
+    at the next idle moment. After the compact, reload this skill, then read
+    the decisions file, `orch-handover.md`, the plan file and
+    `orchestration-decisions.md`, then the reports newer than the handover, then
+    the open cards (the files `scratchpad/current/.team/questions/Q-*.json`
+    whose `status` is `open` or `assumed`; the `queue` tool works only in the
+    envoy session). `reset_self` refuses when `orch-handover.md` is missing or
+    older than 10 minutes. A `RESUME` line after a compact means do the reload
+    now.
 12. The orchestrator writes every own call to
     `scratchpad/current/orchestration-decisions.md` with context, so it can be
     audited. An own call becomes a card via `ask` instead when it is a one-way

@@ -50,6 +50,20 @@ elif source == "compact" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
     if rec and rec.get("session") == sid and "brief_sent_session" in rec:
         del rec["brief_sent_session"]
         save(recf, rec)
+    # The orchestrator's own compact: point the session at its handover. Same text as COMPACT_INSTRUCTIONS
+    # in hooks/mod/reset.ts, which a compact hook adds to the summary; this one is inserted after the compact,
+    # whatever the summary holds. Workers and the other sources print nothing.
+    cfg = load(os.path.join(scratch, ".team", "config.json"))
+    if isinstance(cfg, dict) and cfg.get("orchestrator") == name:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": (
+                "Your context was compacted. You are the team orchestrator. Reload the team-orchestration skill, "
+                "read the decisions file, then scratchpad/current/orch-handover.md, the plan file and "
+                "scratchpad/current/orchestration-decisions.md, then the reports newer than orch-handover.md, "
+                "then the open cards (the files scratchpad/current/.team/questions/Q-*.json whose status is "
+                "open or assumed). Continue from the handover."),
+        }}))
 elif source == "resume" and not name:
     entry = load(os.path.join(index, sid + ".json"))
     if entry and re.match(r"^[a-z][a-z0-9_-]{0,31}$", entry.get("name", "")):

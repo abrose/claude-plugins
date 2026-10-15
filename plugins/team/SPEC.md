@@ -79,6 +79,7 @@ claude-plugins/                          # marketplace repo (exists)
         │   │       ├── brief-review.md
         │   │       ├── brief-post-notes.md
         │   │       ├── decisions.md
+        │   │       ├── orch-handover.md
         │   │       ├── progress.md
         │   │       └── report.md
         │   ├── team-role-investigator/SKILL.md
@@ -211,6 +212,23 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     agent a new session id and the hooks follow it; a `/compact` keeps the id
     and the hooks lift its brief mark. `brief_send` refuses an agent that was
     neither cleared nor compacted since its last brief.
+    The same rule binds the orchestrator's own context. The team mod sends one
+    `WATCH context <n> percent` line when the context nears its limit. On that
+    line, reach a safe point: no line delivered but not acted on, the plan and
+    `orchestration-decisions.md` current, no action half done. Then write
+    `scratchpad/current/orch-handover.md` (template `orch-handover.md`): the
+    current step and the next one; each agent in flight with
+    name/pane/session/topic/brief; the last line acted on, per kind; the open
+    cards and what each blocks; the intentions not yet done. Then call
+    `reset_self` (`mcp__team__reset_self`), and end your turn. The mod compacts
+    at the next idle moment. After the compact, reload this skill, then read
+    the decisions file, `orch-handover.md`, the plan file and
+    `orchestration-decisions.md`, then the reports newer than the handover, then
+    the open cards (the files `scratchpad/current/.team/questions/Q-*.json`
+    whose `status` is `open` or `assumed`; the `queue` tool works only in the
+    envoy session). `reset_self` refuses when `orch-handover.md` is missing or
+    older than 10 minutes. A `RESUME` line after a compact means do the reload
+    now.
 12. The orchestrator writes every own call to
     `scratchpad/current/orchestration-decisions.md` with context, so it can be
     audited. An own call becomes a card via `ask` instead when it is a one-way
@@ -377,6 +395,7 @@ creates and reads these; the overlay never does.
 | `decisions-<ticket>.md` | `team-init` (header from `templates/decisions.md`), then the `decide` tool | numbered, binding; one paragraph per decision `<n>. (<date>) <answer> Why: <rationale> Cards: <ids>.` |
 | `progress-<ticket>.md` | `team-init` (from `templates/progress.md`), then the orchestrator | the plan the `Team` pane shows |
 | `orchestration-decisions.md` | orchestrator | own calls that need no card, logged with context for audit (rule 12) |
+| `orch-handover.md` | orchestrator (from `templates/orch-handover.md`), overwritten at each reset | the state the orchestrator needs after a compact: step now and next, agents in flight, the last line acted on per kind, open cards, intentions not yet done. `reset_self` refuses when it is missing or older than 10 minutes (SKILL.md rule 11) |
 | `brief-<name>-<topic>.md` | `team-brief compose` | the assignment; `-revN` for follow-ups |
 | `reports/<name>-<topic>.md` | agent (via hook) | deliverable summary, deterministic path |
 | `.team/config.json` | `team-init`, `team-orch-start`, `/team-envoy` | `{team_id, ticket, orchestrator, envoy_session, envoy_tab, orchestrator_session, orchestrator_tab}`; `envoy_tab` only with `--envoy-pane`; `orchestrator_session` and `orchestrator_tab` once the orchestrator is up (`team-orch-start` writes both). The team mod also rewrites `orchestrator_session` or `envoy_session` when that session runs `/clear` (`hooks/mod/activation.ts`), and `/team-envoy` rewrites `envoy_session` to the session that runs it (`hooks/mod/reattach.ts`); nothing else follows a new session id. `/team-envoy` leaves `envoy_tab` as it is |
@@ -388,6 +407,7 @@ creates and reads these; the overlay never does.
 | `.team/delivered.json` | the orchestrator's tick | marks of delivered reports; `_decision` holds the last delivered decision number; `_line:<name>` holds the last REPORT line sent for that agent |
 | `.team/toasted.json` | the envoy's tick | ids of urgent cards seen or toasted; `stall:<ms>:<ids>` is the stall timer (since when the whole team has waited on that set of open cards), `stall-toast:<ids>` the set already toasted |
 | `.team/last-relay.txt` | the `relay` tool | the orchestrator session on the first line, then the last `RELAY` text sent to it |
+| `.team/inbox.log` | the orchestrator's mod (`session.receive` hook) | the cross-session messages the orchestrator session receives (RELAY lines and peer messages), one entry per message: an ISO timestamp, then the text; later lines of a text are indented by two spaces. The mod's own WATCH, REPORT, DECISION and RESUME lines are not in it (the mod submits those as prompts). Capped at about 200000 characters (the oldest lines go) |
 | `.team/next-action.json` | the envoy's tick | the last key sent or shown by `queue`, the snapshot at that send, the pending trigger and since when its key held, the last draft seen |
 | `.team/denials/<name>.json` | the worker's mod (`classic.PermissionDenied`) | the last auto-mode denial of that agent: tool, reason, time |
 
@@ -803,8 +823,17 @@ and a record whose `session` is the payload's `session_id` (a `/compact` keeps
 the id), it drops the record's `brief_sent_session`, so `brief_send` accepts
 the next brief; it leaves `watch_session`, so the no-report watch continues. On `source: resume` without `TEAM_NAME`
 (a herdr restore) and an index entry whose record names this session, it
-creates `.team/restored/<name>` for `/team:resurrect`. Anything else: exit 0,
-silently.
+creates `.team/restored/<name>` for `/team:resurrect`. On `source: compact`
+with `TEAM_NAME` equal to the `orchestrator` field of `.team/config.json`, it
+also prints SessionStart JSON
+(`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":...}}`)
+that tells the orchestrator to reload the `team-orchestration` skill, read the
+decisions file, `orch-handover.md`, the plan file and
+`orchestration-decisions.md`, then the reports newer than the handover, then
+the open cards (the files `scratchpad/current/.team/questions/Q-*.json` whose
+`status` is `open` or `assumed`). The text matches `COMPACT_INSTRUCTIONS` in `hooks/mod/reset.ts`;
+change both together. A worker, a `/clear` and a run without that config print
+nothing. Anything else: exit 0, silently.
 
 ### The team mod
 
@@ -1127,6 +1156,72 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   verdict, so `team-init` seeds `SendMessage` into `permissions.allow`
   (`.claude/settings.local.json`); an allow rule decides it without the
   classifier.
+- Orchestrator context reset (`hooks/mod/reset.ts`; decision 7 of the
+  done-list-too-long run). It compacts; it never clears the session. The mod
+  test mock (`claude-code/testing`) answers `$.clock`, `$.store`, `$.env` and
+  `$.session.append` only, so the logic reaches `$.session.usage` and
+  `$.session.compact` through a small port (`ResetPort`) that the tests fake.
+  - Nudge. Each tick of the orchestrator half reads
+    `$.session.usage({ breakdown: 'summary' })` (a local estimate, no request).
+    The limit is 70 percent (`AUTOCOMPACT_SHARE`) of `autoCompactThreshold`
+    when the engine reports one, else 60 percent (`WINDOW_SHARE`) of the
+    context `window`. When the last response's `tokens` reach the limit, the
+    mod adds one line to the bundle of the tick, through the same send path as
+    the other lines (a rejected send keeps it in `retryLines`):
+    `WATCH context <n> percent: reach a safe point, write
+    scratchpad/current/orch-handover.md, then call reset_self` (`<n>` is the
+    last response's `tokens` over the compact window that `/context` and the
+    auto-compact measure against, `breakdown.rawMaxTokens`, as a whole percent;
+    the model `window` stands in when the engine gives no breakdown. It is not
+    `context.percent`: that one is measured against the model window and read
+    23 where `/context` read 67 in the live test). It goes once per crossing: the nudge
+    arms again when the context falls below the limit and when a compact lands.
+    No context reading (a fresh or just compacted window) changes nothing; a
+    pending reset request holds the nudge back.
+  - Tool `reset_self` (`mcp__team__reset_self`, no input; registered in every
+    session, refuses outside the orchestrator session like `brief_send`). It
+    only records the request in module memory: a tool call runs inside a turn,
+    and `$.session.compact` rejects while a turn runs. It refuses, with the
+    reason, when `<run dir>/orch-handover.md` does not exist or is older than
+    10 minutes (`HANDOVER_MAX_AGE_MS`) at the request time.
+  - Compact. A later tick calls `$.session.compact({ instructions })` when a
+    request is pending and the gate is open: no main-loop turn runs
+    (`turn.start` and a main-loop `turn.complete` set the flag), `retryLines`
+    is empty, no send is in flight (`sendsInFlight`, a counter around
+    `sendLines`) and no compact is under way. A tick that sends lines sees its
+    own send in flight, so the compact waits for a later tick. The call is not
+    awaited (a compact takes a model call). A resolved call clears the request
+    and re-arms the nudge. A rejected call or a `{ skip }` keeps the request,
+    tries again at the next tick and writes the reason to the mod's error field
+    (`compact refused: ...` or `compact skipped: ...`).
+  - Resume line. No turn starts after a compact that ran while the session was
+    idle, so a resolved call of the mod's own compact sends one more line
+    through `sendLines` (a rejected send keeps it in `retryLines`):
+    `RESUME after compact: reload the team-orchestration skill, read the
+    decisions file, scratchpad/current/orch-handover.md, the plan file,
+    scratchpad/current/orchestration-decisions.md, the reports newer than the
+    handover and the open cards (the files
+    scratchpad/current/.team/questions/Q-*.json whose status is open or
+    assumed), then continue from the handover`. It goes once
+    per resolved compact. A skipped or rejected call sends none. An auto
+    compact and a typed `/compact` send none: they run inside or before a turn,
+    and the `session.compact` hook only adds instructions. The send is not
+    awaited, so a slow submit never holds the next compact back. The line
+    rests on the assumption of card Q-18 (the mod starts the turn itself); the
+    passive option stays open.
+  - Hook `session.compact` (orchestrator session, main loop only): appends
+    `COMPACT_INSTRUCTIONS` after any instructions already present, for every
+    trigger (`/compact`, the engine's auto compact, a plugin, `precompute`);
+    text that already holds it is not added twice. A compact that lands (any
+    trigger but `precompute`, which installs nothing) clears a pending request
+    and re-arms the nudge. A compact of a subagent (`agentId`) is left alone.
+  - Hook `session.receive` (orchestrator session, main loop only): appends each
+    cross-session message the orchestrator session receives to `.team/inbox.log`;
+    it never holds a delivery back. The mod's own WATCH, REPORT, DECISION and
+    RESUME lines are submitted prompts, not received messages, so the file does
+    not hold them.
+  - SessionStart output: see the report hook section.
+  - Not built: any `/clear` path, `$.command.run`, a herdr self-send.
 - Tool `ask` (`mcp__team__ask`; an agent whose record names this session, or the
   orchestrator; the envoy session only in a run with one session). Input: `context`, `question`, `options`
   (each `{ option, cost }`), `recommendation`, `blocks`, `door` (`one-way` or

@@ -1827,6 +1827,64 @@ class SessionStartHook(Base):
                           TEAM_NAME=None, TEAM_SCRATCH=None)
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
 
+    def setup_orchestrator_config(self):
+        d = self.sp(".team"); os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+             "orchestrator_session": "orch-1"}))
+
+    def test_compact_of_the_orchestrator_points_at_the_handover(self):
+        self.setup_orchestrator_config()
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="app-1-orch")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "SessionStart")
+        for part in ("team-orchestration", "orch-handover.md", "orchestration-decisions.md", "decisions file",
+                     "scratchpad/current/.team/questions/Q-*.json", "whose status is open or assumed"):
+            self.assertIn(part, out["additionalContext"])
+
+    def test_the_pointer_names_what_the_mod_instructions_name(self):
+        # The mod's COMPACT_INSTRUCTIONS and this pointer say the same: each file name of the pointer is in both.
+        self.setup_orchestrator_config()
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="app-1-orch")
+        context = json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"]
+        mod = read_text(os.path.join(ROOT, "hooks", "mod", "reset.ts"))
+        for part in ("team-orchestration", "orch-handover.md", "orchestration-decisions.md",
+                     "scratchpad/current/.team/questions/Q-*.json", "whose status is open or assumed"):
+            self.assertIn(part, context)
+            self.assertIn(part, mod)
+
+    def test_compact_of_a_worker_prints_nothing(self):
+        self.setup_orchestrator_config()
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="scout")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_clear_of_the_orchestrator_prints_nothing(self):
+        self.setup_orchestrator_config()
+        p = self.run_hook({"session_id": "orch-2", "source": "clear", "cwd": self.proj},
+                          TEAM_NAME="app-1-orch")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_compact_with_no_config_prints_nothing(self):
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="app-1-orch")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_compact_of_the_orchestrator_still_lifts_its_brief_mark(self):
+        self.setup_orchestrator_config()
+        self.write_record("app-1-orch", "orchestrator", session="orch-1")
+        rec = self.team_json("app-1-orch"); rec["brief_sent_session"] = "orch-1"
+        write_text(self.sp(".team", "app-1-orch.json"), json.dumps(rec))
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          TEAM_NAME="app-1-orch")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("brief_sent_session", self.team_json("app-1-orch"))
+        self.assertIn("orch-handover.md", p.stdout)
+
 
 class TeamResurrect(Base):
     def setup_team(self):

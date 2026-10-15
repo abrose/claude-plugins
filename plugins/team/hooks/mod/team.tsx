@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { TeamAgentRow, TeamCard, TeamPlan } from '../../types'
-import { envoyConfig, noteClear, sessionRole } from './activation'
+import { activeConfig, envoyConfig, noteClear, sessionRole } from './activation'
 import type { TeamConfig } from './activation'
 import { badgeText, freshStall, freshUrgent, pickStatus, stallIds, TOAST_MS, toastText } from './badge'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
+import { logReceived } from './inbox'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
 import { bySession, herdrAgents, herdrFocus } from './herdr'
@@ -23,6 +24,11 @@ import { reattach } from './reattach'
 import { RELAY_TOOL_SPEC, relayTool } from './relay'
 import { pickDecisions } from './decisions'
 import { numberMark } from './reports'
+import {
+  clearResetState, compactWhenIdle, noteMainTurn, nudgeLines, onCompacted, RESET_TOOL, RESET_TOOL_SPEC, RESUME_LINE,
+  resetSelf, withHandoverInstructions,
+} from './reset'
+import type { ResetPort } from './reset'
 import {
   agentRows, idleTabRows, newReportLines, readLedger, readRecords, stallWorkers, syncPanes, watchTick,
 } from './tick'
@@ -47,6 +53,9 @@ let ticking = false
 // Lines of a rejected send, in order. The next tick that sends puts them first. Memory only: a mod restart
 // loses them. A new session.start (a /clear) keeps them.
 let retryLines: string[] = []
+// Sends that were called and have not settled: a submit waits while the session is busy. A requested
+// compact waits for zero, so it never runs over a line that is queued but not yet taken.
+let sendsInFlight = 0
 // The status text this module set last; null until a session sets one, so its first tick always sets the line.
 let lastBadge: string | undefined | null = null
 
@@ -210,12 +219,39 @@ async function orchestratorHalf(
     }
   }
   if (failure !== null) await showNotSent($, failure, split)
+  // The context nudge goes through the same send path as the other lines, so a rejected send keeps it.
+  fresh = [...fresh, ...(await nudgeLines(resetPort($)))]
   // Lines of a rejected send go first. The list is emptied as the submit is called, so a later tick cannot send them twice.
   const lines = [...retryLines, ...fresh.filter(l => !retryLines.includes(l))]
-  if (lines.length === 0) return
-  retryLines = []
-  // Not awaited: the tick ends here, and the submit settles whenever the session takes the prompt.
-  void sendLines($, lines, split, failure !== null).catch(err => showNotSentSafely($, err, split))
+  if (lines.length > 0) {
+    retryLines = []
+    // Not awaited: the tick ends here, and the submit settles whenever the session takes the prompt.
+    void sendLines($, lines, split, failure !== null).catch(err => showNotSentSafely($, err, split))
+  }
+  // After the send, so a tick that sends lines sees the send in flight and compacts on a later one.
+  // Not awaited either: a compact takes a model call, and a tick must not hold the next ticks back for it.
+  void compactWhenIdle(resetPort($), { retryLines: retryLines.length, sendsInFlight }, text => update($, error, () => text),
+    // No turn follows an idle-time compact by itself, so one RESUME line starts it. It goes through `sendLines`:
+    // a rejected send lands in `retryLines` like any other line. Only this call sends it; the compact hook does not.
+    () => { void sendLines($, [RESUME_LINE], split).catch(err => showNotSentSafely($, err, split)) },
+  ).catch(() => {})
+}
+
+/** The two engine calls the reset needs, over `$`. The breakdown carries `autoCompactThreshold`. */
+function resetPort($: EngineInterface): ResetPort {
+  return {
+    figures: async () => {
+      // The plain call has no threshold; the summary breakdown is a local estimate, no request is made.
+      const usage = await $.session.usage({ breakdown: 'summary' }).catch(() => $.session.usage())
+      const { tokens, window, breakdown } = usage.context
+      // `rawMaxTokens` is the window /context measures against; `context.percent` is against the model window.
+      return { tokens, window, compactWindow: breakdown?.rawMaxTokens, autoCompactThreshold: breakdown?.autoCompactThreshold }
+    },
+    compact: async instructions => {
+      const done = await $.session.compact({ instructions })
+      return done.skip === undefined ? {} : { skip: done.skip }
+    },
+  }
 }
 
 async function showNotSent($: EngineInterface, err: unknown, split: boolean): Promise<void> {
@@ -239,25 +275,32 @@ async function showNotSentSafely($: EngineInterface, err: unknown, split: boolea
  * A good send clears the `prompt not sent` status line unless `keepError` is set.
  */
 async function sendLines($: EngineInterface, lines: string[], split: boolean, keepError = false): Promise<void> {
+  sendsInFlight += 1
   try {
-    await $.prompt.submit({ text: lines.join('\n') })
-  } catch (err) {
-    // Only a rejected submit fills the list.
-    retryLines = [...retryLines, ...lines.filter(l => !retryLines.includes(l))]
-    await showNotSent($, err, split)
-    return
+    try {
+      await $.prompt.submit({ text: lines.join('\n') })
+    } catch (err) {
+      // Only a rejected submit fills the list.
+      retryLines = [...retryLines, ...lines.filter(l => !retryLines.includes(l))]
+      await showNotSent($, err, split)
+      return
+    }
+    // The lines are sent. A throw from here on goes to the caller's catch and never fills the list.
+    // `keepError`: this tick shows an error of its own (a broken or unwritable delivered.json); a send of WATCH lines must not clear it.
+    if (split && !keepError && lastBadge?.startsWith(NOT_SENT)) await setStatus($, undefined)
+  } finally {
+    sendsInFlight -= 1
   }
-  // The lines are sent. A throw from here on goes to the caller's catch and never fills the list.
-  // `keepError`: this tick shows an error of its own (a broken or unwritable delivered.json); a send of WATCH lines must not clear it.
-  if (split && !keepError && lastBadge?.startsWith(NOT_SENT)) await setStatus($, undefined)
 }
 
 /** Test-only access to the module state; the mod itself never calls it. */
 export const testing = {
   reset: () => {
     retryLines = []
+    sendsInFlight = 0
     ticking = false
     lastBadge = null
+    clearResetState()
   },
   retryLines: () => [...retryLines],
   setBadge: (text: string | undefined | null) => {
@@ -376,6 +419,7 @@ export const register: Register = on => {
     lastBadge = null
     resetNextAction()
     resetHolds()
+    clearResetState()
     // Read once: the footer shows the copy that runs, the one under the plugin root.
     const found = pluginVersion(await io.readText(`${io.pluginRoot}/.claude-plugin/plugin.json`))
     await update($, version, () => found ?? '')
@@ -385,6 +429,7 @@ export const register: Register = on => {
       description: 'Make this session the envoy of the live team run; starts a new orchestrator if its session is gone',
     })
     await $.tool.register(BRIEF_TOOL_SPEC)
+    await $.tool.register(RESET_TOOL_SPEC)
     await $.tool.register(ASK_TOOL_SPEC)
     await $.tool.register(QUEUE_TOOL_SPEC)
     await $.tool.register(DECIDE_TOOL_SPEC)
@@ -402,6 +447,31 @@ export const register: Register = on => {
   on('tool.call', { tool: `mcp__team__${BRIEF_TOOL}` }, async ($, e) =>
     briefSend(makeIo($), String(e.name ?? ''), String(e.topic ?? '')))
 
+  // Only records the request: a tool call runs inside a turn, and a compact cannot. The tick compacts when idle.
+  on('tool.call', { tool: `mcp__team__${RESET_TOOL}` }, async $ => resetSelf(makeIo($)))
+
+  // Every compact of the orchestrator carries the handover instructions, Claude Code's own auto-compact too.
+  // A subagent's compact (`agentId`) and a `precompute` (nothing installed) are left alone.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined || !(await activeConfig(makeIo($)))) return next(e)
+    const done = await next({ ...e, instructions: withHandoverInstructions(e.instructions) })
+    if (done.skip === undefined && e.trigger !== 'precompute') onCompacted()
+    return done
+  })
+
+  // The orchestrator's inbox log: RELAY and peer lines leave no other trace. It never holds a delivery back.
+  on('session.receive', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      try {
+        const io = makeIo($)
+        if (await activeConfig(io)) await logReceived(io, e.text)
+      } catch {
+        // A log that cannot be written must not stop the delivery.
+      }
+    }
+    return next(e)
+  })
+
   on('tool.call', { tool: 'mcp__team__ask' }, async ($, e) => askTool(makeIo($), e))
 
   // A queue call shows the cards to the envoy: the next-action message does not repeat what it just read.
@@ -415,12 +485,16 @@ export const register: Register = on => {
   // The envoy is mid-turn between these two events: a next-action message waits for the end.
   on('turn.start', async ($, e, next) => {
     noteTurnStart(await $.clock.now())
+    noteMainTurn(true)
     return next(e)
   })
 
   // A subagent's turn ends with an `agentId`; only the main loop's end frees the envoy.
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) noteTurnEnd()
+    if (e.agentId === undefined) {
+      noteTurnEnd()
+      noteMainTurn(false)
+    }
     return next(e)
   })
 
