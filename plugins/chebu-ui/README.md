@@ -68,7 +68,8 @@ call that failed or was interrupted.
 The answer shows as markdown on a dark blue-gray background. There is no frame,
 so text copied from the answer carries no border characters. Text that a tool
 call followed in the same turn (narration such as "Let me read the file") shows
-dim and italic instead, so the answer stands out. Replies from before the
+dim and italic instead, so the answer stands out. Text before a question or a
+plan exit stays an answer, because the person reads it to decide. Replies from before the
 plugin loaded show on the background too.
 
 ## Development

@@ -43,6 +43,18 @@ describe('Reply style', () => {
     expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeDefined()
   })
 
+  // A question or a plan hands the turn to the person, so the text before it is the answer, not narration.
+  for (const tool of ['AskUserQuestion', 'ExitPlanMode']) {
+    test(`keeps the text before ${tool} bright, also after a later tool call`, async ($, on) => {
+      await start($, on)
+      await append($, assistant([{ type: 'text', text: 'The findings.' }, { type: 'tool_use', name: tool }]))
+      await append($, assistant([{ type: 'tool_use', name: 'Read' }]))
+      const ui = await mount($, 'AssistantMessage', { text: 'The findings.', isFirstOfReply: true })
+
+      expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeDefined()
+    })
+  }
+
   test('ignores what a subagent says', async ($, on) => {
     await start($, on)
     await append($, { agentId: 'a1', ...assistant([{ type: 'text', text: 'Sub.' }, { type: 'tool_use', name: 'Read' }]) })

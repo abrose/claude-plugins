@@ -13,7 +13,10 @@ const sent = atom({ plugin: 'chebu-ui', key: 'sent' } as const, [])
 const turnEnds = atom({ plugin: 'chebu-ui', key: 'turnEnds' } as const, [])
 const narration = atom({ plugin: 'chebu-ui', key: 'narration' } as const, [])
 
-type Block = { type?: string; text?: string }
+type Block = { type?: string; text?: string; name?: string }
+
+/** Tools that hand the turn to the person: the text before them is the answer they read, not narration. */
+const HAND_OFF = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
 /** A queued prompt stops waiting once it enters the conversation: as a new turn, or delivered into the running one. */
 async function deliver($: EngineInterface, has: (text: string) => boolean) {
@@ -69,6 +72,8 @@ export function registerNotes(on: On) {
       for (const block of e.message.content as Block[]) {
         if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
           pending.push(block.text.trim())
+        } else if (block.type === 'tool_use' && HAND_OFF.has(block.name ?? '')) {
+          pending = []
         } else if (block.type === 'tool_use' && pending.length > 0) {
           const said = pending
           pending = []
