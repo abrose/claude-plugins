@@ -390,17 +390,74 @@ describe('the stall flag in the envoy session', () => {
   }
   const NEEDLE = 'run waits on you: 1 open (Q-3)'
 
-  test('shows the text and toasts once after 2 min of waiting, and starts no turn', async ($, on) => {
+  test('shows the text and toasts once after 2 min of waiting; the line and toast start no turn', async ($, on) => {
     const w = await stalled($, on)
     await ticks(w, 8)
     expect(lines(w)).toEqual([])
     expect(w.toasts).toEqual([])
+    expect(w.submits).toEqual([])
     await ticks(w, 1)
     expect(w.statuses.at(-1)).toBe(NEEDLE)
     expect(w.toasts).toEqual([NEEDLE])
+    expect(w.submits).toEqual([])
     await ticks(w, 4)
     expect(w.toasts).toEqual([NEEDLE])
-    expect(w.submits).toEqual([])
+    expect(w.submits.filter((s: string) => !s.startsWith('NEXT-ACTION'))).toEqual([])
+  })
+
+  const pushes = (w: any): string[] => w.submits.filter((s: string) => s.startsWith('NEXT-ACTION'))
+
+  test('the next-action message about a stall waits for the same 2 min as the toast, and goes once', async ($, on) => {
+    const w = await stalled($, on)
+    w.agents[0].agent_status = 'working'
+    await ticks(w, 1)
+    w.agents[0].agent_status = 'idle'
+
+    await ticks(w, 8)
+    expect(lines(w)).toEqual([])
+    expect(pushes(w)).toEqual([])
+    await ticks(w, 3)
+
+    expect(w.statuses.at(-1)).toBe(NEEDLE)
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- Every agent waits on you')
+    await ticks(w, 8)
+    expect(pushes(w)).toHaveLength(1)
+  })
+
+  test('a stall that breaks before 2 min sends no message, and neither does its return', async ($, on) => {
+    const w = await stalled($, on)
+    w.agents[0].agent_status = 'working'
+    await ticks(w, 1)
+    w.agents[0].agent_status = 'idle'
+    await ticks(w, 4)
+    w.agents[0].agent_status = 'working'
+    await ticks(w, 1)
+    w.agents[0].agent_status = 'idle'
+
+    await ticks(w, 7)
+
+    expect(pushes(w)).toEqual([])
+  })
+
+  test('a stall that breaks before 2 min, then returns and holds for 2 more min, sends exactly one message', async ($, on) => {
+    const w = await stalled($, on)
+    w.agents[0].agent_status = 'working'
+    await ticks(w, 1)
+    w.agents[0].agent_status = 'idle'
+    await ticks(w, 4)
+    w.agents[0].agent_status = 'working'
+    await ticks(w, 1)
+    w.agents[0].agent_status = 'idle'
+
+    await ticks(w, 8)
+    expect(pushes(w)).toEqual([])
+    await ticks(w, 3)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- Every agent waits on you')
+    await ticks(w, 8)
+    expect(pushes(w)).toHaveLength(1)
   })
 
   test('the stall toast stays 30 s', async ($, on) => {

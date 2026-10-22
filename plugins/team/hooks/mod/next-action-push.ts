@@ -5,7 +5,9 @@ import { bySession, herdrDialog } from './herdr'
 import type { HerdrListing } from './herdr'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
-import { carryDialogs, changeList, draftHeld, nextActionDue, nextActionPrompt, nextActionView } from './next-action'
+import {
+  carryDialogs, changeList, draftHeld, nextActionDue, nextActionPrompt, nextActionView, triggersOf,
+} from './next-action'
 import type { DraftMark, NextActionInput, NextActionMarks, NextActionSnapshot } from './next-action'
 import type { TeamRecord } from './tick'
 
@@ -88,8 +90,8 @@ export async function gatherInput(io: Io, from: {
 /**
  * One envoy tick of the next-action message. The first tick of the role only writes the baseline. Later ticks
  * keep the burst and the draft marks, and submit a NEXT-ACTION prompt when one is due and the envoy is idle
- * and its prompt box holds no draft in use. The marks are written as sent before the submit; a rejected
- * submit puts them back, so the next tick tries again.
+ * and its prompt box holds no draft (an urgent message waits only for a draft that still changes). The marks
+ * are written as sent before the submit; a rejected submit puts them back, so the next tick tries again.
  */
 export async function pushNextAction(io: Io, teamdir: string, input: NextActionInput): Promise<void> {
   const fromInput = nextActionView(input)
@@ -104,7 +106,7 @@ export async function pushNextAction(io: Io, teamdir: string, input: NextActionI
   const view = { ...fromInput, snapshot: carryDialogs(fromInput.snapshot, read.snapshot) }
   lastView = { key: view.key, snapshot: view.snapshot }
   const stored: Stored = { ...read, draft: read.draft ?? null }
-  const draft = draftHeld(stored.draft, await io.draft())
+  const draft = draftHeld(stored.draft, await io.draft(), triggersOf(stored.snapshot, view.snapshot).urgent)
   const due = nextActionDue(stored, view, input.now)
   // A tick that sends nothing still fills an empty dialog of the stored snapshot with the one read now (fill only,
   // never replace; no trigger, so no message). The send tick of a worker's first block may have had a failed read.

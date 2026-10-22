@@ -226,20 +226,27 @@ describe('nextActionKey', () => {
     expect(nextActionKey(at12)).toBe(nextActionKey(at13))
   })
 
-  test('a done step changes the key, though the block text stays the same', () => {
+  test('a done step leaves the key alone: it is no trigger', () => {
     const running = plan({ running: [item('a', '>')], next: [item('d')] })
     const plain = input({ agents: [agent()], plan: running })
     const withDone = input({ agents: [agent()], plan: { ...running, done: [item('b (impl)', 'x')] } })
 
     expect(nextActionBlock(withDone)).toBe(nextActionBlock(plain))
-    expect(nextActionView(withDone).key).not.toBe(nextActionView(plain).key)
+    expect(nextActionView(withDone).key).toBe(nextActionView(plain).key)
   })
 
-  test('a new [?] step that mirrors an open card changes the key, though the block text stays the same', () => {
+  test('a new [?] step that mirrors an open card leaves the key alone: it is no trigger', () => {
     const plain = input({ agents: [agent()], cards: [card(3)] })
     const waiting = { ...plain, plan: plan({ waits: [item('answer Q-3 (orch)', '?')] }) }
 
     expect(nextActionBlock(waiting)).toBe(nextActionBlock(plain))
+    expect(nextActionView(waiting).key).toBe(nextActionView(plain).key)
+  })
+
+  test('a new [?] step that names no card changes the key, though the block text stays the same', () => {
+    const plain = input({ agents: [agent()], cards: [card(3)] })
+    const waiting = { ...plain, plan: plan({ waits: [item('manual test (tester)', '?')] }) }
+
     expect(nextActionView(waiting).key).not.toBe(nextActionView(plain).key)
   })
 
@@ -502,6 +509,72 @@ describe('a card about a permission prompt', () => {
   })
 })
 
+describe('triggersOf: a card about a permission prompt', () => {
+  const link = (more: object = {}) =>
+    ({ agent: 'app-1-tester', role: 'tester', session: 'sid-tester', pane: 'w2:p3', dialog: 'Allow Bash?', at: 0, ...more })
+  const blocked = (more: object = {}) => agent({ state: 'blocked', dialog: 'Allow Bash?', ...more })
+  const snap = (more: object = {}) => nextActionSnapshot(input(more))
+  const announced = () => snap({ agents: [blocked()] })
+
+  test('a card for a prompt the last message announced fires nothing', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3, { prompt: link() })] })
+
+    expect(triggersOf(announced(), now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('an urgent card for an announced prompt fires nothing either', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3, { urgent: true, prompt: link() })] })
+
+    expect(triggersOf(announced(), now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('the same prompt in other whitespace, or with an empty dialog, is the same prompt', () => {
+    const spaced = snap({ agents: [blocked()], cards: [card(3, { prompt: link({ dialog: ' Allow  Bash?\n' }) })] })
+    const noDialog = snap({ agents: [blocked()], cards: [card(3, { prompt: link({ dialog: '' }) })] })
+
+    expect(triggersOf(announced(), spaced).fired).toEqual([])
+    expect(triggersOf(announced(), noDialog).fired).toEqual([])
+  })
+
+  test('a card filed with the prompt itself, before any message announced it, fires with the prompt in one message', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3, { prompt: link() })] })
+
+    expect(triggersOf(snap({ agents: [agent({ state: 'idle' })] }), now)).toEqual({ fired: ['T1', 'T5'], urgent: true })
+  })
+
+  test('a card for another prompt than the announced one fires', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3, { prompt: link({ dialog: 'Read file / a.ts' }) })] })
+
+    expect(triggersOf(announced(), now).fired).toContain('T1')
+  })
+
+  test('a card for the prompt of another agent fires', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3, { prompt: link({ agent: 'app-1-other' }) })] })
+
+    expect(triggersOf(announced(), now)).toEqual({ fired: ['T1'], urgent: false })
+  })
+
+  test('a card with no prompt link fires while a worker is blocked', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3)] })
+
+    expect(triggersOf(announced(), now)).toEqual({ fired: ['T1'], urgent: false })
+  })
+
+  test('a plain card beside the prompt card still fires', () => {
+    const now = snap({ agents: [blocked()], cards: [card(3, { prompt: link() }), card(4, { question: 'Ship it?' })] })
+
+    expect(triggersOf(announced(), now)).toEqual({ fired: ['T1'], urgent: false })
+  })
+
+  test('the change list still names the card in the next message', () => {
+    const now = input({ agents: [blocked()], cards: [card(3, { prompt: link() })] })
+
+    expect(changeList(announced(), now)).toEqual([
+      'New card: Use real fixtures? (Q-3, from the tester (w2:p3))',
+    ])
+  })
+})
+
 describe('a new prompt in a worker that stays blocked', () => {
   const blockedOn = (dialog: string) => input({ agents: [agent({ state: 'blocked', dialog })] })
 
@@ -641,20 +714,59 @@ describe('nextActionDue', () => {
     expect(nextActionDue(marks, nextActionView(withCard), NOW + 120_000)).toEqual({ due: false, pending: null })
   })
 
-  test('a step done, a new [?] item and a stall each send, though the block text is the same', () => {
-    const running = { ...steady, plan: plan({ running: [item('a', '>')], next: [item('d')] }) }
-    const stepDone = { ...running, plan: plan({ done: [item('a', 'x')], next: [item('d')] }) }
-    const asked = { ...withCard, plan: plan({ waits: [item('answer Q-3 (orch)', '?')] }) }
+  test('a new [?] item that names no card and a stall each send, though the block text is the same', () => {
+    const asked = { ...withCard, plan: plan({ waits: [item('manual test (tester)', '?')] }) }
     const stalled = { ...withCard, stalled: true }
-    const cases = [[running, stepDone], [withCard, asked], [withCard, stalled]]
+    const cases = [[withCard, asked], [withCard, stalled]]
 
     for (const [before, after] of cases) {
-      expect(nextActionBlock(after)).toBe(nextActionBlock(before))
       const marks = marksFor(before)
       const first = nextActionDue(marks, nextActionView(after), NOW)
       const second = nextActionDue({ ...marks, pending: first.pending }, nextActionView(after), NOW + 15_000)
       expect([first.due, second.due]).toEqual([false, true])
     }
+  })
+
+  test('a step done sends nothing, though it changes the key', () => {
+    const running = { ...steady, plan: plan({ running: [item('a', '>')], next: [item('d')] }) }
+    const stepDone = { ...running, plan: plan({ done: [item('a', 'x')], next: [item('d')] }) }
+    const marks = marksFor(running)
+
+    expect(nextActionDue(marks, nextActionView(stepDone), NOW)).toEqual({ due: false, pending: null })
+    expect(nextActionDue(marks, nextActionView(stepDone), NOW + 120_000)).toEqual({ due: false, pending: null })
+  })
+
+  test('a new [?] item that names a card sends nothing', () => {
+    const asked = { ...withCard, plan: plan({ waits: [item('answer Q-3 (orch)', '?')] }) }
+    const marks = marksFor(withCard)
+
+    expect(nextActionDue(marks, nextActionView(asked), NOW + 120_000)).toEqual({ due: false, pending: null })
+  })
+
+  test('a step done while a card message waits for its quiet tick does not restart the wait', () => {
+    const planned = { ...withCard, plan: plan({ running: [item('a', '>')], next: [item('d')] }) }
+    const marks = marksFor({ ...steady, plan: planned.plan })
+    const first = nextActionDue(marks, nextActionView(planned), NOW)
+    const withStepDone = { ...planned, plan: plan({ done: [item('a', 'x')], next: [item('d')] }) }
+
+    const second = nextActionDue({ ...marks, pending: first.pending }, nextActionView(withStepDone), NOW + 15_000)
+
+    expect(nextActionBlock(withStepDone)).toBe(nextActionBlock(planned))
+    expect([first.due, second.due]).toEqual([false, true])
+  })
+
+  test('the change list still names a step done and a card-naming [?] item once a message goes for another reason', () => {
+    const before = nextActionSnapshot(steady)
+    const now = {
+      ...withCard,
+      plan: plan({ done: [item('a', 'x')], waits: [item('answer Q-3 (orch)', '?')] }),
+    }
+
+    expect(changeList(before, now)).toEqual([
+      'New card: Use real fixtures? (Q-3, from the tester (w2:p3))',
+      'Step waits on you: answer Q-3 (orch)',
+      'Step done: a',
+    ])
   })
 
   test('a card that closes after such a send sends nothing: no trigger is left over', () => {
@@ -674,34 +786,87 @@ describe('nextActionDue', () => {
   })
 })
 
+describe('triggersOf: plan edits', () => {
+  const snap = (more: object = {}) => nextActionSnapshot(input(more))
+
+  test('a step that flips to done fires nothing', () => {
+    const before = snap({ plan: plan({ running: [item('a', '>')], next: [item('d')] }) })
+    const now = snap({ plan: plan({ done: [item('a', 'x')], next: [item('d')] }) })
+
+    expect(triggersOf(before, now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('the last step flipping to done still fires T8, the run is finished', () => {
+    const before = snap({ plan: plan({ running: [item('a', '>')] }) })
+    const now = snap({ plan: plan({ done: [item('a', 'x')] }) })
+
+    expect(triggersOf(before, now)).toEqual({ fired: ['T8'], urgent: false })
+  })
+
+  test('a new [?] step that names a card fires nothing', () => {
+    const now = snap({ plan: plan({ waits: [item('answer Q-3 (orch)', '?')] }) })
+
+    expect(triggersOf(snap(), now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('a new [?] step that names no card fires T2', () => {
+    const now = snap({ plan: plan({ waits: [item('manual test (tester)', '?')] }) })
+
+    expect(triggersOf(snap(), now)).toEqual({ fired: ['T2'], urgent: false })
+  })
+
+  test('a new [?] step that names a card that is not open still names a card: fires nothing', () => {
+    const now = snap({ cards: [card(3, { status: 'answered', decision: 1 })], plan: plan({ waits: [item('answer Q-3 (orch)', '?')] }) })
+
+    expect(triggersOf(snap(), now)).toEqual({ fired: [], urgent: false })
+  })
+
+  test('a new card still fires T1 beside the plan edits', () => {
+    const now = snap({ cards: [card(3)], plan: plan({ done: [item('a', 'x')], waits: [item('answer Q-3 (orch)', '?')] }) })
+
+    expect(triggersOf(snap(), now)).toEqual({ fired: ['T1'], urgent: false })
+  })
+})
+
 describe('draftHeld', () => {
   test('no draft holds nothing and keeps no mark', () => {
-    expect(draftHeld(null, '')).toEqual({ mark: null, held: false })
+    expect(draftHeld(null, '', false)).toEqual({ mark: null, held: false })
+    expect(draftHeld(null, '', true)).toEqual({ mark: null, held: false })
   })
 
   test('a draft seen for the first time holds the message', () => {
-    expect(draftHeld(null, 'half a sent')).toEqual({ mark: { text: 'half a sent', still: 0 }, held: true })
+    expect(draftHeld(null, 'half a sent', false)).toEqual({ mark: { text: 'half a sent', still: 0 }, held: true })
+    expect(draftHeld(null, 'half a sent', true)).toEqual({ mark: { text: 'half a sent', still: 0 }, held: true })
   })
 
   test('a draft that changed since the last tick starts over', () => {
-    expect(draftHeld({ text: 'half', still: 1 }, 'half a sent')).toEqual({ mark: { text: 'half a sent', still: 0 }, held: true })
+    expect(draftHeld({ text: 'half', still: 1 }, 'half a sent', false))
+      .toEqual({ mark: { text: 'half a sent', still: 0 }, held: true })
+    expect(draftHeld({ text: 'half', still: 1 }, 'half a sent', true))
+      .toEqual({ mark: { text: 'half a sent', still: 0 }, held: true })
   })
 
-  test('a draft unchanged for two ticks is left behind: the message goes ahead', () => {
-    expect(draftHeld({ text: 'half', still: 0 }, 'half').held).toBe(true)
-    expect(draftHeld({ text: 'half', still: 1 }, 'half')).toEqual({ mark: { text: 'half', still: 2 }, held: false })
+  test('a draft left unchanged still holds a message that is not urgent, for as long as it stays', () => {
+    expect(draftHeld({ text: 'half', still: 1 }, 'half', false)).toEqual({ mark: { text: 'half', still: 2 }, held: true })
+    expect(draftHeld({ text: 'half', still: 400 }, 'half', false)).toEqual({ mark: { text: 'half', still: 401 }, held: true })
+  })
+
+  test('an urgent message goes ahead once the draft stayed the same for two ticks', () => {
+    expect(draftHeld({ text: 'half', still: 0 }, 'half', true).held).toBe(true)
+    expect(draftHeld({ text: 'half', still: 1 }, 'half', true)).toEqual({ mark: { text: 'half', still: 2 }, held: false })
   })
 })
 
 describe('nextActionPrompt', () => {
-  test('the header asks for every fact in own words, names the four facts, says always reply and never drop a fact, takes run facts from the block, the changes or a queue read only, allows queue and no other tool; block and change list follow', () => {
+  test('the header asks for a delta of at most 3 lines, drops no changed fact, keeps the rest of the block for a pull, links only when a new card changes the card under discussion, says always reply, takes run facts from the block, the changes or a queue read only, allows queue and no other tool; block and change list follow', () => {
     const prompt = nextActionPrompt('BLOCK', ['New card: Q? (Q-3)', 'Step done: a (impl)'])
 
     expect(prompt).toBe([
-      'NEXT-ACTION from the team mod. Tell the human every fact in the block below, in your own words: ' +
-        'where the run stands, what waits on them with its card id, what runs now with time spent, ' +
-        'what comes next. You may reorder and merge, add context from the changes listed, and link it to ' +
-        'the topic you and the human just discussed. Always reply; never drop a fact. ' +
+      'NEXT-ACTION from the team mod. Tell the human only what changed, in your own words and in at most ' +
+        '3 lines: what is new, what waits on them now with its card id, and one state line. ' +
+        'Drop no fact that changed. Do not retell the rest of the block: the full block comes only when ' +
+        'the human pulls. Link it to the topic you and the human just discussed only when a new card ' +
+        'changes the card under discussion. Always reply. ' +
         'Every run fact you tell comes from the block, the change list or a queue read; ' +
         'never add a run fact from elsewhere, and mark a guess as a guess. ' +
         'You may call queue. Call no other tool.',
@@ -712,6 +877,15 @@ describe('nextActionPrompt', () => {
       '- New card: Q? (Q-3)',
       '- Step done: a (impl)',
     ].join('\n'))
+  })
+
+  test('the header no longer asks for every fact, a retelling of the block, or a link to the last topic', () => {
+    const header = nextActionPrompt('BLOCK', []).split('\n---\n')[0]
+
+    expect(header).not.toContain('every fact in the block')
+    expect(header).not.toContain('never drop a fact')
+    expect(header).not.toContain('reorder and merge')
+    expect(header).toContain('at most 3 lines')
   })
 })
 
@@ -751,7 +925,7 @@ describe('in the envoy session', () => {
     expect(pushes(w)).toHaveLength(1)
   })
 
-  test('three plan steps flipped within one tick send one message', async ($, on) => {
+  test('three plan steps flipped within one tick send nothing; the next message for a card lists them', async ($, on) => {
     const w = await envoyTeam($, on)
     w.agents = [ORCH, scout()]
     writePlan(w, '## RUNNING\n- [>] step a\n- [>] step b\n- [>] step c\n## NEXT\n- [ ] step d\n')
@@ -759,6 +933,9 @@ describe('in the envoy session', () => {
 
     writePlan(w, '## DONE\n- [x] step a\n- [x] step b\n- [x] step c\n## NEXT\n- [ ] step d\n')
     await ticks(w, 5)
+    expect(pushes(w)).toEqual([])
+    fileCard(w, 3)
+    await ticks(w, 2)
 
     expect(pushes(w)).toHaveLength(1)
     expect(pushes(w)[0]).toContain('- Step done: step a\n- Step done: step b\n- Step done: step c')
@@ -777,15 +954,32 @@ describe('in the envoy session', () => {
     return w
   }
 
-  test('a step done sends one message although the block text stays the same', async ($, on) => {
+  test('a step done sends nothing; the next message for another reason lists it', async ($, on) => {
     const w = await working($, on, '## RUNNING\n- [>] step a\n## NEXT\n- [ ] step d\n')
 
     writePlan(w, '## DONE\n- [x] step a\n## NEXT\n- [ ] step d\n')
     await ticks(w, 4)
+    expect(pushes(w)).toEqual([])
+    fileCard(w, 3)
+    await ticks(w, 2)
 
     expect(pushes(w)).toHaveLength(1)
     expect(pushes(w)[0]).toContain('- Step done: step a')
     expect(pushes(w)[0]).toContain('Running now: the investigator (w1:p2) on fixtures')
+  })
+
+  test('a new [?] step that names a card sends nothing; one that names no card sends one message', async ($, on) => {
+    const w = await working($, on, '## RUNNING\n- [>] step a\n')
+
+    writePlan(w, '## WAITS ON YOU\n- [?] answer Q-3 (orch)\n## RUNNING\n- [>] step a\n')
+    await ticks(w, 4)
+    expect(pushes(w)).toEqual([])
+    writePlan(w, '## WAITS ON YOU\n- [?] answer Q-3 (orch)\n- [?] manual test (tester)\n## RUNNING\n- [>] step a\n')
+    await ticks(w, 4)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- Step waits on you: answer Q-3 (orch)')
+    expect(pushes(w)[0]).toContain('- Step waits on you: manual test (tester)')
   })
 
   test('a new [?] item sends one message while another card is open; the card closing after it sends nothing', async ($, on) => {
@@ -929,7 +1123,7 @@ describe('in the envoy session', () => {
     expect(pushes(w)).toEqual([])
   })
 
-  test('a draft that changed since the last tick holds the prompt; a draft left 30 s goes ahead', async ($, on) => {
+  test('a draft holds a message that is not urgent until it is cleared, however long it stays', async ($, on) => {
     const w = await quiet($, on)
     fileCard(w, 3)
     w.draft = 'half a sent'
@@ -937,11 +1131,84 @@ describe('in the envoy session', () => {
     await ticks(w, 2)
     expect(pushes(w)).toEqual([])
     w.draft = 'half a sentence'
+    await ticks(w, 40)
+    expect(pushes(w)).toEqual([])
+    w.draft = ''
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- New card:')
+  })
+
+  test('a draft that is sent holds nothing after: the held message goes at the next quiet tick', async ($, on) => {
+    const w = await quiet($, on)
+    fileCard(w, 3)
+    w.draft = 'my answer'
+    await ticks(w, 10)
+    expect(pushes(w)).toEqual([])
+
+    w.draft = ''
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(1)
+  })
+
+  test('a draft read that throws counts as no draft: a held message goes (fail open)', async ($, on) => {
+    const w = await quiet($, on)
+    fileCard(w, 3)
+    w.draft = 'half a sent'
+    await ticks(w, 4)
+    expect(pushes(w)).toEqual([])
+
+    // The world's `prompt.read` handler reads `w.draft.length`: a null draft makes `$.prompt.read()` reject.
+    w.draft = null
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- New card:')
+  })
+
+  test('a held message carries every change that came while the draft stayed', async ($, on) => {
+    const w = await quiet($, on)
+    w.draft = 'half a sent'
+    fileCard(w, 3)
+    await ticks(w, 4)
+    fileCard(w, 4, { question: 'Keep the old parser API?' })
+    await ticks(w, 4)
+    expect(pushes(w)).toEqual([])
+
+    w.draft = ''
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- New card: Use real fixtures or the snapshot? (Q-3')
+    expect(pushes(w)[0]).toContain('- New card: Keep the old parser API? (Q-4')
+  })
+
+  test('an urgent message still goes ahead once the draft stayed the same for 30 s', async ($, on) => {
+    const w = await quiet($, on)
+    w.draft = 'half a sent'
+    w.agents = [ORCH, scout('blocked')]
+
     await ticks(w, 2)
     expect(pushes(w)).toEqual([])
     await ticks(w, 1)
 
     expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- The investigator (w1:p2) is blocked on a permission prompt')
+  })
+
+  test('an urgent message waits while the draft keeps changing', async ($, on) => {
+    const w = await quiet($, on)
+    w.agents = [ORCH, scout('blocked')]
+    w.draft = 'a'
+    await ticks(w, 1)
+    w.draft = 'ab'
+    await ticks(w, 1)
+    w.draft = 'abc'
+    await ticks(w, 1)
+
+    expect(pushes(w)).toEqual([])
   })
 
   test('a blocked worker sends at the next tick, without the quiet wait', async ($, on) => {
@@ -1103,6 +1370,41 @@ describe('in the envoy session', () => {
     expect(pushes(w)).toHaveLength(1)
     expect(pushes(w)[0]).toContain(
       '- Auto mode denied the investigator (w1:p2) a tool call: mcp__gitlab__save_note')
+  })
+
+  test('a card about a prompt the last message announced sends no second message; it rides in the next one', async ($, on) => {
+    const w = await quiet($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+    w.agents = [ORCH, scout('blocked')]
+    await ticks(w, 1)
+    expect(pushes(w)).toHaveLength(1)
+    expect(pushes(w)[0]).toContain('- The investigator (w1:p2) is blocked on a permission prompt')
+
+    fileCard(w, 3, { prompt, urgent: true })
+    await ticks(w, 6)
+    expect(pushes(w)).toHaveLength(1)
+    fileCard(w, 4, { question: 'Keep the old parser API?' })
+    await ticks(w, 2)
+
+    expect(pushes(w)).toHaveLength(2)
+    expect(pushes(w)[1]).toContain('- New card: Keep the old parser API? (Q-4, from the investigator (w1:p2))')
+    expect(pushes(w)[1]).toContain('- New card: Use real fixtures or the snapshot? (Q-3, urgent, from the investigator (w1:p2))')
+  })
+
+  test('a new dialog in that worker still sends a message of its own', async ($, on) => {
+    const w = await quiet($, on)
+    const prompt = { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: DIALOG_TEXT, at: 0 }
+    w.agents = [ORCH, scout('blocked')]
+    await ticks(w, 1)
+    fileCard(w, 3, { prompt })
+    await ticks(w, 2)
+    expect(pushes(w)).toHaveLength(1)
+
+    w.dialogs.set('w1:p2', BASH_DIALOG_SNAPSHOT)
+    await ticks(w, 1)
+
+    expect(pushes(w)).toHaveLength(2)
+    expect(pushes(w)[1]).toContain(`- The investigator (w1:p2) shows a new permission prompt: ${BASH_DIALOG_TEXT}`)
   })
 
   test('a card the mod closed starts no message, and rides in the change list of the next one', async ($, on) => {

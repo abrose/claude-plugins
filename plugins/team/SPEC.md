@@ -268,8 +268,11 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 16. The orchestrator never speaks to the human. The envoy speaks when the
     human pulls and on every run change it judges relevant. It learns of a
     change from a pull or from the team mod's next-action message (a card
-    or step waits on the human, a step ends, the run goes idle on the
-    human, a worker is blocked or denied, the run ends). Keep the plan file
+    or a step with no card waits on the human, the run stays idle on the
+    human for 2 minutes, a worker is blocked or denied, the run ends). A
+    plan edit alone, a step done or a `[?]` step that names a card, sends no
+    message; it rides in the next one. The envoy tells only what changed, in
+    at most 3 lines; the full block comes on a pull. Keep the plan file
     current: the message reads it. Urgent cards and a stalled run also
     show as a status line and a 30 s toast in the envoy session.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
@@ -1035,19 +1038,30 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `prompt not sent` error, then the urgent badge, then the stall text; the
   toast goes out whichever line shows. The timer and the toast key are two
   extra marks in `.team/toasted.json` (see the state file table). Neither
-  starts a model turn.
+  starts a model turn. The next-action trigger "the run idle on the human"
+  reads the same timer: it fires once the 2 minutes have held (the stall
+  line shows), not at the first quiet tick, and a break before that fires
+  nothing.
 - Next-action message, envoy half. Each tick computes the next-action
   block (where the run stands, what waits on the human, what runs with its
   time since the brief, what comes next) and the list of changes since the
   last message, from the cards, the plan, the records and the agent rows.
   A message is due when a trigger fired since the last one (a new open
-  card, a new `[?]` or `[x]` plan item, the run idle on the human, a
-  worker blocked or denied by auto mode, the orchestrator gone, the run
-  finished), its key differs from the last one sent, and the key held for
-  one tick or 60 s passed. At most one message goes out per burst. The key
+  card, a new `[?]` plan item that names no card, the run idle on the
+  human for 2 minutes, a worker blocked or denied by auto mode, the
+  orchestrator gone, the run finished), its key differs from the last one
+  sent, and the key held for one tick or 60 s passed. At most one message
+  goes out per burst. A plan edit alone starts no message: a step that
+  flips to `[x]`, and a `[?]` step that names a card id (that step is the
+  card), appear only in the change list of the next message that fires for
+  another reason. A new open card about a worker's permission prompt
+  (`prompt_of`) starts no message when the last message already announced
+  that prompt (the worker was blocked on the same dialog, whitespace
+  collapsed, an empty dialog matching); the card shows in the Questions pane
+  and in the next change list. The key
   is the block without the minutes, plus every field a trigger reads (the
-  open card ids, the `[?]` and `[x]` items, the blocked and denied agents,
-  the stall, gone and finished marks). So a fired trigger always changes
+  open card ids, the `[?]` items that name no card, the blocked and denied
+  agents, the stall, gone and finished marks). So a fired trigger always changes
   the key, also when the block text stays the same, and a later change
   with no trigger of its own never carries an old trigger out late. A
   blocked worker, a denial or a gone orchestrator sends at the next tick.
@@ -1068,9 +1082,14 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   is that card and counts once. A card's filer shows by role and pane, the
   orchestrator's too, and the orchestrator never shows under "Running now".
   The mod submits it with `$.prompt.submit` as a framed `NEXT-ACTION`
-  prompt, only while the envoy is idle and its prompt box holds no draft
-  that changed in the last tick, and never in a session that holds the
-  orchestrator role. A closed or parked card starts no message; it shows in
+  prompt, only while the envoy is idle and its prompt box holds no draft,
+  and never in a session that holds the orchestrator role. A message that is
+  not urgent waits for as long as the box holds a draft, until the human
+  sends or clears it; the mod reads the box on each 15 s tick (`$.prompt.read`),
+  and the held changes go out in one message after that. An urgent message
+  (a blocked worker, a denial, the orchestrator gone, an urgent card) waits
+  only while the draft changes: one unchanged for 2 ticks (30 s) counts as
+  left behind. A closed or parked card starts no message; it shows in
   the next one's change list (`Card closed by the team mod, the prompt is
   gone: <question> (Q-<n>)` for a card the mod closed). While its prompt
   shows, an open card about a worker's prompt and that blocked worker count
@@ -1090,13 +1109,14 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   `.team/next-action.json`.
 - Next-action message, envoy side. The envoy learns of a run change only
   from a pull or from this message, and never starts a turn without an
-  input. On the message it always replies: it tells the human every fact of
-  the block in its own words (where the run stands, what waits on the human
-  with its card, what runs now with time spent, what comes next), links it
-  to the topic at hand, and calls no tool but `queue`. Every run fact it
-  tells comes from the block, the change list or a `queue` read; it adds
-  none from elsewhere and marks a guess as a guess. Cards stay the
-  decision channel.
+  input. On the message it always replies: it tells the human only what
+  changed, in its own words and in at most 3 lines (what is new, what waits
+  on the human now with its card, one state line), drops no fact that
+  changed, and retells the full block only on a pull. It links the delta to
+  the topic at hand only when a new card changes the card under discussion,
+  and calls no tool but `queue`. Every run fact it tells comes from the
+  block, the change list or a `queue` read; it adds none from elsewhere and
+  marks a guess as a guess. Cards stay the decision channel.
 - Stale prompt cards, envoy half. A card filed with `prompt_of` holds a
   `prompt` link (see the `ask` tool). Every tick, before the next-action
   message and also in a single-session run, the envoy half judges each open
