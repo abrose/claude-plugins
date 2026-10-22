@@ -23,7 +23,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/../lib/run-dir.sh"
 teamdir="$(eddy_run_dir)/.eddy"
 config="$teamdir/config.json"
-[ -f "$config" ] || { echo "no team run: $config is missing; start one with /eddy:init <ticket>" >&2; exit 1; }
+[ -f "$config" ] || { echo "no eddy run: $config is missing; start one with /eddy:init <ticket>" >&2; exit 1; }
 
 # One start at a time: mkdir is atomic, so of two starts (eddy-init, two /eddy-envoy
 # calls) only one takes the lock; the other exits 5. A start takes up to ~3 min

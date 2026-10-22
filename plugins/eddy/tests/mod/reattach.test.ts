@@ -63,7 +63,7 @@ describe('/eddy-envoy', () => {
     const w = world(on)
     await start($)
     const r = await reattach($)
-    expect(r.text).toBe('No team run in this repo: start one with /eddy:init <ticket>.')
+    expect(r.text).toBe('No eddy run in this repo: start one with /eddy:init <ticket>.')
     expect([...w.files.keys()]).toEqual([])
     expect(startRuns(w)).toEqual([])
   })

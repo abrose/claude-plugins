@@ -41,7 +41,7 @@ async function liveOrchestrator(io: Io, cfg: TeamConfig, agents: HerdrAgent[]): 
 /** Records this session as `envoy_session`, and starts a new orchestrator when its session is gone. */
 export async function reattach(io: Io): Promise<string> {
   const cfg = await readConfig(io)
-  if (!cfg) return 'No team run in this repo: start one with /eddy:init <ticket>.'
+  if (!cfg) return 'No eddy run in this repo: start one with /eddy:init <ticket>.'
   const id = await io.sessionId()
   // Rule 16: the orchestrator never talks to the human, so its session cannot be the envoy.
   if (cfg.orchestrator_session === id) {

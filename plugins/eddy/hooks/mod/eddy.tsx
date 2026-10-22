@@ -430,7 +430,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'eddy-overview', description: 'Show or hide the Eddy and Eddy questions tabs' })
     await $.command.register({
       name: 'eddy-envoy',
-      description: 'Make this session the envoy of the live team run; starts a new orchestrator if its session is gone',
+      description: 'Make this session the envoy of the live eddy run; starts a new orchestrator if its session is gone',
     })
     await $.tool.register(BRIEF_TOOL_SPEC)
     await $.tool.register(RESET_TOOL_SPEC)
@@ -521,7 +521,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'eddy-overview' }, async $ => {
     const cfg = await envoyConfig(makeIo($))
-    if (!cfg) return { text: 'No team run in this session.' }
+    if (!cfg) return { text: 'No eddy run in this session.' }
     // A pane that is open but not placed (a herdr pane under 144 columns) is not drawn, so it counts as closed.
     const open = (await $.ui.panes()).filter(p => p.isPlaced).map(p => p.id)
     if (open.includes(EDDY_PANE) || open.includes(QUESTIONS_PANE)) {

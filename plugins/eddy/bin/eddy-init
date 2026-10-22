@@ -2,7 +2,8 @@
 # Establish a team: team id, decisions and plan files, config, allowlist baseline,
 # envoy tab record. This session becomes the envoy; the orchestrator starts in a
 # worker tab.
-# Exit codes: 0 ok, 1 refused (this session runs a team run, live agents, a failed herdr agent
+# Exit codes: 0 ok, 1 refused (the eddy mod did not load, this session belongs to the team
+# workflow, live agents, a failed herdr agent
 # list in that check, worktree in the way, archive failed, a template unreadable, or a
 # decisions/plan file in the way or unwritable), 2 bad arguments (also a ticket
 # that is not a plain file-name part), 4 the envoy pane lookup failed or the
@@ -58,7 +59,7 @@ if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', os.environ['TICKET']):
 " || usage
 
 [ -n "${EDDY_SESSION_ID:-}" ] || {
-  echo "EDDY_SESSION_ID is unset: the eddy mod did not load in this session (Claude Code too old, or the eddy plugin disabled)" >&2
+  echo "EDDY_SESSION_ID is unset (the eddy mod did not load in this session): install it (README \"Install eddy\"), then start a new session or run /reload-plugins" >&2
   exit 1
 }
 min_version="2.1.292"
@@ -87,7 +88,7 @@ if isinstance(cfg, dict) and os.environ['SESSION'] in (cfg.get('envoy_session'),
     print(cfg.get('team_id') or '(no id)')
 ")"
   if [ -n "$team_hit" ]; then
-    echo "this session runs the team run $team_hit; start eddy in another session" >&2
+    echo "this session belongs to the team workflow $team_hit; start eddy in another session" >&2
     exit 1
   fi
 fi

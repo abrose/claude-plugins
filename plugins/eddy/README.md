@@ -1,7 +1,7 @@
 # eddy
 
 A spike: a copy of the team mod with card branches shown in the chat (fold) or in a pane, switchable.
-It runs only in sessions started with the eddy alias: `claude --plugin-dir <main checkout>/plugins/eddy`. Plain `claude` loads only the team mod.
+It installs once from the `abrose-plugins` marketplace (see "Install eddy") and loads in every session. In a session that no eddy run names, eddy stays inert.
 `SPEC.md` is the team spec under eddy names. The rest of this file is the team README under eddy names.
 
 **Orchestrator-plus-team-agents workflow for Claude Code with Herdr.** One
@@ -59,15 +59,27 @@ that build, not on older ones).
 The full protocol is the `eddy-orchestration` skill. Operational lessons are in
 its `references/lessons.md` (not auto-loaded).
 
-## Install
+## Install eddy
 
-Develop against a local checkout:
+Eddy installs from the `abrose-plugins` marketplace on GitHub, where it has its own entry named `eddy`. It loads in every session. You need no flag and no alias.
 
-```
-claude --plugin-dir plugins/eddy
-```
+1. Install it once, after the entry is pushed with `main`:
 
-Eddy has no marketplace entry. Use the local checkout only.
+   ```
+   claude plugin install eddy@abrose-plugins
+   ```
+
+2. Start a new session, or run `/reload-plugins` in a running one. If the eddy mod did not load, `eddy-init` refuses and tells you to do this.
+3. A change reaches sessions by a version bump of `plugins/eddy/.claude-plugin/plugin.json` plus a push of `main`. A running session keeps the code it loaded until `/reload-plugins` or a new session.
+4. To remove it:
+
+   ```
+   claude plugin uninstall eddy@abrose-plugins
+   ```
+
+In a session that no eddy run names, eddy stays inert. It opens no pane, sends no message and writes no file. Its tools, commands, skills and agents are all named `eddy`, so they cannot clash with the team plugin.
+
+To work on eddy itself, load a checkout for one session with `claude --plugin-dir plugins/eddy`. Workers started from that checkout get the same flag. Normal use needs neither.
 
 ## Commands
 
@@ -250,7 +262,7 @@ One file lives outside the run dir: the session index,
 (`{ "scratch", "name" }` per agent). It follows the Claude Code profile, and
 `eddy-start` passes its caller's `CLAUDE_CONFIG_DIR` to the agent's pane. The
 envoy's `eddy-init` starts the orchestrator, and the orchestrator starts the
-workers, so a team runs in one profile.
+workers, so an eddy run stays in one profile.
 
 ## Hook identity
 

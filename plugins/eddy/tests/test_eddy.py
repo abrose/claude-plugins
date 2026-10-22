@@ -3284,7 +3284,7 @@ class TeamOrchStart(Base):
     def test_without_a_run_refuses_and_starts_nothing(self):
         p = self.run_script("eddy-orch-start")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn("no team run:", p.stderr)
+        self.assertIn("no eddy run:", p.stderr)
         self.assertEqual(self.herdr_calls(), [])
 
     def test_starts_a_new_orchestrator_and_records_its_session_and_tab(self):
@@ -3522,7 +3522,7 @@ class EddyGuards(Base):
                 self.team_config(**{field: "orch-sid"})
                 p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-                self.assertIn("this session runs the team run app-1; start eddy in another session", p.stderr)
+                self.assertIn("this session belongs to the team workflow app-1; start eddy in another session", p.stderr)
                 self.assertFalse(os.path.exists(self.eddy_dir()))
                 self.assertFalse(os.path.exists(os.path.join(self.proj, ".claude")))
                 self.assertEqual(self.herdr_calls(), [])
@@ -3532,6 +3532,33 @@ class EddyGuards(Base):
         p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.eddy_dir("current", ".eddy", "config.json")))
+
+    def bad_team_config(self):
+        d = os.path.join(self.proj, "scratchpad", "current", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), "not json")
+
+    def test_init_goes_on_with_a_malformed_team_config(self):
+        self.bad_team_config()
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(self.eddy_dir("current", ".eddy", "config.json")))
+
+    def test_start_goes_on_with_a_malformed_team_config(self):
+        self.bad_team_config()
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:tG", "--cwd", self.proj,
+                            scenario="grid2", env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertNotIn("refusing", p.stderr)
+        self.assertTrue(any(c.startswith("agent start maker ") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_init_without_the_eddy_mod_names_the_install(self):
+        p = self.run_script("eddy-init", "APP-1", env_extra={**self.DEFAULT, "EDDY_SESSION_ID": None})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("install it", p.stderr)
+        self.assertIn("/reload-plugins", p.stderr)
+        self.assertNotIn("--plugin-dir", p.stderr)
 
     def test_init_team_id_starts_with_eddy(self):
         p = self.run_script("eddy-init", "noisy-envoy", env_extra=self.DEFAULT)
@@ -3569,6 +3596,19 @@ class EddyGuards(Base):
                 self.assertFalse([c for c in self.git_calls() if "eddy-eddy-" in c], self.git_calls())
 
 
+class MarketplaceEntry(unittest.TestCase):
+    """Eddy installs from the abrose-plugins marketplace on GitHub (decision 22): one entry in the repo root file."""
+
+    def test_github_marketplace_lists_eddy_once(self):
+        repo = os.path.dirname(os.path.dirname(ROOT))
+        market = json.loads(read_text(os.path.join(repo, ".claude-plugin", "marketplace.json")))
+        entries = [p for p in market["plugins"] if p.get("name") == "eddy"]
+        self.assertEqual(len(entries), 1, entries)
+        source = os.path.normpath(os.path.join(repo, entries[0]["source"]))
+        manifest = json.loads(read_text(os.path.join(source, ".claude-plugin", "plugin.json")))
+        self.assertEqual(manifest["name"], "eddy")
+
+
 class Coexist(Base):
     """Eddy runs beside the team mod: no name, folder, variable or index of the two may meet."""
     BANNED = ("mcp__team__", "TEAM_", "plugin: 'team'", "/team:", "team-overview", "team-envoy",
@@ -3579,6 +3619,11 @@ class Coexist(Base):
                # The guards read the team plugin's run config: the one place that knows its path.
                os.path.join("lib", "run-dir.sh")}
     GENERATED = os.path.join(".claude-plugin", "types")
+    # `team run` names the team plugin's run. Eddy's own texts say `eddy run`. The phrase stays
+    # only where the team plugin is named on purpose: the tool guard and the test files.
+    TEAM_RUN = "team run"
+    TEAM_RUN_ALLOWED = {os.path.join("hooks", "mod", "coexist.ts")}
+    TEST_FOLDER = "tests" + os.sep
 
     def test_rename_is_complete(self):
         hits = []
@@ -3587,10 +3632,14 @@ class Coexist(Base):
             for name in files:
                 path = os.path.join(folder, name)
                 rel = os.path.relpath(path, ROOT)
-                if rel in self.ALLOWED or rel.startswith(self.GENERATED):
+                if rel.startswith(self.GENERATED):
                     continue
                 text = read_text(path)
-                hits += ["%s: %s" % (rel, banned) for banned in self.BANNED if banned in text]
+                if rel not in self.ALLOWED:
+                    hits += ["%s: %s" % (rel, banned) for banned in self.BANNED if banned in text]
+                if self.TEAM_RUN in text.lower() and rel not in self.TEAM_RUN_ALLOWED \
+                        and not rel.startswith(self.TEST_FOLDER):
+                    hits.append("%s: %s" % (rel, self.TEAM_RUN))
         self.assertEqual(hits, [])
 
     def test_start_records_the_session_index_under_eddy(self):

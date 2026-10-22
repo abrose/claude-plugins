@@ -682,7 +682,7 @@ eddy-orch-start
 
 Starts the run's orchestrator and records it. `eddy-init` (steps 7 and 8) and
 the mod command `/eddy-envoy` both call it, so an orchestrator starts one way
-only. Needs `.eddy/config.json`, else exit 1 with `no team run: ...` and no
+only. Needs `.eddy/config.json`, else exit 1 with `no eddy run: ...` and no
 herdr call. In order:
 
 0. Take the start lock: `mkdir .eddy/orch-starting`, which is atomic, so of two
@@ -2019,16 +2019,54 @@ Decision 14 of the noisy-envoy run, and section 3 of the eddy plan.
 - `eddy-init` has no loose-entry sweep. It moves only its own run dir, and it
   neither moves nor warns about anything beside it.
 - `eddy-init` refuses (exit 1) a session that the team plugin's run names as its
-  envoy or its orchestrator: `this session runs the team run <team_id>; start eddy
-  in another session`. It only reads that run's config
+  envoy or its orchestrator: `this session belongs to the team workflow <team_id>;
+  start eddy in another session`. It only reads that run's config
   (`eddy_team_config` in `lib/run-dir.sh`) and writes nothing there.
 - Team ids start with `eddy-`: `eddy-<slug>`, `eddy-<slug>-2` to `-9`, then
   `eddy-<hash>`. An eddy agent name never meets a team agent name.
 - `eddy-start` also refuses a placement in the orchestrator tab or the envoy tab
-  of that team run (exit 2), as it does for its own run.
+  of the team plugin's run (exit 2), as it does for its own run.
 - `eddy-slice` puts `eddy-` in front of the branch once. It never changes the
   parent.
 - The deny hook for the team tools fails open: a throw in the eddy-active check
   lets the call go on (a test pins it).
 - In the team plugin, `team-init` keeps `scratchpad/eddy` out of its loose-entry
   sweep. This is the only change outside `plugins/eddy/`.
+
+## Increment 2026-10-22: installed for all sessions (eddy T3)
+
+Decisions 20 and 22 of the noisy-envoy run, and section R2-4 of the eddy plan
+(route R1).
+
+- Decision 20: eddy is installed for all sessions. No flag and no alias start it.
+  Every tool and artifact of the two plugins has its own name, so they cannot clash:
+  MCP tools, slash commands, agents, skills, hooks, environment variables, run
+  folders and files, pane and tab names. Eddy refuses the team tools in an eddy
+  session (T1). The mirror guards in the team plugin are step T3b.
+- Decision 22: eddy installs from an entry in the GitHub marketplace
+  `abrose-plugins`, not from a local marketplace. The entry is
+  `{"name": "eddy", "source": "./plugins/eddy", ...}` in the repo root
+  `.claude-plugin/marketplace.json`; a test pins that it is listed once. A change
+  reaches sessions by a version bump of `plugins/eddy/.claude-plugin/plugin.json`
+  plus a push. A running session keeps its loaded code until `/reload-plugins` or a
+  new session. The install commands run by hand (README "Install eddy").
+- Flag rule for workers. `lib/plugin-dir.sh` passes `--plugin-dir <plugin root>` to
+  the `claude` that `eddy-start` and `eddy-resurrect` launch only when the plugin
+  root is outside `<profile>/plugins/cache`. An installed eddy runs from
+  `plugins/cache/abrose-plugins/eddy/<version>`, so its workers get no flag. A dev
+  checkout (a worktree) gets the flag, so its workers load the same code. The rule
+  compares paths and needs no read of `installed_plugins.json`. Copied tests pin it.
+- `eddy-init` with an unset `EDDY_SESSION_ID` says the eddy mod did not load, and
+  names the fix: install eddy (README "Install eddy"), then start a new session or
+  run `/reload-plugins`. It does not mention `--plugin-dir`.
+- Eddy texts name the eddy run, not the team plugin's: `/eddy-overview` outside a run
+  answers `No eddy run in this session.`, `/eddy-envoy` outside a run answers
+  `No eddy run in this repo: ...`, `eddy-orch-start` fails with `no eddy run: ...`.
+  The two-word phrase for the team plugin's run stays only in `hooks/mod/coexist.ts`
+  (the team tool guard) and the test files. `test_rename_is_complete` bans it
+  everywhere else.
+- `eddy-init` refuses a session of the team plugin's run with
+  `this session belongs to the team workflow <team_id>; ...` (reworded from T2 so
+  that the text does not use that phrase).
+- An unreadable or malformed config of the team plugin's run never blocks eddy.
+  `eddy-init` and the tab guard of `eddy-start` go on, and a test pins each.

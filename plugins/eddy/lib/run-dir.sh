@@ -12,7 +12,7 @@
 # eddy_run_dir       prints the absolute, symlink-resolved run dir. An absolute EDDY_SCRATCH wins.
 # eddy_team_config   prints the path of the team plugin's run config, in the team plugin's default
 #                    run folder under the project root. Eddy only reads it, to refuse a session or
-#                    a tab that a team run owns. The file may not exist.
+#                    a tab that the team workflow owns. The file may not exist.
 eddy_project_root() {
   local common top
   common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""

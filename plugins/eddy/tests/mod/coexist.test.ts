@@ -45,6 +45,13 @@ describe('names the engine and the human see', () => {
     expect(w.commands).toEqual(['eddy-overview', 'eddy-envoy'])
   })
 
+  test('eddy-overview outside an eddy run says no eddy run', async ($, on) => {
+    world(on)
+    await start($)
+
+    expect(await $.command.run({ command: 'eddy-overview' } as never)).toMatchObject({ text: 'No eddy run in this session.' })
+  })
+
   test('opens the panes eddy and eddy-questions with eddy titles', async ($, on) => {
     const w = await envoyTeam($, on)
     await w.clock.advance(15000)

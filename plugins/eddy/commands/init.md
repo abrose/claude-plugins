@@ -1,19 +1,23 @@
 ---
-description: Start a team run for a ticket in this session: this session becomes the envoy, the orchestrator starts in a worker tab.
+description: Start an eddy run for a ticket in this session: this session becomes the envoy, the orchestrator starts in a worker tab.
 argument-hint: <ticket>
 ---
-Set up a team run for: $ARGUMENTS
+Set up an eddy run for: $ARGUMENTS
 
 Do these steps in order, and no operational work beyond them:
 
 1. Load the `eddy-orchestration` and `eddy-role-envoy` skills.
-2. Run `eddy-init <ticket> --envoy-pane <this pane id>`. It archives the previous
-   run to `scratchpad/eddy/.archive/`, then writes the
+2. Run `eddy-init <ticket> --envoy-pane <this pane id>`. The run lives in
+   `scratchpad/eddy/current`. Init archives only its own previous run, to
+   `scratchpad/eddy/.archive/`, and moves nothing else in `scratchpad`. Then it
+   writes the
    decisions file and the plan file from the plugin templates, the team id, the
    config (with this session's id as `envoy_session`), the safe permission baseline,
    records this tab, and starts the orchestrator in a worker tab. It refuses (exit 1)
-   when the team plugin's run already uses this session: tell the human to start eddy
-   in another session. If it exits with any code
+   when the team workflow already uses this session: tell the human to start eddy
+   in another session. It also refuses (exit 1) when the eddy mod did not load in this
+   session: tell the human to install eddy (README "Install eddy"), then start a new
+   session or run `/reload-plugins`. If it exits with any code
    except 4, report its stderr to the human, then stop: do not continue with the next
    steps. If it exits 4, the config and both files exist. Report its stderr to the
    human, then read it:
