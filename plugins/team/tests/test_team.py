@@ -1015,6 +1015,33 @@ class TeamStart(Base):
         self.guard_config(envoy_tab=None)
         self.assert_refused(self.guarded("--into-tab", "w1:tO"))
 
+    def eddy_config(self, text):
+        d = os.path.join(self.proj, "scratchpad", "eddy", "current", ".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), text)
+
+    def test_start_refuses_the_eddy_runs_tabs(self):
+        self.eddy_config(json.dumps({"envoy_tab": "w1:tE", "orchestrator_tab": "w1:tO"}))
+        for tab in ("w1:tE", "w1:tO"):
+            with self.subTest(tab=tab):
+                p = self.guarded("--into-tab", tab)
+                self.assert_refused(p)
+                self.assertIn("refusing --into-tab %s" % tab, p.stderr)
+                self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_start_with_new_tab_skips_the_eddy_tab_guard(self):
+        self.eddy_config(json.dumps({"envoy_tab": "w1:tE"}))
+        p = self.guarded("--new-tab")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(any(c.startswith("agent start maker ") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_start_goes_on_with_a_malformed_eddy_config(self):
+        self.eddy_config("not json")
+        p = self.guarded("--into-tab", "w1:tG")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(any(c.startswith("agent start maker ") for c in self.herdr_calls()), self.herdr_calls())
+
 
 class AgentFiles(unittest.TestCase):
     def frontmatter(self, name):
@@ -1036,6 +1063,13 @@ class AgentFiles(unittest.TestCase):
         fm = self.frontmatter("team-envoy")
         self.assertIn("- team-role-envoy", fm)
         self.assertTrue(os.path.exists(os.path.join(ROOT, "skills", "team-role-envoy", "SKILL.md")))
+
+    def test_orchestration_skill_names_only_team_tools(self):
+        line = ("Of the workflow tools, call only `mcp__team__*`. The `mcp__eddy__*` tools belong "
+                "to the eddy mod and refuse in a team run.")
+        lines = read_text(os.path.join(ROOT, "skills", "team-orchestration", "SKILL.md")).splitlines()
+        self.assertEqual(sum(l.strip() == line for l in lines), 1)
+        self.assertEqual([l for l in lines if "mcp__eddy__" in l], [l for l in lines if l.strip() == line])
 
 
 class TeamBriefCompose(Base):
@@ -2957,6 +2991,35 @@ class TeamInit(Base):
         self.assertTrue(os.path.exists(os.path.join(nested, ".git")))
         self.assertIn("❗️ worktree inside scratchpad: scratchpad/wt-feat - move it out with git worktree move", p.stderr)
         self.assertIn("❗️ worktree inside scratchpad: scratchpad/deep - move it out with git worktree move", p.stderr)
+
+    def eddy_config(self, text):
+        d = os.path.join(self.proj, "scratchpad", "eddy", "current", ".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), text)
+
+    def test_init_refuses_a_session_the_eddy_run_names(self):
+        for field in ("envoy_session", "orchestrator_session"):
+            with self.subTest(field=field):
+                self.eddy_config(json.dumps({"team_id": "eddy-app-1", field: "orch-sid"}))
+                p = self.run_script("team-init", "APP-1")
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("this session belongs to the eddy workflow eddy-app-1; start the team run in another session", p.stderr)
+                self.assertFalse(os.path.exists(self.sp()))
+                self.assertFalse(os.path.exists(os.path.join(self.proj, ".claude")))
+                self.assertEqual(self.herdr_calls(), [])
+
+    def test_init_goes_on_when_the_eddy_run_names_other_sessions(self):
+        self.eddy_config(json.dumps({"team_id": "eddy-app-1", "envoy_session": "sid-eddy-envoy",
+                                     "orchestrator_session": "sid-eddy-orch"}))
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".team", "config.json")))
+
+    def test_init_goes_on_with_a_malformed_eddy_config(self):
+        self.eddy_config("not json")
+        p = self.run_script("team-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".team", "config.json")))
 
     def test_sweep_leaves_the_eddy_folder_alone(self):
         # scratchpad/eddy holds the eddy plugin's runs, a different tool's files: team-init never archives it.

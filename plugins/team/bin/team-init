@@ -3,8 +3,9 @@
 # envoy tab record. This session becomes the envoy; the orchestrator starts in a
 # worker tab.
 # Exit codes: 0 ok, 1 refused (live agents, a failed herdr agent list in that
-# check, worktree in the way, archive failed, a template unreadable, or a
-# decisions/plan file in the way or unwritable), 2 bad arguments (also a ticket
+# check, worktree in the way, archive failed, a template unreadable, a
+# decisions/plan file in the way or unwritable, or this session belongs to the
+# eddy workflow), 2 bad arguments (also a ticket
 # that is not a plain file-name part), 4 the envoy pane lookup failed or the
 # orchestrator did not start. The team id choice ignores a herdr error.
 set -euo pipefail
@@ -71,6 +72,26 @@ try:
 except ValueError:
     sys.exit(1)
 " || { echo "Claude Code ${found_version:-unknown} is older than $min_version" >&2; exit 1; }
+
+# One session cannot be the envoy of two runs. Refuse when the eddy plugin's run names this
+# session as its envoy or its orchestrator. Team only reads that config. No config, an unreadable
+# or malformed one, or a config that names other sessions is no collision: go on.
+eddy_cfg="$(team_eddy_config)"
+if [ -f "$eddy_cfg" ]; then
+  eddy_hit="$(CFG="$eddy_cfg" SESSION="$TEAM_SESSION_ID" python3 -c "
+import json, os
+try:
+    cfg = json.load(open(os.environ['CFG']))
+except (OSError, ValueError):
+    cfg = {}
+if isinstance(cfg, dict) and os.environ['SESSION'] in (cfg.get('envoy_session'), cfg.get('orchestrator_session')):
+    print(cfg.get('team_id') or '(no id)')
+")"
+  if [ -n "$eddy_hit" ]; then
+    echo "this session belongs to the eddy workflow $eddy_hit; start the team run in another session" >&2
+    exit 1
+  fi
+fi
 
 # A previous team whose agents are still live needs its files: refuse and name
 # them. Otherwise the previous run and every loose scratchpad entry move to

@@ -189,6 +189,8 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
 
 ## Tools
 
+Of the workflow tools, call only `mcp__team__*`. The `mcp__eddy__*` tools belong to the eddy mod and refuse in a team run.
+
 The orchestrator drives agents through the plugin scripts on `PATH`:
 `team-id`, `team-init`, `team-start`, `team-brief`, `team-slice`,
 `team-status`, `team-resurrect`, `team-forget`, and the team mod's `brief_send` tool

@@ -122,20 +122,32 @@ fi
 # Tab guard (rule 15): the orchestrator runs alone in its tab, and the envoy's
 # tab is the human's. Refuse a placement into either, and a --pane that already
 # runs a live agent, before any herdr call creates or changes a pane. Without a
-# run config there is no team yet, so nothing to guard. One `herdr pane list`
+# run config there is no team yet, so nothing to guard. The eddy plugin's run is guarded
+# too: its orchestrator and envoy tabs, read from its run config, are never a place for
+# a team agent. One `herdr pane list`
 # read answers --split and --pane; if herdr cannot answer, refuse.
-if [ -f "$teamcfg" ] && [ -z "$new_tab" ]; then
+eddy_cfg="$(team_eddy_config)"
+if { [ -f "$teamcfg" ] || [ -f "$eddy_cfg" ]; } && [ -z "$new_tab" ]; then
   panes_json=""
   if [ -n "$pane" ] || [ -n "$split_pane" ]; then
     panes_json="$(herdr pane list 2>/dev/null)" || panes_json=""
   fi
-  PANES_JSON="$panes_json" INTO_TAB="$into_tab" PANE="$pane" SPLIT_PANE="$split_pane" python3 - "$teamcfg" <<'PY' || exit 2
+  PANES_JSON="$panes_json" INTO_TAB="$into_tab" PANE="$pane" SPLIT_PANE="$split_pane" PEER_CFG="$eddy_cfg" python3 - "$teamcfg" <<'PY' || exit 2
 import json, os, sys
-try:
-    cfg = json.load(open(sys.argv[1]))
-except Exception:
-    cfg = {}
+
+def load(path):
+    try:
+        cfg = json.load(open(path))
+    except Exception:
+        return {}
+    return cfg if isinstance(cfg, dict) else {}
+
+cfg = load(sys.argv[1])
 guarded = {cfg.get(k): k for k in ("orchestrator_tab", "envoy_tab") if cfg.get(k)}
+eddy = load(os.environ["PEER_CFG"])
+for k in ("orchestrator_tab", "envoy_tab"):
+    if eddy.get(k):
+        guarded.setdefault(eddy[k], "eddy " + k)
 into_tab, pane, split = os.environ["INTO_TAB"], os.environ["PANE"], os.environ["SPLIT_PANE"]
 
 def refuse(msg):

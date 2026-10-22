@@ -5,6 +5,7 @@ import { activeConfig, envoyConfig, noteClear, sessionRole } from './activation'
 import type { TeamConfig } from './activation'
 import { badgeText, freshStall, freshUrgent, pickStatus, stallIds, TOAST_MS, toastText } from './badge'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
+import { denyText, eddyToolName, teamActive } from './coexist'
 import { logReceived } from './inbox'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
@@ -504,6 +505,13 @@ export const register: Register = on => {
   on('tool.call', { tool: 'mcp__team__decide' }, async ($, e) => decideTool(makeIo($), e))
 
   on('tool.call', { tool: 'mcp__team__relay' }, async ($, e) => relayTool(makeIo($), e))
+
+  // The eddy plugin registers its tools in every session. In a team session point the caller at the team tool.
+  // No catch handler: a guard that throws lets the call go on, and the eddy plugin refuses a foreign caller itself.
+  on('tool.call', async ($, e, next) => {
+    const name = eddyToolName(e.tool)
+    return name !== null && (await teamActive(makeIo($))) ? { deny: denyText(name) } : next(e)
+  })
 
   // Auto mode denied a tool call: record it, and pass the event on unchanged (no `retry`).
   on('classic.PermissionDenied', async ($, e, next) => {

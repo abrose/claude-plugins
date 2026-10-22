@@ -2009,3 +2009,36 @@ live run, and the re-attach starts a new orchestrator when its session is gone.
   reuse a pane id. `team-orch-start` checks again under the lock that no
   orchestrator runs (exit 5, `an orchestrator runs (<pane>); left alone`).
   The stale-lock age is 600 s, twice `START_TIMEOUT_MS`.
+
+## Increment 2026-10-22: guards against the eddy mod (decisions 20, 21)
+
+The eddy plugin runs beside this one. Three guards and one skill line keep the
+two from acting in each other's runs. Team only reads eddy's files; the one
+path it knows is in `lib/run-dir.sh` (`team_eddy_config`):
+`<project root>/scratchpad/eddy/current/.eddy/config.json`.
+
+- Tool guard (decision 20): `hooks/mod/coexist.ts` and one unmatched
+  `tool.call` hook in `team.tsx`, after the `relay` hook. In a team-active
+  session (orchestrator or envoy role, or an agent record names the session) a
+  call to any tool with the eddy mod's tool prefix is denied (the prefix is in
+  `coexist.ts`). For the six names
+  team also has (`ask`, `queue`, `decide`, `relay`, `brief_send`, `reset_self`)
+  the deny names `mcp__team__<name>`; for any other eddy tool it says the tool
+  has no team equivalent. The match is a prefix, not a list. No `.catch`: a
+  throw lets the call go on (fail open).
+- `team-init` guard (decision 21): before anything is written, exit 1 with
+  `this session belongs to the eddy workflow <team_id>; start the team run in
+  another session` when eddy's config names `TEAM_SESSION_ID` as
+  `envoy_session` or `orchestrator_session`. A missing, unreadable or malformed
+  file, or other session ids, go on.
+- `team-start` guard (decision 21): eddy's `orchestrator_tab` and `envoy_tab`
+  join the guarded tabs. The team run's own entries win a clash. `--new-tab`
+  keeps skipping the guard. A malformed file does not stop the guard or the
+  start.
+- Skill line: `team-orchestration` "Tools" says to call only `mcp__team__*`
+  tools and that the eddy mod's tools refuse in a team run.
+
+Tests: `tests/mod/coexist.test.ts` (5), `test_team.py` `AgentFiles`
+(`test_orchestration_skill_names_only_team_tools`), `TeamInit` (3) and
+`TeamStart` (2). If eddy is dropped or merged into team, the path in
+`team_eddy_config` and these guards go with it.

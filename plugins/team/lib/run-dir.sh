@@ -8,6 +8,10 @@
 # team_project_root  prints the main checkout of the caller: the parent of the common git dir
 #                    (the same from a linked worktree), else the git top level, else $PWD.
 # team_run_dir       prints the absolute, symlink-resolved run dir. An absolute TEAM_SCRATCH wins.
+# team_eddy_config   prints the path of the eddy plugin's run config, in the eddy plugin's default
+#                    run folder under the project root. Team only reads it, to refuse a session or
+#                    a tab that the eddy workflow owns. The file may not exist. This is the only
+#                    place in the team plugin that knows the path.
 team_project_root() {
   local common top
   common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
@@ -25,4 +29,8 @@ team_run_dir() {
     *) scratch="$(team_project_root)/$scratch" ;;
   esac
   python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$scratch"
+}
+
+team_eddy_config() {
+  printf '%s\n' "$(team_project_root)/scratchpad/eddy/current/.eddy/config.json"
 }
