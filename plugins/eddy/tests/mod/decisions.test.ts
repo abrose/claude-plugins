@@ -43,7 +43,7 @@ describe('DECISION delivery in the tick', () => {
       { pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } },
       { pane_id: 'w1:p3', agent_status: 'idle', agent_session: { value: 'sid-maker' } },
     ]
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
     w.writeJson(`${w.team}/decisions/1.json`, entry(1))
     await w.clock.advance(15000)
     await w.clock.advance(15000)

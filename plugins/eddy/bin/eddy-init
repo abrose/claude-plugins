@@ -2,8 +2,8 @@
 # Establish a team: team id, decisions and plan files, config, allowlist baseline,
 # envoy tab record. This session becomes the envoy; the orchestrator starts in a
 # worker tab.
-# Exit codes: 0 ok, 1 refused (live agents, a failed herdr agent list in that
-# check, worktree in the way, archive failed, a template unreadable, or a
+# Exit codes: 0 ok, 1 refused (this session runs a team run, live agents, a failed herdr agent
+# list in that check, worktree in the way, archive failed, a template unreadable, or a
 # decisions/plan file in the way or unwritable), 2 bad arguments (also a ticket
 # that is not a plain file-name part), 4 the envoy pane lookup failed or the
 # orchestrator did not start. The team id choice ignores a herdr error.
@@ -17,11 +17,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/../lib/run-dir.sh"
 # A relative run dir belongs to the project root. Stand there, so that every path below
 # (run dir, .claude/settings.local.json, the orchestrator's cwd) is the same after a shell cd.
-case "${EDDY_SCRATCH:-.eddy-runs/current}" in
+case "${EDDY_SCRATCH:-scratchpad/eddy/current}" in
   /*) ;;
   *) cd "$(eddy_project_root)" ;;
 esac
-scratch="${EDDY_SCRATCH:-.eddy-runs/current}"
+scratch="${EDDY_SCRATCH:-scratchpad/eddy/current}"
 while [[ "$scratch" == */ ]]; do scratch="${scratch%/}"; done
 teamdir="$scratch/.eddy"
 
@@ -72,11 +72,31 @@ except ValueError:
     sys.exit(1)
 " || { echo "Claude Code ${found_version:-unknown} is older than $min_version" >&2; exit 1; }
 
-# A previous team whose agents are still live needs its files: refuse and name
-# them. Otherwise the previous run and every loose scratchpad entry move to
-# .archive/, out of sight of the new run. Check both the current-layout team
+# One session cannot be the envoy of two runs. Refuse when the team plugin's run names this
+# session as its envoy or its orchestrator. Eddy only reads that config. No config, or a config
+# that names other sessions, is no collision: go on.
+team_cfg="$(eddy_team_config)"
+if [ -f "$team_cfg" ]; then
+  team_hit="$(CFG="$team_cfg" SESSION="$EDDY_SESSION_ID" python3 -c "
+import json, os
+try:
+    cfg = json.load(open(os.environ['CFG']))
+except (OSError, ValueError):
+    cfg = {}
+if isinstance(cfg, dict) and os.environ['SESSION'] in (cfg.get('envoy_session'), cfg.get('orchestrator_session')):
+    print(cfg.get('team_id') or '(no id)')
+")"
+  if [ -n "$team_hit" ]; then
+    echo "this session runs the team run $team_hit; start eddy in another session" >&2
+    exit 1
+  fi
+fi
+
+# A previous eddy run whose agents are still live needs its files: refuse and name
+# them. Otherwise the previous run moves to .archive/ beside it, out of sight of the new
+# run. Nothing else in the parent folder moves. Check both the current-layout team
 # dir ($scratch/.eddy) and the old flat layout (<scratch root>/.eddy), since a
-# team started before .eddy-runs/current existed still keeps its state there.
+# run started before scratchpad/eddy/current existed still keeps its state there.
 check_live_team() {
   cfg="$1"
   [ -e "$cfg" ] || return 0
@@ -161,7 +181,7 @@ if os.path.isdir(scratch) and os.listdir(scratch):
         if os.path.basename(scratch) == "current":
             advice = "move it out with git worktree move"
         else:
-            advice = "set EDDY_SCRATCH to a run dir such as .eddy-runs/current"
+            advice = "set EDDY_SCRATCH to a run dir such as scratchpad/eddy/current"
         sys.exit("refusing to archive %s: %s holds a git worktree; %s" % (scratch, bad, advice))
     try:
         with open(os.path.join(scratch, ".eddy", "config.json")) as fh:
@@ -170,29 +190,15 @@ if os.path.isdir(scratch) and os.listdir(scratch):
     except (OSError, ValueError, AttributeError, TypeError):
         ticket = ""
     move(scratch, free_name("%s-%s" % (ticket.replace("/", "-") or "run", today)))
-
-if os.path.isdir(root) and os.path.basename(os.path.abspath(root)) == "scratchpad":
-    keep = {os.path.basename(scratch), ".archive"}
-    loose = None
-    for entry in sorted(os.listdir(root)):
-        src = os.path.join(root, entry)
-        if entry in keep:
-            continue
-        if holds_git(src):
-            print("❗️ worktree inside scratchpad: %s - move it out with git worktree move" % src,
-                  file=sys.stderr)
-            continue
-        loose = loose or free_name("loose-%s" % today)
-        move(src, os.path.join(loose, entry))
 PY
 
 mkdir -p "$teamdir"
 
 # Pick a team id whose <team_id>-* name namespace is free among live herdr
 # agents, so two teams (e.g. a prior run for the same ticket) never share names
-# and cross-poison each other. Start from the ticket slug, then numeric suffixes,
-# then random hashes.
-base="$("$here/eddy-id" for "$ticket")"
+# and cross-poison each other. Every id starts with eddy-, so an eddy name never meets a team
+# name. Start from the ticket slug, then numeric suffixes, then random hashes.
+base="eddy-$("$here/eddy-id" for "$ticket")"
 team_id="$(HERE="$here" BASE="$base" python3 - <<'PY'
 import os, json, subprocess
 
@@ -222,8 +228,8 @@ if choice is None:
     for _ in range(50):
         h = subprocess.run([os.path.join(here, "eddy-id"), "hash"],
                            capture_output=True, text=True).stdout.strip()
-        if h and free(h):
-            choice = h
+        if h and free("eddy-" + h):
+            choice = "eddy-" + h
             break
 print(choice or base)
 PY

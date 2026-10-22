@@ -56,7 +56,7 @@ describe('an absolute EDDY_SCRATCH', () => {
   test('wins and runs no git', async ($, on) => {
     const w = await team($, on)
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
-    w.env.set('EDDY_SCRATCH', '/proj/.eddy-runs/current')
+    w.env.set('EDDY_SCRATCH', '/proj/scratchpad/eddy/current')
     w.root = '/proj-wt'
     w.git = { common: '/wrong/.git', top: '/wrong' }
     w.runs.length = 0

@@ -122,7 +122,7 @@ PY
 
 # The orchestrator stands in the project root, as eddy-init puts it (its relative briefs and
 # run files resolve there). An absolute EDDY_SCRATCH keeps the caller's directory, as in eddy-init.
-case "${EDDY_SCRATCH:-.eddy-runs/current}" in
+case "${EDDY_SCRATCH:-scratchpad/eddy/current}" in
   /*) orch_cwd="$PWD" ;;
   *) orch_cwd="$(eddy_project_root)" ;;
 esac

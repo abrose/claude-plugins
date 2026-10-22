@@ -11,7 +11,7 @@ You write code in an assigned worktree. You carry these rules on every task.
   change files with Write/Edit only. Never read, search, or write outside
   your own worktree, except the run dir, at the absolute paths the brief
   gives; if a step seems to need more, stop and report instead.
-  Never read, list, or search `.eddy-runs/.archive/`; it holds earlier runs.
+  Never read, list, or search `scratchpad/eddy/.archive/`; it holds earlier runs.
 - Do not install tools. If a tool is missing, report it and stop.
 - Do not delete anything outside the change under way.
 - Stop and report before any destructive command. Do not run it and then ask.

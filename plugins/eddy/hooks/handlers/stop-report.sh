@@ -13,7 +13,7 @@ import os, json, datetime, sys, re, time, subprocess
 def run_dir(cwd):
     """The run dir. An absolute EDDY_SCRATCH wins. A relative one (or none) is the main checkout's,
     never the payload cwd's: the agent may have moved its cwd with a shell cd or into a worktree."""
-    scratch = os.environ.get("EDDY_SCRATCH") or ".eddy-runs/current"
+    scratch = os.environ.get("EDDY_SCRATCH") or "scratchpad/eddy/current"
     if os.path.isabs(scratch):
         return scratch
     def git(*args):

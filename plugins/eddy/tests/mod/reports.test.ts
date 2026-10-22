@@ -55,7 +55,7 @@ describe('mergeMarks', () => {
 describe('pickup in the tick', () => {
   test('an identical REPORT line written again is consumed, a changed one is sent', async ($, on) => {
     const w = await team($, on)
-    const path = `${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`
+    const path = `${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-dig.md`
     w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: '', pane: 'w1:p2', session: 'sid-scout' })
     w.writeJson(`${w.team}/delivered.json`, {})
     w.write(path, report('REPORT app-1-scout dig: done'))
@@ -78,8 +78,8 @@ describe('pickup in the tick', () => {
     w.writeJson(`${w.team}/app-1-maker.json`, { role: 'implementer', topic: 'build', brief: '', pane: 'w1:p3', session: 'sid-maker' })
     w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: '', pane: 'w1:p2', session: 'sid-scout' })
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: found it'))
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-maker-build.md`, report('REPORT app-1-maker build: green'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: found it'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-maker-build.md`, report('REPORT app-1-maker build: green'))
     await w.clock.advance(15000)
     expect(w.submits).toHaveLength(1)
     expect(w.submits[0]!.split('\n').sort()).toEqual([
@@ -92,7 +92,7 @@ describe('pickup in the tick', () => {
   test('first activation with old reports sends nothing', async ($, on) => {
     const w = await team($, on)
     w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: '', pane: 'w1:p2', session: 'sid-scout' })
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: old'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: old'))
     await w.clock.advance(15000)
     expect(w.submits).toEqual([])
     expect(w.json(`${w.team}/delivered.json`)).toHaveProperty('app-1-scout')
@@ -102,7 +102,7 @@ describe('pickup in the tick', () => {
     const w = await team($, on)
     w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: '', pane: 'w1:p2', session: 'sid-scout' })
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: found it'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: found it'))
     w.submitFails = true
     await w.clock.advance(15000)
     expect(w.submits).toEqual([])
@@ -114,7 +114,7 @@ describe('pickup in the tick', () => {
     const w = await team($, on)
     w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: '', pane: 'w1:p2', session: 'sid-scout' })
     await w.clock.advance(15000)
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: fresh'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-dig.md`, report('REPORT app-1-scout dig: fresh'))
     await w.clock.advance(15000)
     expect(w.submits).toEqual(['REPORT app-1-scout dig: fresh'])
   })

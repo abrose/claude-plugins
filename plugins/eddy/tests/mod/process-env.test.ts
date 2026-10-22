@@ -18,7 +18,7 @@ describe('subprocess environment', () => {
     await call($, 'brief_send', { name: 'app-1-scout', topic: 'dig' })
     expect(initOf(w, 'eddy-brief')).toMatchObject({
       cwd: '/proj',
-      env: { EDDY_SCRATCH: '/proj/.eddy-runs/current' },
+      env: { EDDY_SCRATCH: '/proj/scratchpad/eddy/current' },
     })
   })
 
@@ -30,7 +30,7 @@ describe('subprocess environment', () => {
     await call($, 'brief_send', { name: 'app-1-scout', topic: 'dig' })
     expect(initOf(w, 'eddy-brief')).toMatchObject({
       cwd: '/proj',
-      env: { EDDY_SCRATCH: '/proj/.eddy-runs/current' },
+      env: { EDDY_SCRATCH: '/proj/scratchpad/eddy/current' },
     })
   })
 

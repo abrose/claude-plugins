@@ -172,7 +172,7 @@ if os.path.isdir(scratch) and os.listdir(scratch):
     move(scratch, free_name("%s-%s" % (ticket.replace("/", "-") or "run", today)))
 
 if os.path.isdir(root) and os.path.basename(os.path.abspath(root)) == "scratchpad":
-    keep = {os.path.basename(scratch), ".archive"}
+    keep = {os.path.basename(scratch), ".archive", "eddy"}
     loose = None
     for entry in sorted(os.listdir(root)):
         src = os.path.join(root, entry)

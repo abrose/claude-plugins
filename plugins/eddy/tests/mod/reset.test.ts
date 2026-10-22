@@ -89,7 +89,7 @@ describe('nudge line through the port', () => {
     const port = portOf(figures)
     const first = await nudgeLines(port)
     expect(first).toEqual([
-      'WATCH context 38 percent: reach a safe point, write .eddy-runs/current/orch-handover.md, then call reset_self',
+      'WATCH context 38 percent: reach a safe point, write scratchpad/eddy/current/orch-handover.md, then call reset_self',
     ])
     expect(await nudgeLines(port)).toEqual([])
     figures.tokens = 5000
@@ -102,7 +102,7 @@ describe('nudge line through the port', () => {
     clearResetState()
     const live: ContextFigures = { tokens: 234000, window: 1000000, compactWindow: 350000, autoCompactThreshold: 317000 }
     expect(await nudgeLines(portOf(live))).toEqual([
-      'WATCH context 67 percent: reach a safe point, write .eddy-runs/current/orch-handover.md, then call reset_self',
+      'WATCH context 67 percent: reach a safe point, write scratchpad/eddy/current/orch-handover.md, then call reset_self',
     ])
   })
 
@@ -187,9 +187,9 @@ describe('idle gate', () => {
     expect(RESUME_LINE.startsWith('RESUME after compact: ')).toBe(true)
     expect(RESUME_LINE).not.toContain('\n')
     for (const part of [
-      'eddy-orchestration skill', 'decisions file', '.eddy-runs/current/orch-handover.md', 'the plan file',
-      '.eddy-runs/current/orchestration-decisions.md', 'the reports newer than the handover', 'the open cards',
-      '.eddy-runs/current/.eddy/questions/Q-*.json', 'whose status is open or assumed',
+      'eddy-orchestration skill', 'decisions file', 'scratchpad/eddy/current/orch-handover.md', 'the plan file',
+      'scratchpad/eddy/current/orchestration-decisions.md', 'the reports newer than the handover', 'the open cards',
+      'scratchpad/eddy/current/.eddy/questions/Q-*.json', 'whose status is open or assumed',
       'then continue from the handover',
     ]) expect(RESUME_LINE).toContain(part)
   })
@@ -245,7 +245,7 @@ describe('instructions', () => {
 
   test('name the card files and the field that marks a card open', async () => {
     // The queue tool refuses in the orchestrator session, so the text must say where the cards are.
-    expect(COMPACT_INSTRUCTIONS).toContain('.eddy-runs/current/.eddy/questions/Q-*.json')
+    expect(COMPACT_INSTRUCTIONS).toContain('scratchpad/eddy/current/.eddy/questions/Q-*.json')
     expect(COMPACT_INSTRUCTIONS).toContain('whose status is open or assumed')
   })
 })

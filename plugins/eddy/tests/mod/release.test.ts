@@ -119,7 +119,7 @@ describe('auto-release in the tick', () => {
   async function idleWorker($: any, on: any, idleMs = 30 * MIN) {
     const w = await team($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, REPORT, 1000)
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, REPORT, 1000)
     w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
     w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])
@@ -195,7 +195,7 @@ describe('auto-release in the tick', () => {
 
   test('an agent without a REPORT is never released', async ($, on) => {
     const w = await idleWorker($, on)
-    w.files.delete(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`)
+    w.files.delete(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`)
     await w.clock.advance(15000)
     await w.clock.advance(45 * MIN)
     expect(releases(w)).toEqual([])
@@ -204,7 +204,7 @@ describe('auto-release in the tick', () => {
 
   test('a report older than the brief does not count', async ($, on) => {
     const w = await idleWorker($, on)
-    w.write(`${w.cwd}/.eddy-runs/current/brief-app-1-scout-.md`, '# Brief\n', 5000)
+    w.write(`${w.cwd}/scratchpad/eddy/current/brief-app-1-scout-.md`, '# Brief\n', 5000)
     await w.clock.advance(15000)
     expect(releases(w)).toEqual([])
   })
@@ -263,7 +263,7 @@ describe('auto-release in the tick', () => {
     const w = await idleWorker($, on)
     // No tab_id on the agent: the own tab is then not in the exempt list, so only the own-session guard holds.
     w.writeJson(`${w.team}/app-1-me.json`, { role: 'implementer', topic: '', brief: '', pane: 'w1:p3', session: w.id })
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-me-.md`, REPORT, 1000)
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-me-.md`, REPORT, 1000)
     w.agents = [{ pane_id: 'w1:p3', agent_status: 'idle', agent_session: { value: w.id } }]
     w.panes = [{ pane_id: 'w1:p3', tab_id: 'w1:t3', agent_status: 'idle' }]
     w.writeJson(`${w.team}/tabs.json`, ['w1:t3'])
@@ -281,7 +281,7 @@ describe('auto-release in the tick', () => {
   test('the envoy session releases nothing', async ($, on) => {
     const w = await envoyTeam($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, REPORT, 1000)
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, REPORT, 1000)
     w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
     w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])

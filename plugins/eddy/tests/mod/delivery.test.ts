@@ -292,7 +292,7 @@ describe('a broken delivered.json does not stop the rest of the tick', () => {
   /** A reported, idle worker in a team tab whose release timer started `idleMs` before the first tick. */
   async function idleWorker($: any, on: any, idleMs: number) {
     const w = await team($, on)
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, 'REPORT app-1-scout x: done\n', 1000)
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, 'REPORT app-1-scout x: done\n', 1000)
     w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
     w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])

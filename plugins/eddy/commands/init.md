@@ -8,11 +8,12 @@ Do these steps in order, and no operational work beyond them:
 
 1. Load the `eddy-orchestration` and `eddy-role-envoy` skills.
 2. Run `eddy-init <ticket> --envoy-pane <this pane id>`. It archives the previous
-   run and every loose scratchpad entry to `.eddy-runs/.archive/`, then writes the
+   run to `scratchpad/eddy/.archive/`, then writes the
    decisions file and the plan file from the plugin templates, the team id, the
    config (with this session's id as `envoy_session`), the safe permission baseline,
-   records this tab, and starts the orchestrator in a worker tab. Pass on any
-   `worktree inside scratchpad` warning to the human. If it exits with any code
+   records this tab, and starts the orchestrator in a worker tab. It refuses (exit 1)
+   when the team plugin's run already uses this session: tell the human to start eddy
+   in another session. If it exits with any code
    except 4, report its stderr to the human, then stop: do not continue with the next
    steps. If it exits 4, the config and both files exist. Report its stderr to the
    human, then read it:
@@ -26,8 +27,8 @@ Do these steps in order, and no operational work beyond them:
    - Any other exit 4 means the orchestrator did not start. Tell the human so. Then
      continue with step 3 and skip step 4.
 3. Run `eddy-status` to write the first roster. Tell the human the paths of the
-   two files `eddy-init` wrote: `${EDDY_SCRATCH:-.eddy-runs/current}/decisions-<ticket>.md`
-   and `${EDDY_SCRATCH:-.eddy-runs/current}/progress-<ticket>.md`.
+   two files `eddy-init` wrote: `${EDDY_SCRATCH:-scratchpad/eddy/current}/decisions-<ticket>.md`
+   and `${EDDY_SCRATCH:-scratchpad/eddy/current}/progress-<ticket>.md`.
 4. Tell the human, in two sentences, that the team is up and that the `Eddy` and
    `Eddy questions` tabs show it (`/eddy-overview` when the pane is too narrow). Ask what
    the orchestrator should start with, and send the answer with `relay`.

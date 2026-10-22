@@ -35,7 +35,7 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
 2. The human decides, through the envoy. A card recommends one option with one
    sentence of reasoning. A card stands on its own: a reader who saw nothing
    else in the conversation can decide from it.
-3. Briefs are files in `.eddy-runs/current/`. Prompts are one line pointing at the brief.
+3. Briefs are files in `scratchpad/eddy/current/`. Prompts are one line pointing at the brief.
    Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
@@ -89,7 +89,7 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     `WATCH context <n> percent` line when the context nears its limit. On that
     line, reach a safe point: no line delivered but not acted on, the plan and
     `orchestration-decisions.md` current, no action half done. Then write
-    `.eddy-runs/current/orch-handover.md` (template `orch-handover.md`): the
+    `scratchpad/eddy/current/orch-handover.md` (template `orch-handover.md`): the
     current step and the next one; each agent in flight with
     name/pane/session/topic/brief; the last line acted on, per kind; the open
     cards and what each blocks; the intentions not yet done. Then call
@@ -97,13 +97,13 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     at the next idle moment. After the compact, reload this skill, then read
     the decisions file, `orch-handover.md`, the plan file and
     `orchestration-decisions.md`, then the reports newer than the handover, then
-    the open cards (the files `.eddy-runs/current/.eddy/questions/Q-*.json`
+    the open cards (the files `scratchpad/eddy/current/.eddy/questions/Q-*.json`
     whose `status` is `open` or `assumed`; the `queue` tool works only in the
     envoy session). `reset_self` refuses when `orch-handover.md` is missing or
     older than 10 minutes. A `RESUME` line after a compact means do the reload
     now.
 12. The orchestrator writes every own call to
-    `.eddy-runs/current/orchestration-decisions.md` with context, so it can be
+    `scratchpad/eddy/current/orchestration-decisions.md` with context, so it can be
     audited. An own call becomes a card via `ask` instead when it is a one-way
     door, has more than about 1 h of rework, falls outside the brief's or a
     decision's scope, or touches permissions. The human's decisions stay in
@@ -160,8 +160,8 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
     mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING
     and NEXT headings. Update it after every REPORT, before every
     `brief_send`, and whenever a card asks the human to act.
-18. The run's files live only in `.eddy-runs/current/`. Never read, list or
-    search `.eddy-runs/.archive/` unless the human asks about an earlier run.
+18. The run's files live only in `scratchpad/eddy/current/`. Never read, list or
+    search `scratchpad/eddy/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `eddy-slice`, which uses the repo's own
     worktree tooling from `.claude/team/project.yaml`. If it refuses for lack
     of an overlay, ask the human how this repo makes worktrees. Never run

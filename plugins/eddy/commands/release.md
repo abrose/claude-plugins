@@ -36,7 +36,7 @@ named agent (or every agent when `all`):
 4. When releasing `all`, also remove `.eddy/tabs.json`, `.eddy/watch-state.json`,
    `.eddy/layout-flags.json`, `.eddy/toasted.json`, `.eddy/next-action.json`,
    `.eddy/denials/` and `.eddy/last-relay.txt`, all under
-   `${EDDY_SCRATCH:-.eddy-runs/current}`. Keep `.eddy/delivered.json`:
+   `${EDDY_SCRATCH:-scratchpad/eddy/current}`. Keep `.eddy/delivered.json`:
    its `_decision` mark stops the orchestrator from getting every DECISION line
    of the run again. The eddy mod stays active in the envoy session until
    `/eddy:init` starts another run.

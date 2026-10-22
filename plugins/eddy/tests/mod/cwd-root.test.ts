@@ -23,7 +23,7 @@ describe('run directory after a cd', () => {
 
   test('decide still writes the decisions file under the project root', async ($, on) => {
     const w = await envoyTeam($, on)
-    const decisions = `${w.root}/.eddy-runs/current/decisions-APP-1.md`
+    const decisions = `${w.root}/scratchpad/eddy/current/decisions-APP-1.md`
     w.write(decisions, '# Decisions APP-1\n')
     w.writeJson(`${w.team}/questions/Q-1.json`, {
       id: 'Q-1', n: 1, from: 'app-1-scout', tag: 'general', context: 'c', question: 'q?',

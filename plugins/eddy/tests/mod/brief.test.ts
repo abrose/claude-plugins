@@ -11,7 +11,7 @@ describe('brief_send', () => {
     const r = await call($, { name: 'app-1-scout', topic: 'dig' })
     expect(r).toMatchObject({ result: 'app-1-scout: idle' })
     expect(w.sends).toEqual([{ to: 'sid-scout',
-                               text: 'Read .eddy-runs/current/brief-app-1-scout-dig.md and execute it fully.' }])
+                               text: 'Read scratchpad/eddy/current/brief-app-1-scout-dig.md and execute it fully.' }])
     expect(w.json(`${w.team}/app-1-scout.json`).brief_sent_session).toBe('sid-scout')
     expect(w.json(`${w.team}/app-1-scout.json`).watch_session).toBe('sid-scout')
   })

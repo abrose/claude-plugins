@@ -15,7 +15,7 @@ export const RESET_TOOL_SPEC = {
   name: RESET_TOOL,
   description:
     'Ask the eddy mod to compact your context at the next idle moment. Call it only at a safe point, ' +
-    `after you wrote .eddy-runs/current/${HANDOVER_FILE}. It refuses when that file is missing or stale.`,
+    `after you wrote scratchpad/eddy/current/${HANDOVER_FILE}. It refuses when that file is missing or stale.`,
   inputSchema: { type: 'object', properties: {} },
 }
 
@@ -25,7 +25,7 @@ export const RESET_TOOL_SPEC = {
  * and `status` is `open`, or `assumed` for a parked card (`queueGroups` in hooks/mod/cards.ts lists both).
  */
 const OPEN_CARDS =
-  'the open cards (the files .eddy-runs/current/.eddy/questions/Q-*.json whose status is open or assumed)'
+  'the open cards (the files scratchpad/eddy/current/.eddy/questions/Q-*.json whose status is open or assumed)'
 
 /**
  * What the summary of an orchestrator compact must keep, and what the orchestrator reads afterwards.
@@ -34,7 +34,7 @@ const OPEN_CARDS =
 export const COMPACT_INSTRUCTIONS =
   'You are the team orchestrator. Keep the ticket of this run, the agents in flight (name, pane, session, topic, brief) ' +
   'and the open cards. After the compact: reload the eddy-orchestration skill, read the decisions file, then ' +
-  `.eddy-runs/current/${HANDOVER_FILE}, the plan file and .eddy-runs/current/orchestration-decisions.md, then the reports ` +
+  `scratchpad/eddy/current/${HANDOVER_FILE}, the plan file and scratchpad/eddy/current/orchestration-decisions.md, then the reports ` +
   `newer than ${HANDOVER_FILE}, then ${OPEN_CARDS}.`
 
 /**
@@ -43,12 +43,12 @@ export const COMPACT_INSTRUCTIONS =
  */
 export const RESUME_LINE =
   'RESUME after compact: reload the eddy-orchestration skill, read the decisions file, ' +
-  `.eddy-runs/current/${HANDOVER_FILE}, the plan file, .eddy-runs/current/orchestration-decisions.md, ` +
+  `scratchpad/eddy/current/${HANDOVER_FILE}, the plan file, scratchpad/eddy/current/orchestration-decisions.md, ` +
   `the reports newer than the handover and ${OPEN_CARDS}, then continue from the handover`
 
 /** The WATCH line the mod sends once per crossing of the nudge limit. */
 export const nudgeLine = (percent: number) =>
-  `WATCH context ${percent} percent: reach a safe point, write .eddy-runs/current/${HANDOVER_FILE}, then call ${RESET_TOOL}`
+  `WATCH context ${percent} percent: reach a safe point, write scratchpad/eddy/current/${HANDOVER_FILE}, then call ${RESET_TOOL}`
 
 /** The context figures of `$.session.usage({ breakdown })` that the nudge reads. */
 export type ContextFigures = {

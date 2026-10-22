@@ -17,7 +17,7 @@ overlay="${EDDY_OVERLAY:-.claude/team}"
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
 scratch="$(eddy_run_dir)"
 # The run dir as an agent standing in the project root names it (the form prepare records).
-scratch_ref="${EDDY_SCRATCH:-.eddy-runs/current}"
+scratch_ref="${EDDY_SCRATCH:-scratchpad/eddy/current}"
 teamdir="$scratch/.eddy"
 
 json_get() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',''))"; }

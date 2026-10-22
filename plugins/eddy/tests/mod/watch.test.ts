@@ -162,7 +162,7 @@ describe('quiet since the last stop', () => {
 
   test('a brief newer than the stop belongs to a new task', async ($, on) => {
     const w = await stoppedWorker($, on)
-    w.write(`${w.cwd}/.eddy-runs/current/brief-app-1-scout-.md`, '# Brief\n', 1_005_000)
+    w.write(`${w.cwd}/scratchpad/eddy/current/brief-app-1-scout-.md`, '# Brief\n', 1_005_000)
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(flags(w)).toEqual([])
   })
@@ -268,7 +268,7 @@ describe('watch in the tick', () => {
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(w.submits).toEqual([
-      'WATCH app-1-scout: idle, no report - read /proj/.eddy-runs/current/reports/app-1-scout-.md',
+      'WATCH app-1-scout: idle, no report - read /proj/scratchpad/eddy/current/reports/app-1-scout-.md',
     ])
   })
 
@@ -279,7 +279,7 @@ describe('watch in the tick', () => {
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(w.submits).toEqual([
-      'WATCH app-1-scout: idle, no report - read /proj/.eddy-runs/current/reports/app-1-scout-.md',
+      'WATCH app-1-scout: idle, no report - read /proj/scratchpad/eddy/current/reports/app-1-scout-.md',
     ])
   })
 
@@ -287,7 +287,7 @@ describe('watch in the tick', () => {
     const w = await team($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
     markCompacted(w)
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, 'REPORT app-1-scout : done\n')
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, 'REPORT app-1-scout : done\n')
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(w.submits.filter(s => s.includes('no report'))).toEqual([])
@@ -330,7 +330,7 @@ describe('watch in the tick', () => {
       w.writeJson(`${w.team}/delivered.json`, {})
       w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])
       w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: 'b', pane: 'w1:p2', session: 'sid-scout' })
-      w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`, 'REPORT app-1-scout dig: done\n', 1000)
+      w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-dig.md`, 'REPORT app-1-scout dig: done\n', 1000)
       w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
       w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
       return w
@@ -367,7 +367,7 @@ describe('watch in the tick', () => {
     const w = await team($, on)
     markBriefed(w)
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, 'still waiting on two subagents\n')
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, 'still waiting on two subagents\n')
     w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
     for (let i = 0; i < 9; i++) await w.clock.advance(15000)
     expect(w.submits.filter(s => s.includes('no report'))).toHaveLength(1)
@@ -495,7 +495,7 @@ describe('watch in the tick', () => {
       { pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } },
       { pane_id: 'w1:p3', agent_status: 'idle', agent_session: { value: 'sid-maker' } },
     ]
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
     await w.clock.advance(15000)
     expect(w.submits).toEqual([
       `REPORT app-1-maker build: green\nWATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}${HINT}`,

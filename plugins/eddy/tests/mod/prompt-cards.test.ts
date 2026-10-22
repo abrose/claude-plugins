@@ -97,7 +97,7 @@ describe('a linked card in the envoy session', () => {
   const ORCH = { pane_id: 'w1:p1', agent_status: 'idle', agent_session: { value: 'sid-orch-worker' } }
   const scout = (state: string) => ({ pane_id: 'w1:p2', agent_status: state, agent_session: { value: 'sid-scout' } })
   const HEAD = '# Decisions APP-1\nNumbered, dated, one paragraph each. Amendments: 3a replaces 3, 5a amends 5.\nEvery brief reads this file first. Only the envoy writes it, through the `decide` tool.\n'
-  const decisionsFile = (w: any) => `${w.cwd}/.eddy-runs/current/decisions-APP-1.md`
+  const decisionsFile = (w: any) => `${w.cwd}/scratchpad/eddy/current/decisions-APP-1.md`
   const filed = (w: any, n = 1) => w.json(`${w.team}/questions/Q-${n}.json`)
   const REASON = (why: string) =>
     `Closed by the eddy mod: the permission prompt in the investigator's pane (w1:p2) is gone: ${why}.`

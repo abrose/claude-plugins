@@ -25,7 +25,7 @@ export async function mainCheckout(
  * follow the `cd` and lose the run.
  */
 export async function runDir(io: Io): Promise<string> {
-  const scratch = (await io.envGet('EDDY_SCRATCH')) ?? '.eddy-runs/current'
+  const scratch = (await io.envGet('EDDY_SCRATCH')) ?? 'scratchpad/eddy/current'
   return scratch.startsWith('/') ? scratch : `${await io.root()}/${scratch}`
 }
 

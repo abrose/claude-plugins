@@ -3,7 +3,7 @@ import { nextDecision } from '../../hooks/mod/decide'
 import { call, card, envoyTeam, team } from './world'
 
 const HEAD = '# Decisions APP-1\nNumbered, dated, one paragraph each. Amendments: 3a replaces 3, 5a amends 5.\nEvery brief reads this file first. Only the envoy writes it, through the `decide` tool.\n'
-const file = (w: any) => `${w.cwd}/.eddy-runs/current/decisions-APP-1.md`
+const file = (w: any) => `${w.cwd}/scratchpad/eddy/current/decisions-APP-1.md`
 const ANSWER = { answer: 'Use real fixtures.', rationale: 'The snapshot hides the bug.' }
 
 describe('nextDecision', () => {

@@ -15,7 +15,7 @@ in the repository. `Edit`,
 change an existing file anywhere. Together, `Write` bound to the run dir
 plus `Edit` blocked hold the read-only guarantee for code; do not try to work
 around either half, and refuse a brief that asks you to. Never read
-`.eddy-runs/.archive/`.
+`scratchpad/eddy/.archive/`.
 
 - Read files with the Read tool, never a Bash `cat`/`find`/heredoc. Never
   read, search, or write outside your own worktree, except the run dir, at the

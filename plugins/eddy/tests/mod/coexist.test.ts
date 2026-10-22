@@ -22,6 +22,19 @@ describe('the team mod tools in an eddy session', () => {
 
     expect(await $.tool.call(TEAM_ASK)).toMatchObject({ result: 'team answered' })
   })
+
+  test('lets a team tool call go on when the eddy-active check throws (fails open)', async ($, on) => {
+    on('tool.call', { tool: 'mcp__team__ask' }, () => ({ result: 'team answered' }))
+    const w = await team($, on)
+    let throws = 0
+    w.afterRead = () => {
+      throws += 1
+      throw new Error('disk gone')
+    }
+
+    expect(await $.tool.call(TEAM_ASK)).toMatchObject({ result: 'team answered' })
+    expect(throws).toBeGreaterThan(0)
+  })
 })
 
 describe('names the engine and the human see', () => {
@@ -59,10 +72,10 @@ describe('names the engine and the human see', () => {
 })
 
 describe('the eddy run folder', () => {
-  test('finds the run under .eddy-runs/current/.eddy without EDDY_SCRATCH', async ($, on) => {
+  test('finds the run under scratchpad/eddy/current/.eddy without EDDY_SCRATCH', async ($, on) => {
     const w = world(on)
     await start($)
-    w.writeJson('/proj/.eddy-runs/current/.eddy/config.json', {
+    w.writeJson('/proj/scratchpad/eddy/current/.eddy/config.json', {
       team_id: 'eddy-app-1', ticket: 'APP-1', orchestrator: 'eddy-app-1-orch', orchestrator_session: w.id,
     })
     await w.clock.advance(15000)
@@ -80,6 +93,6 @@ describe('the eddy run folder', () => {
 
     const i = w.runs.findIndex(argv => (argv[0] ?? '').endsWith('/bin/eddy-brief'))
     expect(i).toBeGreaterThanOrEqual(0)
-    expect(w.inits[i]?.env).toEqual({ EDDY_SCRATCH: '/proj/.eddy-runs/current' })
+    expect(w.inits[i]?.env).toEqual({ EDDY_SCRATCH: '/proj/scratchpad/eddy/current' })
   })
 })

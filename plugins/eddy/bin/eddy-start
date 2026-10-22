@@ -83,7 +83,7 @@ case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_di
 scratch_abs="$(eddy_run_dir)"
 teamcfg="$scratch_abs/.eddy/config.json"
 
-# Run mismatch guard. With EDDY_SCRATCH unset the run dir is the .eddy-runs/current
+# Run mismatch guard. With EDDY_SCRATCH unset the run dir is the scratchpad/eddy/current
 # fallback, a guess. Refuse when that run's recorded tabs (config envoy_tab and
 # orchestrator_tab, tabs.json) all sit in other herdr workspaces than the caller's.
 # A set EDDY_SCRATCH is the caller's own choice and is never second-guessed. No
@@ -122,20 +122,32 @@ fi
 # Tab guard (rule 15): the orchestrator runs alone in its tab, and the envoy's
 # tab is the human's. Refuse a placement into either, and a --pane that already
 # runs a live agent, before any herdr call creates or changes a pane. Without a
-# run config there is no team yet, so nothing to guard. One `herdr pane list`
-# read answers --split and --pane; if herdr cannot answer, refuse.
-if [ -f "$teamcfg" ] && [ -z "$new_tab" ]; then
+# run config there is no team yet, so nothing to guard. The team plugin's run is guarded
+# too: its orchestrator and envoy tabs, read from its run config, are never a place for
+# an eddy agent. One `herdr pane list` read answers --split and --pane; if herdr cannot
+# answer, refuse.
+team_cfg="$(eddy_team_config)"
+if { [ -f "$teamcfg" ] || [ -f "$team_cfg" ]; } && [ -z "$new_tab" ]; then
   panes_json=""
   if [ -n "$pane" ] || [ -n "$split_pane" ]; then
     panes_json="$(herdr pane list 2>/dev/null)" || panes_json=""
   fi
-  PANES_JSON="$panes_json" INTO_TAB="$into_tab" PANE="$pane" SPLIT_PANE="$split_pane" python3 - "$teamcfg" <<'PY' || exit 2
+  PANES_JSON="$panes_json" INTO_TAB="$into_tab" PANE="$pane" SPLIT_PANE="$split_pane" PEER_CFG="$team_cfg" python3 - "$teamcfg" <<'PY' || exit 2
 import json, os, sys
-try:
-    cfg = json.load(open(sys.argv[1]))
-except Exception:
-    cfg = {}
+
+def load(path):
+    try:
+        cfg = json.load(open(path))
+    except Exception:
+        return {}
+    return cfg if isinstance(cfg, dict) else {}
+
+cfg = load(sys.argv[1])
 guarded = {cfg.get(k): k for k in ("orchestrator_tab", "envoy_tab") if cfg.get(k)}
+team = load(os.environ["PEER_CFG"])
+for k in ("orchestrator_tab", "envoy_tab"):
+    if team.get(k):
+        guarded.setdefault(team[k], "team " + k)
 into_tab, pane, split = os.environ["INTO_TAB"], os.environ["PANE"], os.environ["SPLIT_PANE"]
 
 def refuse(msg):

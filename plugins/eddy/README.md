@@ -42,14 +42,14 @@ that build, not on older ones).
   numbered decision. An urgent card shows as a status line and one toast in the
   envoy session, and its next-action message goes out at the next check,
   without the quiet wait.
-- A **brief** is a file in `.eddy-runs/current/`, composed by `eddy-brief` from
+- A **brief** is a file in `scratchpad/eddy/current/`, composed by `eddy-brief` from
   templates plus your project overlay. The orchestrator sends the one-line
   kick-off with the `brief_send` tool.
-- The **decisions file** (`.eddy-runs/current/decisions-<ticket>.md`) is the single
+- The **decisions file** (`scratchpad/eddy/current/decisions-<ticket>.md`) is the single
   binding source. Every brief reads it first. `eddy-init` creates it; after that
   the envoy is its only writer, through `decide`.
 - When an agent stops, a **Stop hook** writes its last message to
-  `.eddy-runs/current/reports/<name>-<topic>.md`.
+  `scratchpad/eddy/current/reports/<name>-<topic>.md`.
 - The **eddy mod** runs inside the orchestrator session and the envoy session.
   Every 15 s the orchestrator half picks up new `REPORT` lines and new
   decisions, checks the agents, and sends what it found as one prompt. The
@@ -88,7 +88,7 @@ In the `Eddy` pane, click an agent row to jump to its herdr pane. With the keybo
 | Script | Does |
 |---|---|
 | `eddy-id slug\|hash\|for` | Compute a team id: slug a ticket, or a random hash. |
-| `eddy-init <ticket> [--envoy-pane <id>]` | Refuse a ticket that is not a plain name (exit 2), check the Claude Code version, archive the previous run to `.eddy-runs/.archive/` (refuses while its agents are live), write `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates (never overwrites), write the team id and config with this session as `envoy_session`, seed the safe permission allowlist, record the envoy's tab, start the orchestrator in a worker tab and record its session and tab (`eddy-orch-start`), prune stale session index entries. |
+| `eddy-init <ticket> [--envoy-pane <id>]` | Refuse a ticket that is not a plain name (exit 2), check the Claude Code version, archive the previous run to `scratchpad/eddy/.archive/` (refuses while its agents are live), write `decisions-<ticket>.md` and `progress-<ticket>.md` from the templates (never overwrites), write the team id and config with this session as `envoy_session`, seed the safe permission allowlist, record the envoy's tab, start the orchestrator in a worker tab and record its session and tab (`eddy-orch-start`), prune stale session index entries. |
 | `eddy-orch-start` | Start the run's orchestrator in a new worker tab of the current directory and write its `orchestrator_session` and `orchestrator_tab` into the config. `eddy-init` and `/eddy-envoy` both use it. |
 | `eddy-start <name> <role>` | Start a role agent (`investigator`, `implementer`, `tester` or `orchestrator`) in a pane with a session id it assigns (`--session-id`), verify its status bar, record it under `.eddy/` with its launch flags, and write its session index entry. The new `claude` loads the plugin this script came from (`--plugin-dir`), unless that is an installed copy. `--new-tab` opens a worker tab with the agent in its root pane. |
 | `eddy-brief compose\|prepare` | Compose a brief from templates + overlay, or prepare its kick-off prompt (update the record, mirror into a worktree, print the prompt). |
@@ -232,8 +232,8 @@ warning.
 
 ## Task-scope files
 
-All under `$EDDY_SCRATCH` (default `.eddy-runs/current/`, git-ignored). `/eddy:init`
-archives the previous run and loose scratchpad entries to `.eddy-runs/.archive/`.
+All under `$EDDY_SCRATCH` (default `scratchpad/eddy/current/`, git-ignored). `/eddy:init`
+archives the previous run to `scratchpad/eddy/.archive/`.
 `decisions-<ticket>.md`, `progress-<ticket>.md`, `orchestration-decisions.md`,
 `brief-<name>-<topic>.md`, `reports/<name>-<topic>.md`, `.eddy/<name>.json`,
 `.eddy/config.json`, `.eddy/tabs.json`, `.eddy/watch-state.json`,

@@ -53,6 +53,10 @@ worktree_cmd="$(yget worktree_cmd)"
 worktree_dir="$(yget worktree_dir)"
 [ -n "$worktree_dir" ] || { echo "no worktree_dir in $project - ask the human how this repo makes worktrees" >&2; exit 2; }
 
+# An eddy branch always carries the eddy- prefix, so an eddy worktree and branch never share a name
+# with the team run's. A branch that has the prefix keeps it once. {parent} is never prefixed.
+case "$branch" in eddy-*) ;; *) branch="eddy-$branch" ;; esac
+
 cmd="${worktree_cmd//\{branch\}/$branch}"
 cmd="${cmd//\{parent\}/$parent}"
 wt="${worktree_dir//\{branch\}/$branch}"
@@ -64,8 +68,8 @@ if [ "$(yget stacked)" = "true" ]; then
 fi
 
 if [ "${#copies[@]}" -gt 0 ]; then
-  mkdir -p "$wt/.eddy-runs/current"
-  for d in "${copies[@]}"; do cp -R "$d" "$wt/.eddy-runs/current/"; done
+  mkdir -p "$wt/scratchpad/eddy/current"
+  for d in "${copies[@]}"; do cp -R "$d" "$wt/scratchpad/eddy/current/"; done
   [ "$(yget spdd)" = "true" ] && echo "warning: untracked spdd files under a copied dir do not travel" >&2
 fi
 

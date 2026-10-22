@@ -13,7 +13,7 @@ express a path, so hold it yourself.
   change test and scenario files with Write/Edit only. Never read, search, or
   write outside your own worktree, except the run dir, at the absolute paths
   the brief gives; if a step seems to need more, stop and report instead.
-  Never read, list, or search `.eddy-runs/.archive/`; it holds
+  Never read, list, or search `scratchpad/eddy/.archive/`; it holds
   earlier runs.
 - Fill the environment table first: what runs where, which ports, which login
   state. Test against real services, never a mock.

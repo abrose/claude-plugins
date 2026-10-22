@@ -27,7 +27,7 @@ def save(path, data):
 
 name = os.environ.get("EDDY_NAME", "")
 if source == "clear" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
-    scratch = os.path.realpath(os.environ.get("EDDY_SCRATCH", ".eddy-runs/current"))
+    scratch = os.path.realpath(os.environ.get("EDDY_SCRATCH", "scratchpad/eddy/current"))
     recf = os.path.join(scratch, ".eddy", name + ".json")
     rec = load(recf)
     if rec is None:
@@ -44,7 +44,7 @@ if source == "clear" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
 elif source == "compact" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
     # A /compact keeps the session id, so it lifts the brief mark itself:
     # brief_send then accepts the compacted worker for its next brief.
-    scratch = os.path.realpath(os.environ.get("EDDY_SCRATCH", ".eddy-runs/current"))
+    scratch = os.path.realpath(os.environ.get("EDDY_SCRATCH", "scratchpad/eddy/current"))
     recf = os.path.join(scratch, ".eddy", name + ".json")
     rec = load(recf)
     if rec and rec.get("session") == sid and "brief_sent_session" in rec:
@@ -59,9 +59,9 @@ elif source == "compact" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
             "hookEventName": "SessionStart",
             "additionalContext": (
                 "Your context was compacted. You are the team orchestrator. Reload the eddy-orchestration skill, "
-                "read the decisions file, then .eddy-runs/current/orch-handover.md, the plan file and "
-                ".eddy-runs/current/orchestration-decisions.md, then the reports newer than orch-handover.md, "
-                "then the open cards (the files .eddy-runs/current/.eddy/questions/Q-*.json whose status is "
+                "read the decisions file, then scratchpad/eddy/current/orch-handover.md, the plan file and "
+                "scratchpad/eddy/current/orchestration-decisions.md, then the reports newer than orch-handover.md, "
+                "then the open cards (the files scratchpad/eddy/current/.eddy/questions/Q-*.json whose status is "
                 "open or assumed). Continue from the handover."),
         }}))
 elif source == "resume" and not name:

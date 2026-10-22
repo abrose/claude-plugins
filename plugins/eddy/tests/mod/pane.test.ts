@@ -228,7 +228,7 @@ async function activeTeam($: any, on: any) {
   w.writeJson(`${w.team}/config.json`, {
     team_id: 'app-1', ticket: 'APP-1', orchestrator: 'app-1-orch', orchestrator_session: w.id,
   })
-  w.write(`${CWD}/.eddy-runs/current/progress-APP-1.md`, '# APP-1\n\n## RUNNING\n- [>] 3. Build\n')
+  w.write(`${CWD}/scratchpad/eddy/current/progress-APP-1.md`, '# APP-1\n\n## RUNNING\n- [>] 3. Build\n')
   await w.clock.advance(15000)
   return w
 }

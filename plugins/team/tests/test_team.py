@@ -2958,6 +2958,16 @@ class TeamInit(Base):
         self.assertIn("❗️ worktree inside scratchpad: scratchpad/wt-feat - move it out with git worktree move", p.stderr)
         self.assertIn("❗️ worktree inside scratchpad: scratchpad/deep - move it out with git worktree move", p.stderr)
 
+    def test_sweep_leaves_the_eddy_folder_alone(self):
+        # scratchpad/eddy holds the eddy plugin's runs, a different tool's files: team-init never archives it.
+        eddy = os.path.join(self.proj, "scratchpad", "eddy", "current")
+        os.makedirs(eddy)
+        write_text(os.path.join(eddy, "x.md"), "eddy run\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(os.path.join(eddy, "x.md")), "eddy run\n")
+        self.assertFalse(os.path.exists(self.archive("loose-2026-01-02")))
+
     def test_live_agents_block_init_and_nothing_moves(self):
         self.old_run()
         write_text(os.path.join(self.proj, "scratchpad", "loose.md"), "x\n")

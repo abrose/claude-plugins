@@ -156,7 +156,7 @@ never here.
 
 ## Own calls
 
-- Log every own call to `.eddy-runs/current/orchestration-decisions.md` with
+- Log every own call to `scratchpad/eddy/current/orchestration-decisions.md` with
   its context. An own call becomes a card via `ask` instead when it is a
   one-way door, has more than about 1 h of rework, falls outside the brief's
   or a decision's scope, or touches permissions. The human's own decisions

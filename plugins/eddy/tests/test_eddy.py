@@ -19,7 +19,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)          # plugins/eddy
 BIN = os.path.join(ROOT, "bin")
-SCRATCH = os.path.join(".eddy-runs", "current")
+SCRATCH = os.path.join("scratchpad", "eddy", "current")
 
 
 def write_text(path, content):
@@ -604,7 +604,7 @@ class TeamStart(Base):
         write_text(os.path.join(d, "config.json"),
                    json.dumps({"team_id": team_id, "orchestrator": orch}))
 
-    # Run mismatch guard. EDDY_SCRATCH unset puts the run at the .eddy-runs/current
+    # Run mismatch guard. EDDY_SCRATCH unset puts the run at the scratchpad/eddy/current
     # fallback of the project root (FAKE_GIT_TOPLEVEL); the fake herdr puts the
     # caller in workspace w1 unless FAKE_CALLER_WS says otherwise.
     def run_with_tabs(self, scenario, tabs=("w4:t1", "w4:t2"), caller="w4", scratch_unset=True,
@@ -1105,7 +1105,7 @@ class TeamBriefPrepare(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.strip(), self.kickoff())
         rec = self.team_json("scout")
-        self.assertEqual((rec["topic"], rec["brief"]), ("digest", ".eddy-runs/current/brief-scout-digest.md"))
+        self.assertEqual((rec["topic"], rec["brief"]), ("digest", "scratchpad/eddy/current/brief-scout-digest.md"))
         self.assertEqual(self.herdr_calls(), [])
 
     def test_send_is_gone(self):
@@ -1137,7 +1137,7 @@ class TeamBriefPrepare(Base):
 
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(p.stdout.strip(), self.kickoff())
-            self.assertFalse(os.path.exists(os.path.join(wt, ".eddy-runs")), os.listdir(wt))
+            self.assertFalse(os.path.exists(os.path.join(wt, "scratchpad")), os.listdir(wt))
             self.assertEqual(os.listdir(wt), [])
         finally:
             shutil.rmtree(wt, ignore_errors=True)
@@ -1182,16 +1182,16 @@ class TeamSlice(Base):
         p = self.slice()
         self.assertEqual(p.returncode, 0, p.stderr)
         git = self.git_calls()
-        self.assertIn("worktree add feat main", git)
-        self.assertIn("m add feat --onto main", git)
+        self.assertIn("worktree add eddy-feat main", git)
+        self.assertIn("m add eddy-feat --onto main", git)
 
     def test_herdr_gets_the_absolute_worktree_cwd(self):
         self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
-        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "eddy-feat"))
         p = self.slice()
         self.assertEqual(p.returncode, 0, p.stderr)
         creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
-        expect_abs = os.path.join(os.path.realpath(self.proj), "feat")
+        expect_abs = os.path.join(os.path.realpath(self.proj), "eddy-feat")
         self.assertTrue(any(("--cwd %s " % expect_abs) in c for c in creates), creates)
 
     def test_tab_goes_to_the_callers_live_workspace(self):
@@ -1204,16 +1204,17 @@ class TeamSlice(Base):
 
     def test_copy_lands_in_the_worktrees_run_dir(self):
         self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
-        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "eddy-feat"))
         os.makedirs(os.path.join(self.proj, "specs"))
         write_text(os.path.join(self.proj, "specs", "a.md"), "spec\n")
         p = self.slice("--copy", "specs")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(read_text(os.path.join(self.proj, "feat", ".eddy-runs", "current", "specs", "a.md")), "spec\n")
+        self.assertEqual(read_text(os.path.join(self.proj, "eddy-feat", "scratchpad", "eddy", "current", "specs", "a.md")),
+                         "spec\n")
 
     def test_generated_types_land_at_the_same_relative_path(self):
         self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
-        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "eddy-feat"))
         for plugin in ("team", "other"):
             types = os.path.join(self.proj, "plugins", plugin, ".claude-plugin", "types")
             os.makedirs(os.path.join(types, "claude-code"))
@@ -1222,17 +1223,17 @@ class TeamSlice(Base):
         p = self.slice()
         self.assertEqual(p.returncode, 0, p.stderr)
         for plugin in ("team", "other"):
-            base = os.path.join(self.proj, "feat", "plugins", plugin, ".claude-plugin", "types")
+            base = os.path.join(self.proj, "eddy-feat", "plugins", plugin, ".claude-plugin", "types")
             self.assertEqual(read_text(os.path.join(base, "tsconfig.json")), "{%s}\n" % plugin)
             self.assertEqual(read_text(os.path.join(base, "claude-code", "index.d.ts")), "// %s\n" % plugin)
 
     def test_a_missing_types_folder_is_skipped(self):
         self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
-        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "eddy-feat"))
         os.makedirs(os.path.join(self.proj, "plugins", "team", ".claude-plugin"))
         p = self.slice()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertFalse(os.path.exists(os.path.join(self.proj, "feat", "plugins")))
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "eddy-feat", "plugins")))
 
     SLICE_OVERLAY = 'worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n'
 
@@ -1471,7 +1472,7 @@ class TeamStatus(Base):
 
 
 class DefaultScratch(Base):
-    """With EDDY_SCRATCH unset, every run file lives in .eddy-runs/current/."""
+    """With EDDY_SCRATCH unset, every run file lives in scratchpad/eddy/current/."""
     UNSET = {"EDDY_SCRATCH": None}
 
     def cfg(self):
@@ -1588,7 +1589,7 @@ class StopHook(Base):
         self.assertFalse(os.path.exists(self.report_path("maker", "build")))
 
     def test_reports_after_agent_moves_its_cwd(self):
-        # An agent may cd into .eddy-runs/ or a worktree. eddy-start stamps an
+        # An agent may cd into scratchpad/eddy/ or a worktree. eddy-start stamps an
         # absolute EDDY_SCRATCH, so the hook still finds the team dir.
         self.write_record("scout", "investigator", topic="digest")
         tr = self.transcript("REPORT scout digest: done")
@@ -1841,7 +1842,7 @@ class SessionStartHook(Base):
         out = json.loads(p.stdout)["hookSpecificOutput"]
         self.assertEqual(out["hookEventName"], "SessionStart")
         for part in ("eddy-orchestration", "orch-handover.md", "orchestration-decisions.md", "decisions file",
-                     ".eddy-runs/current/.eddy/questions/Q-*.json", "whose status is open or assumed"):
+                     "scratchpad/eddy/current/.eddy/questions/Q-*.json", "whose status is open or assumed"):
             self.assertIn(part, out["additionalContext"])
 
     def test_the_pointer_names_what_the_mod_instructions_name(self):
@@ -1852,7 +1853,7 @@ class SessionStartHook(Base):
         context = json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"]
         mod = read_text(os.path.join(ROOT, "hooks", "mod", "reset.ts"))
         for part in ("eddy-orchestration", "orch-handover.md", "orchestration-decisions.md",
-                     ".eddy-runs/current/.eddy/questions/Q-*.json", "whose status is open or assumed"):
+                     "scratchpad/eddy/current/.eddy/questions/Q-*.json", "whose status is open or assumed"):
             self.assertIn(part, context)
             self.assertIn(part, mod)
 
@@ -2531,7 +2532,7 @@ class LinkedWorktreeRoot(Base):
             capture_output=True, text=True, env=self.real_env(EDDY_NAME="scout"), cwd=self.wt)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.want, "reports", "scout-digest.md")))
-        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
 
     def test_team_init_from_inside_a_linked_worktree_uses_the_main_checkout(self):
         env = self.real_env(**self.bar_env("Opus 5.5", cwd=self.main))
@@ -2540,7 +2541,7 @@ class LinkedWorktreeRoot(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.want, "decisions-APP-1.md")))
         self.assertTrue(os.path.exists(os.path.join(self.main, ".claude", "settings.local.json")))
-        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
         self.assertFalse(os.path.exists(os.path.join(self.wt, ".claude")))
         self.assertIn("EDDY_SCRATCH=%s" % self.want, " ".join(self.herdr_calls()))
 
@@ -2563,7 +2564,7 @@ class LinkedWorktreeRoot(Base):
         self.assertEqual(cfg["orchestrator_tab"], "w1:t9")
         self.assertTrue(os.path.exists(os.path.join(self.want, ".eddy", "app-1-orch.json")))
         self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "orch-starting")))
-        self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
 
     def test_orch_start_from_a_linked_worktree_uses_the_main_run_dir_default(self):
         self.write_run()
@@ -2600,7 +2601,7 @@ class LinkedWorktreeRoot(Base):
     def assert_slice_registered_in_the_main_run_dir(self, p, cwd):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(json.loads(read_text(os.path.join(self.want, ".eddy", "tabs.json"))), ["w1:t9"])
-        self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
 
     def test_slice_from_a_linked_worktree_registers_its_tab_in_the_main_run_dir(self):
         self.assert_slice_registered_in_the_main_run_dir(self.slice_from(self.wt), self.wt)
@@ -2640,7 +2641,7 @@ class LinkedWorktreeRoot(Base):
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertEqual(p.stdout.strip(), brief)
                 self.assertTrue(os.path.exists(brief))
-                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
 
     def test_brief_prepare_records_and_names_the_brief_from_the_main_run_dir(self):
         self.main_record("scout", topic="digest")
@@ -2650,7 +2651,7 @@ class LinkedWorktreeRoot(Base):
                 p = self.script_from(cwd, "eddy-brief", "prepare", "scout", "--topic", "digest", **extra)
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
-                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
 
     def test_brief_prepare_for_an_agent_in_the_main_checkout_names_the_absolute_brief(self):
         self.main_record("scout", topic="digest", cwd=self.main)
@@ -2659,7 +2660,7 @@ class LinkedWorktreeRoot(Base):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Read %s and execute" % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
         rec = json.loads(read_text(os.path.join(self.want, ".eddy", "scout.json")))
-        self.assertEqual(rec["brief"], ".eddy-runs/current/brief-scout-digest.md")
+        self.assertEqual(rec["brief"], "scratchpad/eddy/current/brief-scout-digest.md")
 
     def test_brief_prepare_for_a_worktree_agent_copies_nothing_into_its_worktree(self):
         self.main_record("scout", topic="digest", cwd=self.wt)
@@ -2669,7 +2670,7 @@ class LinkedWorktreeRoot(Base):
         p = self.script_from(self.main, "eddy-brief", "prepare", "scout", "--topic", "digest")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Read %s and execute" % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
-        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
 
     def test_brief_compose_renders_decisions_and_run_dir_as_absolute_paths(self):
         self.main_record("maker", role="implementer")
@@ -2680,7 +2681,7 @@ class LinkedWorktreeRoot(Base):
         self.assertIn("`%s/impl-notes-build.md`" % self.want, text)
         self.assertNotIn("{{", text)
         # No run-dir path is left relative: strip every absolute one, then none may remain.
-        self.assertNotIn(".eddy-runs/current/", text.replace(self.want, ""))
+        self.assertNotIn("scratchpad/eddy/current/", text.replace(self.want, ""))
 
     def test_release_takes_its_lock_and_finds_the_record_in_the_main_run_dir(self):
         for cwd, extra in self.three_cwds():
@@ -2692,7 +2693,7 @@ class LinkedWorktreeRoot(Base):
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "scout.json")))
                 self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "releasing", "scout")))
-                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
                 open(self.herdr_log, "w").close()
 
     def test_forget_removes_a_record_that_lives_in_the_main_run_dir(self):
@@ -2712,7 +2713,7 @@ class LinkedWorktreeRoot(Base):
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
                 self.assertTrue(os.path.exists(os.path.join(self.want, ".eddy", "roster.md")))
-                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, "scratchpad")))
 
     # Tidy-up (review N1): an ABSOLUTE EDDY_SCRATCH from a linked worktree, the envoy's live case.
     def test_orch_start_from_a_worktree_with_an_absolute_eddy_scratch_uses_that_run_dir(self):
@@ -2734,7 +2735,7 @@ class LinkedWorktreeRoot(Base):
         p = self.script_from(self.wt, "eddy-brief", "prepare", "scout", "--topic", "digest", **extra)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
-        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
 
     def test_status_from_a_worktree_with_an_absolute_eddy_scratch_uses_that_run_dir(self):
         self.main_record("scout", topic="digest", session="11111111aaaa")
@@ -2742,14 +2743,17 @@ class LinkedWorktreeRoot(Base):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
         self.assertTrue(os.path.exists(os.path.join(self.want, ".eddy", "roster.md")))
-        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "scratchpad")))
 
 
 class TeamInit(Base):
     ALLOW = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
+    # eddy-init prefixes the team id with eddy-: ticket APP-1 gives eddy-app-1. The fake herdr
+    # puts that id live in its name scenarios.
+    ID = "eddy-app-1"
 
     def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
-        env = {**self.bar_env("Opus 5.5", cwd=self.proj), **(env_extra or {})}
+        env = {**self.bar_env("Opus 5.5", cwd=self.proj), "FAKE_RUN_ID": self.ID, **(env_extra or {})}
         return super().run_script(name, *args, scenario=scenario, env_extra=env, cwd=cwd)
 
     def cfg(self):
@@ -2765,8 +2769,8 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         calls = self.herdr_calls()
         self.assertTrue(any(c.startswith("tab create") and "--label eddy-orch" in c for c in calls), calls)
-        self.assertTrue(any("agent start app-1-orch " in c and "--agent eddy-orchestrator" in c for c in calls), calls)
-        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertTrue(any("agent start eddy-app-1-orch " in c and "--agent eddy-orchestrator" in c for c in calls), calls)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("eddy-app-1-orch")["session"])
         self.assertEqual(self.cfg()["orchestrator_tab"], "w1:t9")
         self.assertIn("w1:t9", json.loads(read_text(self.sp(".eddy", "tabs.json"))))
 
@@ -2803,8 +2807,8 @@ class TeamInit(Base):
         self.assertEqual(sum(c == "agent list" for c in calls), 3, calls)
 
     def test_failed_start_for_a_name_live_before_closes_no_pane(self):
-        # eddy-init's own agent list fails once, so it picks the id app-1 and
-        # eddy-orch-start's re-check under the lock then finds app-1-orch live
+        # eddy-init's own agent list fails once, so it picks the id eddy-app-1 and
+        # eddy-orch-start's re-check under the lock then finds eddy-app-1-orch live
         # (another team's agent in w1:p1) and starts nothing.
         # Nothing here made that pane, so nothing here may close it.
         p = self.run_script("eddy-init", "APP-1", scenario="orch_taken_late",
@@ -2820,7 +2824,7 @@ class TeamInit(Base):
         p = self.run_script("eddy-init", "APP-1", scenario="first_run_dialog",
                             env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
         self.assertEqual(p.returncode, 4, p.stderr)
-        self.assertIn("orchestrator did not start: app-1-orch is at a startup dialog", p.stderr)
+        self.assertIn("orchestrator did not start: eddy-app-1-orch is at a startup dialog", p.stderr)
         self.assertIn("close that pane, then run /eddy:init again; do not run eddy-start by hand", p.stderr)
         self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")])
 
@@ -2840,7 +2844,7 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 4, p.stderr)
         self.assertIn("orchestrator started, tab lookup failed:", p.stderr)
         self.assertIn("pane lookup failed", p.stderr)
-        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("eddy-app-1-orch")["session"])
         self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")])
 
     def test_orchestrator_pane_flag_is_gone(self):
@@ -2851,15 +2855,15 @@ class TeamInit(Base):
         p = self.run_script("eddy-init", "APP-5066")
         self.assertEqual(p.returncode, 0, p.stderr)
         cfg = json.loads(read_text(self.sp(".eddy", "config.json")))
-        self.assertEqual(cfg["team_id"], "app-5066")
+        self.assertEqual(cfg["team_id"], "eddy-app-5066")
         self.assertEqual(cfg["ticket"], "APP-5066")
-        self.assertEqual(cfg["orchestrator"], "app-5066-orch")
+        self.assertEqual(cfg["orchestrator"], "eddy-app-5066-orch")
 
     def test_refuses_second_init_when_agent_still_live(self):
         d = self.sp(".eddy")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+                   json.dumps({"team_id": "eddy-app-1", "ticket": "APP-1", "orchestrator": "eddy-app-1-orch"}))
         p = self.run_script("eddy-init", "APP-2", scenario="names_app1_taken")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("app-1-scout", p.stderr)
@@ -2875,18 +2879,11 @@ class TeamInit(Base):
         d = self.sp(".eddy")
         os.makedirs(d, exist_ok=True)
         write_text(os.path.join(d, "config.json"),
-                   json.dumps({"team_id": "app-1", "ticket": ticket, "orchestrator": "app-1-orch"}))
+                   json.dumps({"team_id": "eddy-app-1", "ticket": ticket, "orchestrator": "eddy-app-1-orch"}))
         write_text(self.sp("brief-scout-digest.md"), "old brief\n")
 
     def archive(self, *parts):
-        return os.path.join(self.proj, ".eddy-runs", ".archive", *parts)
-
-    # The loose-entry sweep runs only when the run dir's parent is named "scratchpad":
-    # these tests point EDDY_SCRATCH into a "scratchpad" folder on purpose.
-    SWEPT = {"EDDY_SCRATCH": os.path.join("scratchpad", "current")}
-
-    def swept_archive(self, *parts):
-        return os.path.join(self.proj, "scratchpad", ".archive", *parts)
+        return os.path.join(self.proj, "scratchpad", "eddy", ".archive", *parts)
 
     def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
         # The envoy session ran a shell cd. The run dir, the settings file and the orchestrator's
@@ -2897,7 +2894,7 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.sp("decisions-APP-1.md")))
         self.assertTrue(os.path.exists(os.path.join(self.proj, ".claude", "settings.local.json")))
-        self.assertFalse(os.path.exists(os.path.join(sub, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(sub, "scratchpad")))
         self.assertFalse(os.path.exists(os.path.join(sub, ".claude")))
         self.assertIn("EDDY_SCRATCH=%s" % os.path.realpath(self.sp()), " ".join(self.herdr_calls()))
 
@@ -2941,38 +2938,14 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.archive("run-2026-01-02", "notes.md")))
 
-    def test_sweeps_loose_entries_out_of_sight(self):
-        root = os.path.join(self.proj, "scratchpad")
-        os.makedirs(os.path.join(root, "reports"))
-        write_text(os.path.join(root, "decisions-OLD.md"), "old\n")
-        write_text(os.path.join(root, "reports", "x.md"), "old\n")
-        p = self.init(**self.SWEPT)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(sorted(os.listdir(root)), [".archive", "current"])
-        self.assertTrue(os.path.exists(self.swept_archive("loose-2026-01-02", "decisions-OLD.md")))
-        self.assertTrue(os.path.exists(self.swept_archive("loose-2026-01-02", "reports", "x.md")))
-
-    def test_never_moves_a_worktree_and_warns(self):
-        wt = os.path.join(self.proj, "scratchpad", "wt-feat")
-        os.makedirs(os.path.join(wt, "src"))
-        write_text(os.path.join(wt, ".git"), "gitdir: /elsewhere\n")
-        nested = os.path.join(self.proj, "scratchpad", "deep", "a")
-        os.makedirs(os.path.join(nested, ".git"))
-        p = self.init(**self.SWEPT)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(os.path.exists(os.path.join(wt, ".git")))
-        self.assertTrue(os.path.exists(os.path.join(nested, ".git")))
-        self.assertIn("❗️ worktree inside scratchpad: scratchpad/wt-feat - move it out with git worktree move", p.stderr)
-        self.assertIn("❗️ worktree inside scratchpad: scratchpad/deep - move it out with git worktree move", p.stderr)
-
     def test_live_agents_block_init_and_nothing_moves(self):
         self.old_run()
-        write_text(os.path.join(self.proj, ".eddy-runs", "loose.md"), "x\n")
+        write_text(os.path.join(self.proj, "scratchpad", "eddy", "loose.md"), "x\n")
         p = self.init(scenario="names_app1_taken")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("app-1-scout", p.stderr)
         self.assertTrue(os.path.exists(self.sp("brief-scout-digest.md")))
-        self.assertTrue(os.path.exists(os.path.join(self.proj, ".eddy-runs", "loose.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "scratchpad", "eddy", "loose.md")))
         self.assertFalse(os.path.exists(self.archive()))
 
     def test_herdr_failure_blocks_init_and_nothing_moves(self):
@@ -3020,27 +2993,28 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")))
 
-    def test_symlink_is_swept_without_following_it(self):
+    def test_a_symlink_in_the_run_is_archived_without_following_it(self):
         target = tempfile.mkdtemp()
         try:
             os.makedirs(os.path.join(target, ".git"))
-            os.makedirs(os.path.join(self.proj, "scratchpad"))
-            os.symlink(target, os.path.join(self.proj, "scratchpad", "link"))
-            p = self.init(**self.SWEPT)
+            self.old_run()
+            os.symlink(target, self.sp("link"))
+            p = self.init()
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertTrue(os.path.islink(self.swept_archive("loose-2026-01-02", "link")))
+            self.assertTrue(os.path.islink(self.archive("APP-1-2026-01-02", "link")))
             self.assertTrue(os.path.exists(os.path.join(target, ".git")))
         finally:
             shutil.rmtree(target, ignore_errors=True)
 
-    def test_top_level_git_dir_is_never_swept(self):
-        root = os.path.join(self.proj, "scratchpad")
+    def test_a_git_dir_beside_the_run_is_left_alone(self):
+        root = os.path.dirname(os.path.join(self.proj, SCRATCH))
         os.makedirs(os.path.join(root, ".git", "objects"))
         os.makedirs(os.path.join(root, "notes"))
-        p = self.init(**self.SWEPT)
+        p = self.init()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(os.path.join(root, ".git", "objects")))
-        self.assertIn("❗️ worktree inside scratchpad: scratchpad/.git - move it out with git worktree move", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(root, "notes")))
+        self.assertNotIn("worktree", p.stderr)
 
     def test_refusal_names_a_top_level_git_dir_without_a_traceback(self):
         root = os.path.join(self.proj, "scratchpad")
@@ -3051,21 +3025,21 @@ class TeamInit(Base):
         self.assertIn("scratchpad/.git", p.stderr)
 
     def test_worktree_inside_current_gets_move_advice(self):
-        # The default run dir IS .eddy-runs/current, so "set EDDY_SCRATCH to a
-        # run dir such as .eddy-runs/current" would tell the human to point at
+        # The default run dir IS scratchpad/eddy/current, so "set EDDY_SCRATCH to a
+        # run dir such as scratchpad/eddy/current" would tell the human to point at
         # the very dir that already holds the worktree.
         os.makedirs(self.sp("wt-x"))
         write_text(self.sp("wt-x", ".git"), "gitdir: /elsewhere\n")
         p = self.init()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("move it out with git worktree move", p.stderr)
-        self.assertNotIn("such as .eddy-runs/current", p.stderr)
+        self.assertNotIn("such as scratchpad/eddy/current", p.stderr)
 
     def test_old_layout_team_dir_blocks_init_when_live(self):
-        old_dir = os.path.join(self.proj, ".eddy-runs", ".eddy")
+        old_dir = os.path.join(self.proj, "scratchpad", "eddy", ".eddy")
         os.makedirs(old_dir)
         write_text(os.path.join(old_dir, "config.json"),
-                   json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+                   json.dumps({"team_id": "eddy-app-1", "ticket": "APP-1"}))
         p = self.init(scenario="names_app1_taken")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("app-1-scout", p.stderr)
@@ -3130,7 +3104,7 @@ class TeamInit(Base):
     def test_records_orchestrator_session(self):
         p = self.run_script("eddy-init", "APP-1")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("eddy-app-1-orch")["session"])
 
     def test_refuses_without_session_id(self):
         p = self.run_script("eddy-init", "APP-1", env_extra={"EDDY_SESSION_ID": None})
@@ -3186,13 +3160,13 @@ class TeamInit(Base):
         self.assertEqual(p.returncode, 2)
 
     def test_picks_free_team_id_when_slug_taken(self):
-        # A prior team for the same ticket left app-1-* agents live. Reusing the
+        # A prior team for the same ticket left eddy-app-1-* agents live. Reusing the
         # deterministic slug would cross-poison them, so init must disambiguate.
         p = self.run_script("eddy-init", "APP-1", scenario="names_app1_taken")
         self.assertEqual(p.returncode, 0, p.stderr)
         cfg = json.loads(read_text(self.sp(".eddy", "config.json")))
-        self.assertEqual(cfg["team_id"], "app-1-2")
-        self.assertEqual(cfg["orchestrator"], "app-1-2-orch")
+        self.assertEqual(cfg["team_id"], "eddy-app-1-2")
+        self.assertEqual(cfg["orchestrator"], "eddy-app-1-2-orch")
 
     # F-1: eddy-init writes the decisions and plan files itself, from the templates of
     # its own plugin root, so an envoy whose plugin lives outside its working directory
@@ -3229,7 +3203,7 @@ class TeamInit(Base):
         }
         for label, case in cases.items():
             with self.subTest(label):
-                shutil.rmtree(os.path.join(self.proj, ".eddy-runs"), ignore_errors=True)
+                shutil.rmtree(os.path.join(self.proj, "scratchpad", "eddy"), ignore_errors=True)
                 env_extra = case.get("env_extra") or self.bar_env("Sonnet 5.5", cwd=self.proj)
                 p = self.run_script("eddy-init", "APP-1", *case.get("args", ()), env_extra=env_extra)
                 self.assertEqual(p.returncode, 4, p.stderr)
@@ -3284,7 +3258,7 @@ class TeamInit(Base):
     def test_real_ticket_keys_are_accepted(self):
         for ticket in ("ABC-123", "eddy-envoy", "PROBE-1", "v1.2_x"):
             with self.subTest(ticket=ticket):
-                shutil.rmtree(os.path.join(self.proj, ".eddy-runs"), ignore_errors=True)
+                shutil.rmtree(os.path.join(self.proj, "scratchpad", "eddy"), ignore_errors=True)
                 p = self.init(ticket=ticket)
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertTrue(os.path.exists(self.sp("decisions-%s.md" % ticket)))
@@ -3478,13 +3452,132 @@ class TeamOrchStart(Base):
         self.assertEqual([f for f in os.listdir(self.sp(".eddy")) if f.startswith("config.json.")], [])
 
 
+class EddyGuards(Base):
+    """An eddy run cannot move, archive or collide with a team run, and eddy refuses the collisions it can see."""
+    TODAY = "2026-01-02"
+    DEFAULT = {"EDDY_SCRATCH": None}
+
+    def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
+        env = {**self.bar_env("Opus 5.5", cwd=self.proj), "FAKE_RUN_ID": "eddy-app-1", "EDDY_TODAY": self.TODAY,
+               **(env_extra or {})}
+        return super().run_script(name, *args, scenario=scenario, env_extra=env, cwd=cwd)
+
+    def eddy_dir(self, *parts):
+        return os.path.join(self.proj, "scratchpad", "eddy", *parts)
+
+    def team_config(self, **fields):
+        d = os.path.join(self.proj, "scratchpad", "current", ".team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch", **fields}))
+
+    def test_init_writes_the_run_under_scratchpad_eddy(self):
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.eddy_dir("current", ".eddy", "config.json")))
+
+    def test_init_archives_its_own_run_to_scratchpad_eddy_archive(self):
+        os.makedirs(self.eddy_dir("current", ".eddy"))
+        write_text(self.eddy_dir("current", ".eddy", "config.json"),
+                   json.dumps({"team_id": "eddy-app-1", "ticket": "APP-1", "orchestrator": "eddy-app-1-orch"}))
+        write_text(self.eddy_dir("current", "brief-scout-digest.md"), "old brief\n")
+        p = self.run_script("eddy-init", "APP-2", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(self.eddy_dir(".archive", "APP-1-2026-01-02", "brief-scout-digest.md")), "old brief\n")
+        self.assertEqual(json.loads(read_text(self.eddy_dir("current", ".eddy", "config.json")))["ticket"], "APP-2")
+
+    def test_init_leaves_the_team_run_alone(self):
+        os.makedirs(os.path.join(self.proj, "scratchpad", "current"))
+        write_text(os.path.join(self.proj, "scratchpad", "current", "x.md"), "team\n")
+        write_text(os.path.join(self.proj, "scratchpad", "loose.md"), "loose\n")
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(os.path.join(self.proj, "scratchpad", "current", "x.md")), "team\n")
+        self.assertEqual(read_text(os.path.join(self.proj, "scratchpad", "loose.md")), "loose\n")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "scratchpad", ".archive")))
+
+    def test_init_leaves_siblings_of_its_run_alone(self):
+        os.makedirs(self.eddy_dir("other"))
+        write_text(self.eddy_dir("other", "notes.md"), "mine\n")
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(self.eddy_dir("other", "notes.md")), "mine\n")
+        self.assertFalse(os.path.exists(self.eddy_dir(".archive")))
+
+    def test_init_never_warns_about_worktrees_beside_its_run(self):
+        wt = self.eddy_dir("wt-feat")
+        os.makedirs(os.path.join(wt, "src"))
+        write_text(os.path.join(wt, ".git"), "gitdir: /elsewhere\n")
+        nested = self.eddy_dir("deep", "a")
+        os.makedirs(os.path.join(nested, ".git"))
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(wt, ".git")))
+        self.assertTrue(os.path.exists(os.path.join(nested, ".git")))
+        self.assertNotIn("worktree", p.stderr)
+
+    def test_init_refuses_a_session_the_team_run_names(self):
+        for field in ("envoy_session", "orchestrator_session"):
+            with self.subTest(field=field):
+                self.team_config(**{field: "orch-sid"})
+                p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("this session runs the team run app-1; start eddy in another session", p.stderr)
+                self.assertFalse(os.path.exists(self.eddy_dir()))
+                self.assertFalse(os.path.exists(os.path.join(self.proj, ".claude")))
+                self.assertEqual(self.herdr_calls(), [])
+
+    def test_init_goes_on_when_the_team_run_names_other_sessions(self):
+        self.team_config(envoy_session="sid-team-envoy", orchestrator_session="sid-team-orch")
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.eddy_dir("current", ".eddy", "config.json")))
+
+    def test_init_team_id_starts_with_eddy(self):
+        p = self.run_script("eddy-init", "noisy-envoy", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(self.eddy_dir("current", ".eddy", "config.json")))
+        self.assertEqual((cfg["team_id"], cfg["orchestrator"]), ("eddy-noisy-envoy", "eddy-noisy-envoy-orch"))
+
+    def test_init_hash_id_starts_with_eddy(self):
+        p = self.run_script("eddy-init", "APP-1", scenario="names_all_taken", env_extra=self.DEFAULT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        team_id = json.loads(read_text(self.eddy_dir("current", ".eddy", "config.json")))["team_id"]
+        self.assertRegex(team_id, r"^eddy-[a-z][a-z0-9]{5}$")
+
+    def test_start_refuses_the_team_runs_tabs(self):
+        self.team_config(envoy_tab="w1:tE", orchestrator_tab="w1:tO")
+        for tab in ("w1:tE", "w1:tO"):
+            with self.subTest(tab=tab):
+                p = self.run_script("eddy-start", "scout", "investigator", "--into-tab", tab, "--cwd", self.proj,
+                                    env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("refusing --into-tab %s" % tab, p.stderr)
+                self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_slice_prefixes_the_branch_once(self):
+        d = os.path.join(self.proj, ".claude", "team")
+        os.makedirs(d)
+        write_text(os.path.join(d, "project.yaml"),
+                   'worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        for branch in ("foo", "eddy-foo"):
+            with self.subTest(branch=branch):
+                open(self.git_log, "w").close()
+                p = self.run_script("eddy-slice", branch, "main", "--label", "x", env_extra={"HERDR_WORKSPACE_ID": "w1"})
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("worktree add eddy-foo main", self.git_calls())
+                self.assertFalse([c for c in self.git_calls() if "eddy-eddy-" in c], self.git_calls())
+
+
 class Coexist(Base):
     """Eddy runs beside the team mod: no name, folder, variable or index of the two may meet."""
     BANNED = ("mcp__team__", "TEAM_", "plugin: 'team'", "/team:", "team-overview", "team-envoy",
               "team-orchestration", "team-role-", "bin/team-", "scratchpad/current", "/.team",
               "team/sessions", "team mod")
     ALLOWED = {os.path.join("hooks", "mod", "coexist.ts"), os.path.join("tests", "mod", "coexist.test.ts"),
-               os.path.join("tests", "test_eddy.py"), "README.md"}
+               os.path.join("tests", "test_eddy.py"), "README.md",
+               # The guards read the team plugin's run config: the one place that knows its path.
+               os.path.join("lib", "run-dir.sh")}
     GENERATED = os.path.join(".claude-plugin", "types")
 
     def test_rename_is_complete(self):
@@ -3537,7 +3630,7 @@ class Coexist(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(os.listdir(os.path.join(run, ".team")), ["scout.json"])
         self.assertFalse(os.path.exists(os.path.join(run, "reports")))
-        self.assertFalse(os.path.exists(os.path.join(self.proj, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "scratchpad", "eddy")))
 
     def test_session_start_hook_ignores_the_team_index(self):
         run = self.team_agent_run()
@@ -3551,7 +3644,7 @@ class Coexist(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(os.listdir(os.path.join(run, ".team")), ["scout.json"])
 
-        eddy_run = os.path.join(self.proj, ".eddy-runs", "current")
+        eddy_run = os.path.join(self.proj, "scratchpad", "eddy", "current")
         os.makedirs(os.path.join(eddy_run, ".eddy"))
         write_text(os.path.join(eddy_run, ".eddy", "scout.json"), json.dumps({"role": "investigator", "session": "sid-e"}))
         eddy_index = os.path.join(self.profile(), "eddy", "sessions")

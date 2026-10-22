@@ -189,7 +189,7 @@ describe('a prompt that was not sent, in the orchestrator session of a split tea
     const w = await envoyTeam($, on)
     w.id = 'sid-orch-worker'
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`,
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`,
             '# Report\n\n---\n\nREPORT app-1-scout x: done\n')
     return w
   }
@@ -495,7 +495,7 @@ describe('the stall flag in the envoy session', () => {
     })
     await ticks(w, 12)
     expect(lines(w)).toEqual([])
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-t.md`, '# Report\n\n---\n\nREPORT app-1-scout t: done\n')
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-t.md`, '# Report\n\n---\n\nREPORT app-1-scout t: done\n')
     await ticks(w, 9)
     expect(w.statuses.at(-1)).toBe(NEEDLE)
   })

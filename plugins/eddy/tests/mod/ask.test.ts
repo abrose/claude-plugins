@@ -255,7 +255,7 @@ describe('prompt_of', () => {
 })
 
 describe('urgent by tool', () => {
-  const BRIEF = (w: any) => `${w.cwd}/.eddy-runs/current/brief-app-1-scout-fixtures.md`
+  const BRIEF = (w: any) => `${w.cwd}/scratchpad/eddy/current/brief-app-1-scout-fixtures.md`
   const denied = ($: any) =>
     $.classic.PermissionDenied({
       tool_name: 'mcp__gitlab__save_note', tool_input: {}, tool_use_id: 'tu-1', reason: 'auto mode',

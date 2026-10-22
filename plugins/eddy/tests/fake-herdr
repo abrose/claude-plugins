@@ -7,6 +7,9 @@ set -euo pipefail
 
 log="${FAKE_HERDR_LOG:?FAKE_HERDR_LOG unset}"
 scenario="${FAKE_HERDR_SCENARIO:-ok}"
+# The team id that the name scenarios (names_app1_taken, orch_stuck, orch_taken_late, names_all_taken)
+# put live. Tests of eddy-init set it to the id eddy-init makes, eddy-app-1.
+tid="${FAKE_RUN_ID:-app-1}"
 
 # Count prior invocations of a "<group> <sub>" pair before recording this one,
 # so a response can vary across repeated calls (e.g. dialog then status bar).
@@ -161,28 +164,35 @@ case "$group $sub" in
           {"name":"app-1-scout","pane_id":"w3:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}}
         ]}}' ;;
       names_app1_taken)
-        emit '{"result":{"agents":[
-          {"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}},
-          {"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}
-        ]}}' ;;
+        emit "$(printf '{"result":{"agents":[
+          {"name":"%s-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}},
+          {"name":"%s-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}
+        ]}}' "$tid" "$tid")" ;;
+      names_all_taken)
+        # Every id a slug can take is live: $tid, $tid-2 ... $tid-9, one orchestrator each.
+        rows=""
+        for suffix in "" -2 -3 -4 -5 -6 -7 -8 -9; do
+          rows="$rows${rows:+,}{\"name\":\"$tid$suffix-orch\",\"pane_id\":\"w1:p1\",\"agent_status\":\"idle\",\"agent_session\":{\"value\":\"oooo0000\"}}"
+        done
+        emit "{\"result\":{\"agents\":[$rows]}}" ;;
       name_scout_taken)
         emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
       list_fails)
         fail '{"error":{"code":"server_unavailable"}}' ;;
       orch_stuck)
-        # app-1-orch is live in w1:p9 from the first agent start until a call closes that pane.
+        # $tid-orch is live in w1:p9 from the first agent start until a call closes that pane.
         if ! grep -q '^agent start ' "$log" 2>/dev/null || grep -qx 'pane close w1:p9' "$log" 2>/dev/null; then
           emit '{"result":{"agents":[]}}'
         else
-          emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef12"}}]}}'
+          emit "{\"result\":{\"agents\":[{\"name\":\"$tid-orch\",\"pane_id\":\"w1:p9\",\"agent_status\":\"idle\",\"agent_session\":{\"value\":\"abcdef12\"}}]}}"
         fi ;;
       orch_taken_late)
         # The first agent list is unreadable (a caller treats that as no live agents);
-        # every later one shows app-1-orch live in a pane the caller never made.
+        # every later one shows $tid-orch live in a pane the caller never made.
         if [ "$same_before" -eq 0 ]; then
           emit 'not json'
         else
-          emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}}]}}'
+          emit "{\"result\":{\"agents\":[{\"name\":\"$tid-orch\",\"pane_id\":\"w1:p1\",\"agent_status\":\"idle\",\"agent_session\":{\"value\":\"oooo0000\"}}]}}"
         fi ;;
       release_live)
         # sid-scout is live in w1:p5 until a call closes that pane.

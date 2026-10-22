@@ -46,7 +46,7 @@ on a Rust repo with no Jira and no stacked branches.
 | Kernel | this plugin | `plugins/eddy/` | protocol, brief skeleton, role rules, commands, scripts |
 | Toolchain | Alfred's environment, global | Herdr CLI (`herdr --skill` for its guide), git worktrees + machete, Claude Code | `herdr agent prompt --wait`, `git m update` guarded |
 | Overlay | the project repository | `.claude/team/`, `.claude/skills/project-<role>/` | ports, tunnels, gate command, tracker hygiene, probe rules |
-| Task | one ticket, ephemeral | `.eddy-runs/current/` (git-ignored) | decisions file, briefs, reports, open questions |
+| Task | one ticket, ephemeral | `scratchpad/eddy/current/` (git-ignored) | decisions file, briefs, reports, open questions |
 
 The kernel depends on the toolchain only through the Herdr CLI verbs
 (`tab create`, `pane split`, `agent start`, `agent prompt --wait`,
@@ -162,7 +162,7 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
 2. The human decides, through the envoy. A card recommends one option with one
    sentence of reasoning. A card stands on its own: a reader who saw nothing
    else in the conversation can decide from it.
-3. Briefs are files in `.eddy-runs/current/`. Prompts are one line pointing at the brief.
+3. Briefs are files in `scratchpad/eddy/current/`. Prompts are one line pointing at the brief.
    Revisions are new files (`-rev2`), never edits of the original.
 4. The decisions file is the single binding source. Every brief reads it first.
    Every decision is numbered, including one-word answers. Amendments get a
@@ -216,7 +216,7 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     `WATCH context <n> percent` line when the context nears its limit. On that
     line, reach a safe point: no line delivered but not acted on, the plan and
     `orchestration-decisions.md` current, no action half done. Then write
-    `.eddy-runs/current/orch-handover.md` (template `orch-handover.md`): the
+    `scratchpad/eddy/current/orch-handover.md` (template `orch-handover.md`): the
     current step and the next one; each agent in flight with
     name/pane/session/topic/brief; the last line acted on, per kind; the open
     cards and what each blocks; the intentions not yet done. Then call
@@ -224,13 +224,13 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     at the next idle moment. After the compact, reload this skill, then read
     the decisions file, `orch-handover.md`, the plan file and
     `orchestration-decisions.md`, then the reports newer than the handover, then
-    the open cards (the files `.eddy-runs/current/.eddy/questions/Q-*.json`
+    the open cards (the files `scratchpad/eddy/current/.eddy/questions/Q-*.json`
     whose `status` is `open` or `assumed`; the `queue` tool works only in the
     envoy session). `reset_self` refuses when `orch-handover.md` is missing or
     older than 10 minutes. A `RESUME` line after a compact means do the reload
     now.
 12. The orchestrator writes every own call to
-    `.eddy-runs/current/orchestration-decisions.md` with context, so it can be
+    `scratchpad/eddy/current/orchestration-decisions.md` with context, so it can be
     audited. An own call becomes a card via `ask` instead when it is a one-way
     door, has more than about 1 h of rework, falls outside the brief's or a
     decision's scope, or touches permissions. The human's decisions stay in
@@ -287,8 +287,8 @@ Verbatim rules, kept to one page. Everything else is in `references/`.
     mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING
     and NEXT headings. Update it after every REPORT, before every
     `brief_send`, and whenever a card asks the human to act.
-18. The run's files live only in `.eddy-runs/current/`. Never read, list or
-    search `.eddy-runs/.archive/` unless the human asks about an earlier run.
+18. The run's files live only in `scratchpad/eddy/current/`. Never read, list or
+    search `scratchpad/eddy/.archive/` unless the human asks about an earlier run.
 19. Create a worktree only with `eddy-slice`, which uses the repo's own
     worktree tooling from `.claude/team/project.yaml`. If it refuses for lack
     of an overlay, ask the human how this repo makes worktrees. Never run
@@ -390,7 +390,7 @@ by removing Bash.
 
 ### Task-scope files
 
-All under `$EDDY_SCRATCH` (default `.eddy-runs/current/`, git-ignored). The kernel
+All under `$EDDY_SCRATCH` (default `scratchpad/eddy/current/`, git-ignored). The kernel
 creates and reads these; the overlay never does.
 
 | File | Written by | Purpose |
@@ -439,7 +439,7 @@ eddy-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    herdr gives no readable answer, or does not list the pane, refuse too.
    `--new-tab` and a missing config are never refused.
    Run mismatch guard, before the tab guard and before any write, when
-   `EDDY_SCRATCH` is unset (the run dir is then the `.eddy-runs/current`
+   `EDDY_SCRATCH` is unset (the run dir is then the `scratchpad/eddy/current`
    fallback) and `.eddy/config.json` exists: read the calling pane's workspace
    from `herdr pane current --current` (`result.pane.workspace_id`) and the
    workspaces of the run's recorded tabs (`envoy_tab`, `orchestrator_tab` and
@@ -467,7 +467,7 @@ eddy-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <
    herdr server, so without it the worker runs in the default profile.
    The stamped `EDDY_SCRATCH` is `eddy_run_dir` of `lib/run-dir.sh`, shared by
    `eddy-init`, `eddy-start` and `eddy-resurrect`: an absolute `EDDY_SCRATCH`
-   as given, else the value (default `.eddy-runs/current`) under the project
+   as given, else the value (default `scratchpad/eddy/current`) under the project
    root of the caller, symlinks resolved. The project root is the main
    checkout: the parent of `git rev-parse --path-format=absolute
    --git-common-dir` (the same from a linked worktree, where `--show-toplevel`
@@ -581,7 +581,7 @@ eddy-slice <branch> <parent> --label "<Tn> <KEY> <slug>" [--ticket <KEY>] [--cop
 2. If `project.yaml` says `stacked: true`: `git m add {branch} --onto {parent}`
    in the new worktree.
 3. Copy every `--copy` directory (design folder, decisions, mockups) into the
-   new worktree's `.eddy-runs/current/`. Warn about untracked spdd files that
+   new worktree's `scratchpad/eddy/current/`. Warn about untracked spdd files that
    will not travel. `--copy` targets the run dir by design, never the
    worktree's source tree.
    Also copy every `plugins/*/.claude-plugin/types/` folder from the checkout
@@ -639,9 +639,9 @@ Runs in the human's session, which becomes the envoy. Needs `EDDY_SESSION_ID`
    names) with exit 2. A ticket starting with `-` gets its own message. This
    comes before anything is archived, so a refused ticket leaves the previous
    run alone. `-h`/`--help` prints the usage and exits 0.
-2. Refuse (exit 1) while a previous team's agents are live, naming them. Then
-   archive the previous run and loose scratchpad entries to
-   `.eddy-runs/.archive/` (see Increment 2026-09-27).
+2. Refuse (exit 1) while a previous run's agents are live, naming them. Then
+   archive the previous run to `scratchpad/eddy/.archive/` (see Increment
+   2026-09-27). Nothing else in `scratchpad/eddy/` moves (Increment 2026-10-22).
 3. Choose a team id whose `<team_id>-*` name namespace is free among live
    agents (Increment 2026-09-18).
 4. Write `decisions-<ticket>.md` and `progress-<ticket>.md` into the run dir
@@ -833,7 +833,7 @@ also prints SessionStart JSON
 that tells the orchestrator to reload the `eddy-orchestration` skill, read the
 decisions file, `orch-handover.md`, the plan file and
 `orchestration-decisions.md`, then the reports newer than the handover, then
-the open cards (the files `.eddy-runs/current/.eddy/questions/Q-*.json` whose
+the open cards (the files `scratchpad/eddy/current/.eddy/questions/Q-*.json` whose
 `status` is `open` or `assumed`). The text matches `COMPACT_INSTRUCTIONS` in `hooks/mod/reset.ts`;
 change both together. A worker, a `/clear` and a run without that config print
 nothing. Anything else: exit 0, silently.
@@ -862,7 +862,7 @@ of closures over `$`; every other module takes `io` and never sees `$`.
   one.
 - Run directory: `paths.ts` is the only place that builds it. `runDir` is
   `$EDDY_SCRATCH` when that is absolute, else `$EDDY_SCRATCH` (default
-  `.eddy-runs/current`) under the main checkout of `$.session.root()`, read on
+  `scratchpad/eddy/current`) under the main checkout of `$.session.root()`, read on
   every call through `io.root`. The main checkout is the same rule as
   `eddy_project_root` in `lib/run-dir.sh`: the parent of
   `git rev-parse --path-format=absolute --git-common-dir` when that ends in
@@ -1189,7 +1189,7 @@ of closures over `$`; every other module takes `io` and never sees `$`.
     mod adds one line to the bundle of the tick, through the same send path as
     the other lines (a rejected send keeps it in `retryLines`):
     `WATCH context <n> percent: reach a safe point, write
-    .eddy-runs/current/orch-handover.md, then call reset_self` (`<n>` is the
+    scratchpad/eddy/current/orch-handover.md, then call reset_self` (`<n>` is the
     last response's `tokens` over the compact window that `/context` and the
     auto-compact measure against, `breakdown.rawMaxTokens`, as a whole percent;
     the model `window` stands in when the engine gives no breakdown. It is not
@@ -1218,10 +1218,10 @@ of closures over `$`; every other module takes `io` and never sees `$`.
     idle, so a resolved call of the mod's own compact sends one more line
     through `sendLines` (a rejected send keeps it in `retryLines`):
     `RESUME after compact: reload the eddy-orchestration skill, read the
-    decisions file, .eddy-runs/current/orch-handover.md, the plan file,
-    .eddy-runs/current/orchestration-decisions.md, the reports newer than the
+    decisions file, scratchpad/eddy/current/orch-handover.md, the plan file,
+    scratchpad/eddy/current/orchestration-decisions.md, the reports newer than the
     handover and the open cards (the files
-    .eddy-runs/current/.eddy/questions/Q-*.json whose status is open or
+    scratchpad/eddy/current/.eddy/questions/Q-*.json whose status is open or
     assumed), then continue from the handover`. It goes once
     per resolved compact. A skipped or rejected call sends none. An auto
     compact and a typed `/compact` send none: they run inside or before a turn,
@@ -1742,18 +1742,17 @@ Design: `docs/superpowers/specs/2026-09-27-team-scratchpad-per-run-design.md`.
 Every run lives in one folder so a new task never sees an earlier task's
 files.
 
-`EDDY_SCRATCH` now defaults to `.eddy-runs/current`. `eddy-init` first keeps
+`EDDY_SCRATCH` now defaults to `scratchpad/eddy/current`. `eddy-init` first keeps
 the live-agent guard, then moves a non-empty run dir to
 `<scratch root>/.archive/<ticket>-<YYYY-MM-DD>/` (`run-<date>` without a
-ticket, `-2`, `-3` on a clash) and, when the scratch root is named
-`scratchpad`, sweeps every other entry except `.archive` into
-`.archive/loose-<date>/`. Nothing that holds a `.git` is ever moved: a loose
-one is skipped with a warning, and a run dir that holds one makes init refuse.
-The live-agent guard also checks a team left in the old flat layout
-(`scratchpad/.eddy`), so upgrading mid-run never sweeps a live team's files.
+ticket, `-2`, `-3` on a clash). Eddy has no loose-entry sweep (Increment
+2026-10-22), so the parent of the run dir is never touched. A run dir that
+holds a `.git` makes init refuse.
+The live-agent guard also checks a run left in the old flat layout
+(`<scratch root>/.eddy`).
 `/eddy:init` now runs `eddy-init` before it writes the decisions and plan
 files. Worktree agents get their brief and decisions file in
-`<worktree>/.eddy-runs/current/`. `eddy-slice` no longer has a built-in
+`<worktree>/scratchpad/eddy/current/`. `eddy-slice` no longer has a built-in
 worktree location: without `worktree_cmd` and `worktree_dir` in the overlay
 it refuses, so a repo's own worktree tooling is always used. The overview and
 watcher panes now receive an absolute `EDDY_SCRATCH` like agent panes do.
@@ -2009,3 +2008,27 @@ live run, and the re-attach starts a new orchestrator when its session is gone.
   reuse a pane id. `eddy-orch-start` checks again under the lock that no
   orchestrator runs (exit 5, `an orchestrator runs (<pane>); left alone`).
   The stale-lock age is 600 s, twice `START_TIMEOUT_MS`.
+
+## Increment 2026-10-22: run folder and guards (eddy T2)
+
+Decision 14 of the noisy-envoy run, and section 3 of the eddy plan.
+
+- The run folder is `scratchpad/eddy/current`. Its archive is
+  `scratchpad/eddy/.archive/`. `scratchpad` is git-ignored, so no ignore line is
+  added. `EDDY_SCRATCH` still overrides the default.
+- `eddy-init` has no loose-entry sweep. It moves only its own run dir, and it
+  neither moves nor warns about anything beside it.
+- `eddy-init` refuses (exit 1) a session that the team plugin's run names as its
+  envoy or its orchestrator: `this session runs the team run <team_id>; start eddy
+  in another session`. It only reads that run's config
+  (`eddy_team_config` in `lib/run-dir.sh`) and writes nothing there.
+- Team ids start with `eddy-`: `eddy-<slug>`, `eddy-<slug>-2` to `-9`, then
+  `eddy-<hash>`. An eddy agent name never meets a team agent name.
+- `eddy-start` also refuses a placement in the orchestrator tab or the envoy tab
+  of that team run (exit 2), as it does for its own run.
+- `eddy-slice` puts `eddy-` in front of the branch once. It never changes the
+  parent.
+- The deny hook for the team tools fails open: a throw in the eddy-active check
+  lets the call go on (a test pins it).
+- In the team plugin, `team-init` keeps `scratchpad/eddy` out of its loose-entry
+  sweep. This is the only change outside `plugins/eddy/`.

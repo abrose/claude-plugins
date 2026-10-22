@@ -209,7 +209,7 @@ export function world(on: On): World {
     id: 'sid-orch',
     cwd: CWD,
     root: CWD,
-    team: `${CWD}/.eddy-runs/current/.eddy`,
+    team: `${CWD}/scratchpad/eddy/current/.eddy`,
     files: new Map(),
     agents: [],
     panes: [],
@@ -343,7 +343,7 @@ export function world(on: On): World {
       return out('')
     }
     if (bin.endsWith('/bin/eddy-brief')) {
-      return out(`Read .eddy-runs/current/brief-${argv[2]}-${argv[4]}.md and execute it fully.\n`)
+      return out(`Read scratchpad/eddy/current/brief-${argv[2]}-${argv[4]}.md and execute it fully.\n`)
     }
     if (bin.endsWith('/bin/eddy-forget')) {
       const name = argv[1] ?? ''

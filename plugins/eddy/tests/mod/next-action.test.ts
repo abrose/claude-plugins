@@ -896,7 +896,7 @@ describe('in the envoy session', () => {
   const pushes = (w: any): string[] => w.submits.filter((s: string) => s.startsWith('NEXT-ACTION'))
   const ORCH = { pane_id: 'w1:p1', agent_status: 'idle', agent_session: { value: 'sid-orch-worker' } }
   const scout = (state = 'idle') => ({ pane_id: 'w1:p2', agent_status: state, agent_session: { value: 'sid-scout' } })
-  const writePlan = (w: any, body: string) => w.write(`${w.cwd}/.eddy-runs/current/progress-APP-1.md`, `# APP-1\n${body}`)
+  const writePlan = (w: any, body: string) => w.write(`${w.cwd}/scratchpad/eddy/current/progress-APP-1.md`, `# APP-1\n${body}`)
   const turn = { text: 'what now?', turnId: 't1' } as never
   const turnEnd = { answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never
 
@@ -947,7 +947,7 @@ describe('in the envoy session', () => {
     w.writeJson(`${w.team}/app-1-scout.json`, {
       role: 'investigator', topic: 'fixtures', brief: 'brief-app-1-scout-fixtures.md', pane: 'w1:p2', session: 'sid-scout',
     })
-    w.write(`${w.cwd}/.eddy-runs/current/brief-app-1-scout-fixtures.md`, 'brief')
+    w.write(`${w.cwd}/scratchpad/eddy/current/brief-app-1-scout-fixtures.md`, 'brief')
     w.agents = [ORCH, scout('working')]
     writePlan(w, plan)
     await ticks(w, 1)
@@ -1034,7 +1034,7 @@ describe('in the envoy session', () => {
     w.writeJson(`${w.team}/app-1-scout.json`, {
       role: 'investigator', topic: 'fixtures', brief: 'brief-app-1-scout-fixtures.md', pane: 'w1:p2', session: 'sid-scout',
     })
-    w.write(`${w.cwd}/.eddy-runs/current/brief-app-1-scout-fixtures.md`, 'brief')
+    w.write(`${w.cwd}/scratchpad/eddy/current/brief-app-1-scout-fixtures.md`, 'brief')
     w.agents = [ORCH, scout('working')]
 
     await ticks(w, 12)
@@ -1083,7 +1083,7 @@ describe('in the envoy session', () => {
 
   test('no prompt while a decide call runs in the envoy turn', async ($, on) => {
     const w = await quiet($, on)
-    w.write(`${w.cwd}/.eddy-runs/current/decisions-APP-1.md`, '# Decisions APP-1\n')
+    w.write(`${w.cwd}/scratchpad/eddy/current/decisions-APP-1.md`, '# Decisions APP-1\n')
     fileCard(w, 3)
     fileCard(w, 4)
     await ticks(w, 1)

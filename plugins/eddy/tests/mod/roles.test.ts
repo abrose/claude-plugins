@@ -21,7 +21,7 @@ describe('the two halves', () => {
   test('the envoy session draws and submits no REPORT line', async ($, on) => {
     const w = await envoyTeam($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
     await w.clock.advance(15000)
     expect(w.opened).toEqual(['eddy', 'eddy-questions'])
     expect(w.submits).toEqual([])
@@ -31,7 +31,7 @@ describe('the two halves', () => {
     const w = await envoyTeam($, on)
     w.id = 'sid-orch-worker'
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
     await w.clock.advance(15000)
     expect(w.opened).toEqual([])
     expect(w.submits).toEqual(['REPORT app-1-scout x: done'])
@@ -40,7 +40,7 @@ describe('the two halves', () => {
   test('a team dir without envoy_session runs both halves in the orchestrator', async ($, on) => {
     const w = await team($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
     await w.clock.advance(15000)
     expect(w.opened).toEqual(['eddy', 'eddy-questions'])
     expect(w.submits).toEqual(['REPORT app-1-scout x: done'])
@@ -52,7 +52,7 @@ describe('the two halves', () => {
     w.writeJson(`${w.team}/app-1-orch.json`, { role: 'orchestrator', topic: '', brief: 'b', pane: 'w1:p9', session: 'sid-orch-worker' })
     w.agents = [{ pane_id: 'w1:p9', tab_id: 'w1:t9', agent_status: 'idle', agent_session: { value: 'sid-orch-worker' } }]
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-orch-.md`, report('REPORT app-1-orch x: y'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-orch-.md`, report('REPORT app-1-orch x: y'))
     await w.clock.advance(15000)
     await w.clock.advance(150000)
     expect(w.submits.join('\n')).not.toContain('app-1-orch')
@@ -122,7 +122,7 @@ describe('an envoy session before the orchestrator started', () => {
 
   test('decide works', async ($, on) => {
     const w = await beforeOrchestrator($, on)
-    w.write(`${w.cwd}/.eddy-runs/current/decisions-APP-1.md`, HEAD)
+    w.write(`${w.cwd}/scratchpad/eddy/current/decisions-APP-1.md`, HEAD)
     card(w, 1)
     expect(await call($, 'decide', { cards: ['Q-1'], answer: 'Use real fixtures.', rationale: 'It hides the bug.' }))
       .toMatchObject({ result: 'Decision 1' })
@@ -146,7 +146,7 @@ describe('an envoy session before the orchestrator started', () => {
   test('the orchestrator half stays inactive: no prompt, no brief_send', async ($, on) => {
     const w = await beforeOrchestrator($, on)
     w.writeJson(`${w.team}/delivered.json`, {})
-    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
+    w.write(`${w.cwd}/scratchpad/eddy/current/reports/app-1-scout-.md`, report('REPORT app-1-scout x: done'))
     await w.clock.advance(15000)
     expect(w.submits).toEqual([])
     expect(await $.tool.call({ tool: 'mcp__eddy__brief_send', tool_use_id: 't1', name: 'app-1-scout', topic: 'dig' } as never))
@@ -155,7 +155,7 @@ describe('an envoy session before the orchestrator started', () => {
 
   test('decisions made before the orchestrator started arrive once, at its first tick', async ($, on) => {
     const w = await beforeOrchestrator($, on)
-    w.write(`${w.cwd}/.eddy-runs/current/decisions-APP-1.md`, HEAD)
+    w.write(`${w.cwd}/scratchpad/eddy/current/decisions-APP-1.md`, HEAD)
     card(w, 1)
     await call($, 'decide', { cards: ['Q-1'], answer: 'Use real fixtures.', rationale: 'It hides the bug.' })
     await w.clock.advance(15000)
