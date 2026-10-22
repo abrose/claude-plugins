@@ -58,6 +58,11 @@ function filedBy(card: TeamCard, input: NextActionInput): string {
 
 const CARD_ID = /\bQ-\d+\b/g
 
+const namesCard = (text: string) => (text.match(CARD_ID) ?? []).length > 0
+
+/** The `[?]` steps that ask the human to act with no card (a manual test, a go). A step that names a card is that card. */
+const waitsWithoutCard = (waits: string[]) => waits.filter(text => !namesCard(text))
+
 /**
  * The `[?]` plan steps that wait on their own. Rule 17 marks a `[?]` step for each open card, so a step that
  * names an open card's id is that card and counts once, as the card. Any other `[?]` step (a manual test, a go)
@@ -83,7 +88,10 @@ function runningNow(input: NextActionInput): string {
   return planned.length > 0 ? planned.join('; ') : 'nothing'
 }
 
-/** The block: the mod's statement of the facts. The envoy tells the human these four lines in its own words. */
+/**
+ * The block: the mod's statement of the facts. The envoy tells the human only what changed, from the change
+ * list and these four lines; it retells the whole block only on a pull.
+ */
 export function nextActionBlock(input: NextActionInput): string {
   const open = queueGroups(openCards(input.cards)).flatMap(g => g.cards)
   // While its prompt shows, an open card about a worker's prompt and that blocked worker are one thing that waits.
@@ -157,6 +165,8 @@ export type NextActionSnapshot = {
   open: string[]
   /** The open cards that are urgent. */
   urgent: string[]
+  /** The open cards about a worker's permission prompt, with the worker and the dialog they were filed for. */
+  linked: { id: string; agent: string; dialog: string }[]
   parked: string[]
   waits: string[]
   done: string[]
@@ -181,6 +191,7 @@ export function nextActionSnapshot(input: NextActionInput): NextActionSnapshot {
   return {
     open: open.map(c => c.id),
     urgent: open.filter(c => c.urgent).map(c => c.id),
+    linked: open.flatMap(c => c.prompt ? [{ id: c.id, agent: c.prompt.agent, dialog: normalizeDialog(c.prompt.dialog) }] : []),
     parked: input.cards.filter(c => c.status === 'assumed').map(c => c.id),
     waits: (input.plan?.waits ?? []).map(i => i.text),
     done: (input.plan?.done ?? []).map(i => i.text),
@@ -196,9 +207,15 @@ export function nextActionSnapshot(input: NextActionInput): NextActionSnapshot {
   }
 }
 
-/** The snapshot fields the triggers T1 to T8 read, as one string. They join the key (see `nextActionView`). */
+/**
+ * The snapshot fields the triggers read, as one string. They join the key (see `nextActionView`). A step done
+ * and a `[?]` step that names a card are no trigger, so they stay out. A plan edit alone does not restart the
+ * wait of a message that is already due for another reason, while an agent works. With no agent working, a step
+ * flip can change the block lines `Running now` and `After that`. The key then changes, and the one-tick hold
+ * restarts (at most 15 s, bounded by the 60 s cap).
+ */
 const triggerMarks = (s: NextActionSnapshot) =>
-  JSON.stringify([s.open, s.waits, s.done, s.blocked, s.denials, s.stalled, s.gone, s.finished])
+  JSON.stringify([s.open, waitsWithoutCard(s.waits), s.blocked, s.denials, s.stalled, s.gone, s.finished])
 
 /**
  * The block, the snapshot and the key of one tick. The key is the block minus its minutes, then every snapshot
@@ -297,13 +314,21 @@ export type NextActionMarks = {
   pending: { firstAt: number; key: string; held: number } | null
 }
 
-/** The triggers that fired between the snapshot at the last send and now (design 2.2, T1 to T8). */
+/**
+ * The triggers that fired between the snapshot at the last send and now (design 2.2, T1 to T8). T3 (a step
+ * done) is retired: a plan edit rides in the change list of the next message. T2 fires only for a `[?]` step
+ * that names no card, because that step asks the human to act; a step that names a card is that card. T1 skips
+ * a new card about a permission prompt that the last message already announced (T5): one message per prompt.
+ */
 export function triggersOf(before: NextActionSnapshot, now: NextActionSnapshot): { fired: string[]; urgent: boolean } {
-  const newOpen = fresh(now.open, before.open)
+  const announced = (id: string) => {
+    const link = now.linked.find(l => l.id === id)
+    return !!link && before.blocked.some(b => b.name === link.agent && samePrompt(b.dialog, link.dialog))
+  }
+  const newOpen = fresh(now.open, before.open).filter(id => !announced(id))
   const triggers: [string, boolean, boolean][] = [
     ['T1', newOpen.length > 0, newOpen.some(id => now.urgent.includes(id))],
-    ['T2', fresh(now.waits, before.waits).length > 0, false],
-    ['T3', fresh(now.done, before.done).length > 0, false],
+    ['T2', fresh(waitsWithoutCard(now.waits), before.waits).length > 0, false],
     ['T4', now.stalled && !before.stalled, false],
     ['T5', freshBlocked(now.blocked, before.blocked).length > 0, true],
     ['T6', fresh(now.denials, before.denials).length > 0, true],
@@ -332,24 +357,29 @@ export function nextActionDue(
 /** The prompt-box draft as the last tick saw it, and for how many ticks it stayed the same. */
 export type DraftMark = { text: string; still: number }
 
-/** A draft that stayed the same for this many ticks (30 s) is left behind, not typed. */
+/** For an urgent message, a draft that stayed the same for this many ticks (30 s) is left behind, not typed. */
 const DRAFT_LEFT_TICKS = 2
 
 /**
- * Whether the human is typing. A draft that changed since the last tick holds the message; one unchanged for
- * `DRAFT_LEFT_TICKS` ticks counts as left behind, so a human who walked away still gets the message.
+ * Whether a draft in the prompt box holds the message. A message that is not urgent waits for as long as the
+ * box holds a draft: until the human sends it or clears it. An urgent message (a permission prompt waits on the
+ * human) is held only while the draft changes: one unchanged for `DRAFT_LEFT_TICKS` ticks counts as left
+ * behind, so a human who walked away still gets it.
  */
-export function draftHeld(prev: DraftMark | null, text: string): { mark: DraftMark | null; held: boolean } {
+export function draftHeld(
+  prev: DraftMark | null, text: string, urgent: boolean,
+): { mark: DraftMark | null; held: boolean } {
   if (text === '') return { mark: null, held: false }
   const still = prev !== null && prev.text === text ? prev.still + 1 : 0
-  return { mark: { text, still }, held: still < DRAFT_LEFT_TICKS }
+  return { mark: { text, still }, held: !urgent || still < DRAFT_LEFT_TICKS }
 }
 
 const HEADER =
-  `${NEXT_ACTION_PREFIX}. Tell the human every fact in the block below, in your own words: ` +
-  'where the run stands, what waits on them with its card id, what runs now with time spent, ' +
-  'what comes next. You may reorder and merge, add context from the changes listed, and link it to ' +
-  'the topic you and the human just discussed. Always reply; never drop a fact. ' +
+  `${NEXT_ACTION_PREFIX}. Tell the human only what changed, in your own words and in at most ` +
+  '3 lines: what is new, what waits on them now with its card id, and one state line. ' +
+  'Drop no fact that changed. Do not retell the rest of the block: the full block comes only when ' +
+  'the human pulls. Link it to the topic you and the human just discussed only when a new card ' +
+  'changes the card under discussion. Always reply. ' +
   'Every run fact you tell comes from the block, the change list or a queue read; ' +
   'never add a run fact from elsewhere, and mark a guess as a guess. ' +
   'You may call queue. Call no other tool.'

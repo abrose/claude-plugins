@@ -141,8 +141,11 @@ delivers them to the orchestrator. These twenty-one rules bind everyone.
 16. The orchestrator never speaks to the human. The envoy speaks when the
     human pulls and on every run change it judges relevant. It learns of a
     change from a pull or from the team mod's next-action message (a card
-    or step waits on the human, a step ends, the run goes idle on the
-    human, a worker is blocked or denied, the run ends). Keep the plan file
+    or a step with no card waits on the human, the run stays idle on the
+    human for 2 minutes, a worker is blocked or denied, the run ends). A
+    plan edit alone, a step done or a `[?]` step that names a card, sends no
+    message; it rides in the next one. The envoy tells only what changed, in
+    at most 3 lines; the full block comes on a pull. Keep the plan file
     current: the message reads it. Urgent cards and a stalled run also
     show as a status line and a 30 s toast in the envoy session.
 17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows

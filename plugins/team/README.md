@@ -17,9 +17,10 @@ that build, not on older ones).
 - You talk to one **envoy** session: the session where you run `/team:init`.
   It speaks when you speak to it, and when the team mod sends it a
   next-action message about a run change: a card or step that waits on you,
-  a step done, the run idle on you, a blocked worker, the run finished. So
-  when you come back, the pane already says where the run stands and what
-  you do next. It shows the question queue, records your decisions with
+  the run idle on you for 2 minutes, a blocked worker, the run finished. A
+  step done sends no message of its own, and the message tells only what
+  changed. So when you come back, the pane already says where the run stands
+  and what you do next. It shows the question queue, records your decisions with
   `decide`, and passes operational requests to the orchestrator with `relay`.
 - `/team:init` starts an **orchestrator** in its own worker tab. It plans,
   briefs, reads reports, and acts on `DECISION` and `RELAY` lines. It never

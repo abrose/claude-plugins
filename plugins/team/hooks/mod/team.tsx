@@ -347,10 +347,10 @@ async function envoyHalf(
     workers: stallWorkers(records, rows, idleRows.briefed, myId),
     orchestrator,
   })
-  await urgentBadge($, io, teamdir, found, stall)
+  const stalled = await urgentBadge($, io, teamdir, found, stall)
   if (!canPush) return
   const input = await gatherInput(io, {
-    run, cfg, teamdir, records, rows, listed, cards: found, plan: parsed, stalled: stall !== null, myId,
+    run, cfg, teamdir, records, rows, listed, cards: found, plan: parsed, stalled, myId,
     now: await $.clock.now(), dialogs: stale.dialogs,
   })
   await pushNextAction(io, teamdir, input)
@@ -361,10 +361,12 @@ async function envoyHalf(
  * error (set only in an orchestrator-only session, and kept while it shows), the urgent badge, the stall
  * text. Each new urgent card gets one toast, and each stall episode one toast, whatever the line shows.
  * `stall` is `stallIds`: the open cards while the whole team waits on the human, else null.
+ * Returns whether the run counts as stalled: the wait has held for `STALL_AFTER_MS`, the same timer that shows
+ * the stall line and toast. The next-action trigger T4 reads this flag, not `stall` itself.
  */
 async function urgentBadge(
   $: EngineInterface, io: Io, teamdir: string, found: TeamCard[], stall: string[] | null,
-): Promise<void> {
+): Promise<boolean> {
   await update($, urgent, () => found.filter(c => c.urgent && (c.status === 'open' || c.status === 'assumed')).length)
   const marksPath = `${teamdir}/toasted.json`
   const read = await readJson<string[]>(io, marksPath)
@@ -375,6 +377,7 @@ async function urgentBadge(
   for (const c of fresh.toast) await $.ui.toast(toastText(c), { timeoutMs: TOAST_MS })
   if (waiting.toast !== undefined) await $.ui.toast(waiting.toast, { timeoutMs: TOAST_MS })
   await writeJson(io, marksPath, waiting.seen)
+  return waiting.text !== undefined
 }
 
 /** The timer does not wait for a tick (its callback returns void), so a slow tick would overlap the next one. */
