@@ -1,0 +1,60 @@
+import { readJson, tailText } from './io'
+import type { Io } from './io'
+import { reportLine } from './reports'
+import type { TeamRecord } from './tick'
+
+export type AgentFacts = {
+  name: string
+  state: string
+  pane: string
+  reportPath: string
+  hasFreshReport: boolean
+  quietSinceStop: boolean
+  /** Watched: briefed in its current session (`brief_send` ran, no /clear since; a /compact keeps it). Only then it owes a report. */
+  watched: boolean
+}
+
+function lastTurnAt(tail: string): number | null {
+  let last: number | null = null
+  for (const line of tail.split('\n')) {
+    try {
+      const ev = JSON.parse(line)
+      if ((ev.type === 'user' || ev.type === 'assistant') && ev.timestamp) last = Date.parse(ev.timestamp)
+    } catch {
+      continue
+    }
+  }
+  return last
+}
+
+/** A report counts as fresh when it holds a REPORT line and is not older than the agent's brief. */
+export async function reportIsFresh(io: Io, run: string, name: string, rec: TeamRecord): Promise<boolean> {
+  const reportPath = `${run}/reports/${name}-${rec.topic}.md`
+  const briefAt = await io.mtime(`${run}/brief-${name}-${rec.topic}.md`)
+  const reportAt = await io.mtime(reportPath)
+  const text = reportAt === null ? null : await io.readText(reportPath)
+  return reportAt !== null && text !== null && reportLine(text) !== null
+    && !(briefAt !== null && reportAt < briefAt)
+}
+
+/**
+ * What the watch rules need about one agent. A report counts as fresh as in
+ * `reportIsFresh`. A stop counts as quiet when it is `after` seconds old,
+ * newer than the brief, and no turn started since.
+ */
+export async function gatherFacts(
+  io: Io, run: string, name: string, rec: TeamRecord, state: string, now: number, after: number,
+): Promise<AgentFacts> {
+  const reportPath = `${run}/reports/${name}-${rec.topic}.md`
+  const briefAt = await io.mtime(`${run}/brief-${name}-${rec.topic}.md`)
+  const hasFreshReport = await reportIsFresh(io, run, name, rec)
+
+  let quietSinceStop = false
+  const stop = await readJson<{ transcript: string; at: number }>(io, `${run}/.eddy/stops/${name}.json`)
+  if (stop && now - stop.at * 1000 >= after * 1000 && !(briefAt !== null && briefAt > stop.at * 1000)) {
+    const last = lastTurnAt(await tailText(io, stop.transcript, 262144))
+    quietSinceStop = last === null || last <= stop.at * 1000
+  }
+  const watched = rec.session !== undefined && rec.watch_session === rec.session
+  return { name, state, pane: rec.pane, reportPath, hasFreshReport, quietSinceStop, watched }
+}

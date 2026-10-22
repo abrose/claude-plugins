@@ -1,0 +1,504 @@
+import { describe, expect, test } from 'claude-code/testing'
+import { idleTabs, layoutActions } from '../../hooks/mod/layout'
+import { watchLines } from '../../hooks/mod/watch'
+import { card, DIALOG_SNAPSHOT, DIALOG_TEXT, start, team } from './world'
+
+const fact = (over: object) => ({
+  name: 'a', state: 'working', pane: 'w1:p2', reportPath: '/r/a-t.md',
+  hasFreshReport: false, quietSinceStop: false, watched: true, ...over,
+})
+const empty = { agents: {}, _flagged: {}, _idle_since: {} }
+
+describe('watchLines', () => {
+  test('a turn to blocked is flagged with the old state', () => {
+    const r = watchLines([fact({ state: 'blocked' })], { ...empty, agents: { a: 'working' } }, 0, 120)
+    expect(r.blocked).toEqual(['a'])
+    expect(r.lines).toEqual(['WATCH a: working -> blocked'])
+  })
+  test('idle without a fresh report is flagged once, after the grace period', () => {
+    let r = watchLines([fact({ state: 'idle' })], empty, 1000, 120)
+    expect(r.lines).toEqual([])
+    r = watchLines([fact({ state: 'idle' })], r.mem, 1000 + 120_000, 120)
+    expect(r.lines).toEqual(['WATCH a: idle, no report - read /r/a-t.md'])
+    r = watchLines([fact({ state: 'idle' })], r.mem, 1000 + 240_000, 120)
+    expect(r.lines).toEqual([])
+  })
+  test('quiet since its stop counts even while herdr shows working', () => {
+    const r = watchLines([fact({ quietSinceStop: true })], empty, 0, 120)
+    expect(r.lines).toEqual(['WATCH a: idle, no report - read /r/a-t.md'])
+  })
+  test('a fresh report is never flagged', () => {
+    const r = watchLines([fact({ state: 'idle', hasFreshReport: true })], empty, 999_999, 120)
+    expect(r.lines).toEqual([])
+  })
+  test('an unbriefed idle agent gets no line and no idle timer', () => {
+    const r = watchLines([fact({ state: 'idle', watched: false })], empty, 1000, 120)
+    expect(r.mem._idle_since).toEqual({})
+    const later = watchLines([fact({ state: 'idle', watched: false })], r.mem, 1000 + 240_000, 120)
+    expect(later.lines).toEqual([])
+    expect(later.mem._flagged).toEqual({})
+  })
+  test('an unbriefed agent quiet since its stop gets no line', () => {
+    const r = watchLines([fact({ quietSinceStop: true, watched: false })], empty, 0, 120)
+    expect(r.lines).toEqual([])
+  })
+  test('an unbriefed agent that turns blocked is still flagged', () => {
+    const r = watchLines([fact({ state: 'blocked', watched: false })], { ...empty, agents: { a: 'working' } }, 0, 120)
+    expect(r.blocked).toEqual(['a'])
+    expect(r.lines).toEqual(['WATCH a: working -> blocked'])
+  })
+})
+
+describe('layoutActions', () => {
+  const base = {
+    teamTabs: ['w1:t2'], orchTabs: ['w1:t1'], namedPanes: new Set(['w1:p2', 'w1:p3']),
+    pending: new Set<string>(), briefed: new Map<string, boolean>(), prevFlags: [] as string[],
+  }
+  test('never closes a pane eddy-start marked pending', () => {
+    const r = layoutActions({ ...base, pending: new Set(['w1:p2']), panes: [
+      { pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'unknown' },
+    ] })
+    expect(r.closes).toEqual([])
+  })
+  test('closes an empty pane a record names, never one it does not', () => {
+    const r = layoutActions({ ...base, panes: [
+      { pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'unknown' },
+      { pane_id: 'w1:p9', tab_id: 'w1:t2', agent_status: 'unknown' },
+    ] })
+    expect(r.closes).toEqual(['w1:p2'])
+  })
+  test('never touches the orchestrator tab', () => {
+    const r = layoutActions({ ...base, teamTabs: ['w1:t1'], panes: [
+      { pane_id: 'w1:p2', tab_id: 'w1:t1', agent_status: 'unknown' },
+    ] })
+    expect(r.closes).toEqual([])
+  })
+  test('flags a tab over budget once', () => {
+    const panes = Array.from({ length: 7 }, (_, i) => ({ pane_id: `w1:x${i}`, tab_id: 'w1:t2', agent_status: 'working' }))
+    let r = layoutActions({ ...base, panes })
+    expect(r.fresh).toEqual(['layout: tab w1:t2 over budget (7/6)'])
+    r = layoutActions({ ...base, panes, prevFlags: r.flags })
+    expect(r.fresh).toEqual([])
+  })
+  test('an idle tab with a fresh report is no WATCH flag any more', () => {
+    const panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
+    const r = layoutActions({ ...base, panes, briefed: new Map([['w1:p2', true]]) })
+    expect(r.flags).toEqual([])
+    expect(r.fresh).toEqual([])
+  })
+})
+
+describe('idleTabs', () => {
+  const base = {
+    teamTabs: ['w1:t2'], orchTabs: ['w1:t1'], namedPanes: new Set(['w1:p2', 'w1:p3']),
+    pending: new Set<string>(), briefed: new Map<string, boolean>(), prevFlags: [] as string[],
+  }
+  const idle = (id: string, status = 'idle') => ({ pane_id: id, tab_id: 'w1:t2', agent_status: status })
+  test('a never-briefed idle tab is not listed', () => {
+    expect(idleTabs({ ...base, panes: [idle('w1:p2')] })).toEqual([])
+  })
+  test('lists a tab only when every briefed agent there has a fresh report, with the pane statuses seen', () => {
+    const panes = [idle('w1:p2'), idle('w1:p3', 'done')]
+    expect(idleTabs({ ...base, panes, briefed: new Map([['w1:p2', true], ['w1:p3', false]]) })).toEqual([])
+    expect(idleTabs({ ...base, panes, briefed: new Map([['w1:p2', true], ['w1:p3', true]]) }))
+      .toEqual(['tab w1:t2 idle, consider release (w1:p2 idle, w1:p3 done)'])
+  })
+  test('a working or blocked pane keeps the tab out', () => {
+    const briefed = new Map([['w1:p2', true], ['w1:p3', true]])
+    expect(idleTabs({ ...base, panes: [idle('w1:p2'), idle('w1:p3', 'working')], briefed })).toEqual([])
+    expect(idleTabs({ ...base, panes: [idle('w1:p2'), idle('w1:p3', 'blocked')], briefed })).toEqual([])
+  })
+  test('an exempt tab and a tab no team start made are not listed', () => {
+    const briefed = new Map([['w1:p2', true]])
+    expect(idleTabs({ ...base, orchTabs: ['w1:t2'], panes: [idle('w1:p2')], briefed })).toEqual([])
+    expect(idleTabs({ ...base, teamTabs: [], panes: [idle('w1:p2')], briefed })).toEqual([])
+  })
+})
+
+/** What `brief_send` does to the scout's record: it is now watched in its current session. */
+const markBriefed = (w: any) => w.writeJson(`${w.team}/app-1-scout.json`, {
+  role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout',
+  brief_sent_session: 'sid-scout', watch_session: 'sid-scout',
+})
+/** What a /compact leaves: the SessionStart hook dropped `brief_sent_session`, `watch_session` stays. */
+const markCompacted = (w: any) => w.writeJson(`${w.team}/app-1-scout.json`, {
+  role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout', watch_session: 'sid-scout',
+})
+
+describe('quiet since the last stop', () => {
+  const iso = (ms: number) => new Date(ms).toISOString()
+  const turn = (type: string, ms: number) => JSON.stringify({ type, timestamp: iso(ms) })
+  const TR = '/proj/transcript.jsonl'
+
+  async function stoppedWorker($: any, on: any) {
+    const w = await team($, on)
+    markBriefed(w)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+    w.write(TR, turn('assistant', 999_000) + '\n')
+    w.writeJson(`${w.team}/stops/app-1-scout.json`, { transcript: TR, at: 1000 })
+    return w
+  }
+  const flags = (w: any) => w.submits.filter((s: string) => s.includes('no report'))
+
+  test('a worker herdr calls working is flagged once quiet past the grace period', async ($, on) => {
+    const w = await stoppedWorker($, on)
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(flags(w)).toHaveLength(1)
+  })
+
+  test('is not flagged within the grace period', async ($, on) => {
+    const w = await stoppedWorker($, on)
+    await w.clock.advance(15000)
+    expect(flags(w)).toEqual([])
+  })
+
+  test('a turn after the stop means it is busy again', async ($, on) => {
+    const w = await stoppedWorker($, on)
+    w.write(TR, turn('assistant', 999_000) + '\n' + turn('user', 1_001_000) + '\n')
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(flags(w)).toEqual([])
+  })
+
+  test('a brief newer than the stop belongs to a new task', async ($, on) => {
+    const w = await stoppedWorker($, on)
+    w.write(`${w.cwd}/.eddy-runs/current/brief-app-1-scout-.md`, '# Brief\n', 1_005_000)
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(flags(w)).toEqual([])
+  })
+
+  test('an old stop file plus a fresh unbriefed record gives no line', async ($, on) => {
+    const w = await stoppedWorker($, on)
+    w.writeJson(`${w.team}/app-1-scout.json`, {
+      role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-scout',
+    })
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(flags(w)).toEqual([])
+  })
+})
+
+describe('watch in the tick', () => {
+  const HINT = ' - a card about this prompt sets prompt_of: app-1-scout'
+
+  test('blocked line carries the dialog and goes out in the tick prompt', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([`WATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}${HINT}`])
+  })
+
+  test('a blocked line names prompt_of for a card about the prompt, with the agent name', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/app-1-maker.json`, { role: 'implementer', topic: 'build', brief: '', pane: 'w1:p3', session: 'sid-maker' })
+    w.agents = [{ pane_id: 'w1:p3', agent_status: 'working', agent_session: { value: 'sid-maker' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p3', agent_status: 'blocked', agent_session: { value: 'sid-maker' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([
+      `WATCH app-1-maker: working -> blocked: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-maker`,
+    ])
+  })
+
+  test('a blocked line with no readable dialog still carries the prompt_of hint', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.fails.set('agent read', 'timed out')
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([`WATCH app-1-scout: working -> blocked${HINT}`])
+  })
+
+  test('blocked line shows the bottom of the snapshot, never its old top row', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(DIALOG_SNAPSHOT.split('\n')[0]).toBe('❯ /compact')
+    expect(w.submits).toHaveLength(1)
+    expect(w.submits[0]).not.toContain('/compact')
+  })
+
+  test('herdr down sends one line until it is back', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.herdrFails = 'server_unavailable'
+    await w.clock.advance(15000)
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual(['WATCH herdr unreachable: server_unavailable'])
+    const ui = await $.ui.mount({ plugin: 'eddy', surface: 'terminal', component: 'Pane',
+                                  requestId: 'eddy', props: { bodyColumns: 80 } } as never)
+    expect(await ui.find({ type: 'Text', text: 'herdr: server_unavailable' })).toBeDefined()
+    w.herdrFails = null
+    await w.clock.advance(15000)
+    w.herdrFails = 'again'
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual(['WATCH herdr unreachable: server_unavailable', 'WATCH herdr unreachable: again'])
+  })
+
+  test('an unbriefed idle agent gets no line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([])
+  })
+
+  test('idle 2 min before the brief gives no line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    markBriefed(w)
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([])
+  })
+
+  test('briefed in this session, then idle 2 min, gives one line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    markBriefed(w)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([
+      'WATCH app-1-scout: idle, no report - read /proj/.eddy-runs/current/reports/app-1-scout-.md',
+    ])
+  })
+
+  test('an automatic compact mid-task (brief_sent_session dropped, watch_session kept) stays watched', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    markCompacted(w)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([
+      'WATCH app-1-scout: idle, no report - read /proj/.eddy-runs/current/reports/app-1-scout-.md',
+    ])
+  })
+
+  test('a /compact with a fresh REPORT and the next brief pending gives no line', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    markCompacted(w)
+    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, 'REPORT app-1-scout : done\n')
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits.filter(s => s.includes('no report'))).toEqual([])
+  })
+
+  test('after a /clear (new session, old watch_session) there is no line until the next brief', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/app-1-scout.json`, {
+      role: 'investigator', topic: '', brief: '', pane: 'w1:p2', session: 'sid-new', watch_session: 'sid-scout',
+    })
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-new' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits).toEqual([])
+  })
+
+  test('an unbriefed agent that turns blocked still flags', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } }]
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([`WATCH app-1-scout: idle -> blocked: ${DIALOG_TEXT}${HINT}`])
+  })
+
+  test('the orchestrator tab from the config gets no layout flags while herdr does not know the session', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/config.json`, { ...w.json(`${w.team}/config.json`), orchestrator_tab: 'w1:t1' })
+    w.writeJson(`${w.team}/tabs.json`, ['w1:t1'])
+    w.panes = Array.from({ length: 7 }, (_, i) => ({ pane_id: `w1:x${i}`, tab_id: 'w1:t1', agent_status: 'working' }))
+    await w.clock.advance(15000)
+    expect(w.submits.filter(s => s.includes('layout'))).toEqual([])
+  })
+
+  describe('an idle tab with fresh reports', () => {
+    async function idleTab($: any, on: any) {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      w.writeJson(`${w.team}/tabs.json`, ['w1:t2'])
+      w.writeJson(`${w.team}/app-1-scout.json`, { role: 'investigator', topic: 'dig', brief: 'b', pane: 'w1:p2', session: 'sid-scout' })
+      w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-dig.md`, 'REPORT app-1-scout dig: done\n', 1000)
+      w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+      w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'idle' }]
+      return w
+    }
+    const teamPane = ($: any) => $.ui.mount({ plugin: 'eddy', surface: 'terminal', component: 'Pane',
+                                              requestId: 'eddy', props: { bodyColumns: 80 } } as never)
+
+    test('sends no WATCH line', async ($, on) => {
+      const w = await idleTab($, on)
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+      expect(w.submits.join('\n')).not.toContain('consider release')
+    })
+
+    test('shows in the Eddy pane with the pane statuses seen', async ($, on) => {
+      const w = await idleTab($, on)
+      await w.clock.advance(15000)
+      const ui = await teamPane($)
+      expect(await ui.find({ type: 'Text', text: 'tab w1:t2 idle, consider release (w1:p2 idle)' })).toBeDefined()
+    })
+
+    test('leaves the Eddy pane when an agent there works again', async ($, on) => {
+      const w = await idleTab($, on)
+      await w.clock.advance(15000)
+      w.panes = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'working' }]
+      w.agents = [{ pane_id: 'w1:p2', tab_id: 'w1:t2', agent_status: 'working', agent_session: { value: 'sid-scout' } }]
+      await w.clock.advance(15000)
+      const ui = await teamPane($)
+      expect(await ui.find({ type: 'Text', text: /consider release/ })).toBeUndefined()
+    })
+  })
+
+  test('a report file without a REPORT line still counts as no report', async ($, on) => {
+    const w = await team($, on)
+    markBriefed(w)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-scout-.md`, 'still waiting on two subagents\n')
+    w.agents = [{ pane_id: 'w1:p2', agent_status: 'idle', agent_session: { value: 'sid-scout' } }]
+    for (let i = 0; i < 9; i++) await w.clock.advance(15000)
+    expect(w.submits.filter(s => s.includes('no report'))).toHaveLength(1)
+  })
+
+  describe('a card the eddy mod closed', () => {
+    const REASON = "the permission prompt in the investigator's pane (w1:p2) is gone: the agent is now idle"
+    const LINE = `WATCH Q-1 closed (app-1-scout): ${REASON}`
+    const closedByMod = (w: any, n = 1, more: object = {}) => card(w, n, {
+      status: 'obsolete', closed_by: 'eddy mod', reason: `Closed by the eddy mod: ${REASON}.`,
+      prompt: { agent: 'app-1-scout', role: 'investigator', session: 'sid-scout', pane: 'w1:p2', dialog: '', at: 0 },
+      ...more,
+    })
+    const closedLines = (w: any) => w.submits.flatMap((s: string) => s.split('\n')).filter((l: string) => l.includes(' closed'))
+
+    test('sends one WATCH line to the orchestrator, once', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+
+      for (let i = 0; i < 4; i++) await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('sends no second line after the orchestrator mod reloaded', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+      await w.clock.advance(15000)
+
+      await start($)
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('is sent while herdr is down, and not again when it is back', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+      w.herdrFails = 'server_unavailable'
+      await w.clock.advance(15000)
+      w.herdrFails = null
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('each closed card gets its own line', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w, 1)
+      closedByMod(w, 2)
+
+      await w.clock.advance(15000)
+      closedByMod(w, 3)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w).map((l: string) => l.slice(0, 'WATCH Q-1 closed'.length)))
+        .toEqual(['WATCH Q-1 closed', 'WATCH Q-2 closed', 'WATCH Q-3 closed'])
+    })
+
+    test('a card closed because a different prompt shows carries the new dialog and the prompt_of hint', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w, 1, { next_dialog: DIALOG_TEXT })
+
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([
+        `${LINE}; it is now blocked on a new prompt: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-scout`,
+      ])
+    })
+
+    test('the new dialog is told while herdr is down, once', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w, 1, { next_dialog: DIALOG_TEXT })
+      w.herdrFails = 'server_unavailable'
+      await w.clock.advance(15000)
+      w.herdrFails = null
+      await w.clock.advance(15000)
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([
+        `${LINE}; it is now blocked on a new prompt: ${DIALOG_TEXT} - a card about this prompt sets prompt_of: app-1-scout`,
+      ])
+    })
+
+    test('a card closed by a state signal names no new prompt and no hint', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      closedByMod(w)
+
+      await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([LINE])
+    })
+
+    test('a card closed by hand sends no such line', async ($, on) => {
+      const w = await team($, on)
+      w.writeJson(`${w.team}/delivered.json`, {})
+      card(w, 1, { status: 'obsolete', reason: 'The human answered in the pane.' })
+      card(w, 2, { status: 'answered', decision: 1 })
+
+      for (let i = 0; i < 3; i++) await w.clock.advance(15000)
+
+      expect(closedLines(w)).toEqual([])
+    })
+  })
+
+  test('a reported REPORT and a WATCH line of one tick share one prompt, REPORT first', async ($, on) => {
+    const w = await team($, on)
+    w.writeJson(`${w.team}/delivered.json`, {})
+    w.writeJson(`${w.team}/app-1-maker.json`, { role: 'implementer', topic: 'build', brief: '', pane: 'w1:p3', session: 'sid-maker' })
+    w.agents = [
+      { pane_id: 'w1:p2', agent_status: 'working', agent_session: { value: 'sid-scout' } },
+      { pane_id: 'w1:p3', agent_status: 'working', agent_session: { value: 'sid-maker' } },
+    ]
+    await w.clock.advance(15000)
+    w.agents = [
+      { pane_id: 'w1:p2', agent_status: 'blocked', agent_session: { value: 'sid-scout' } },
+      { pane_id: 'w1:p3', agent_status: 'idle', agent_session: { value: 'sid-maker' } },
+    ]
+    w.write(`${w.cwd}/.eddy-runs/current/reports/app-1-maker-build.md`, 'REPORT app-1-maker build: green\n')
+    await w.clock.advance(15000)
+    expect(w.submits).toEqual([
+      `REPORT app-1-maker build: green\nWATCH app-1-scout: working -> blocked: ${DIALOG_TEXT}${HINT}`,
+    ])
+  })
+})

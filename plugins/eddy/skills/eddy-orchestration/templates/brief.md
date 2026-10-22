@@ -1,0 +1,31 @@
+# Brief: {{name}} / {{topic}}
+
+## Role
+You are {{name}}, a {{role}}. Planned by the orchestrator for {{ticket}}.
+You must NOT: <role fragment fills this>.
+
+## Inputs (read in this order)
+1. {{decisions}}  - binds you; every numbered decision applies.
+2. <task-specific files, one line why each>
+
+## Skills to load
+<ordered list>
+
+## Task
+<numbered steps; exact file paths, field names, tool paths; no "explore">
+
+## Output
+<exact paths and the section structure of each deliverable>
+
+## Report back
+End your final turn with this line as plain text, then stop:
+REPORT {{name}} {{topic}}: <at most ten lines: verdict, files written, counts, blockers, card ids>
+Do not run any command to send it. Stopping saves your whole message to the report
+file and delivers the REPORT line to {{orchestrator}}.
+
+## Rules
+- Shell discipline: see rule 20 of the eddy-orchestration skill.
+- Source-backed facts only; an unknown stays a numbered open question, never a guess; one only the human can answer also becomes a card via `ask` (rule 21).
+- No em dashes. No agent-attribution trailers in commits.
+- One thing at a time; stop after reporting.
+- If your session shows plan mode, say so immediately instead of working.

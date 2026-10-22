@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Merge this team's agents from `herdr agent list` with $EDDY_SCRATCH/.eddy/*.json
+# into a roster. The team is the role agents plus the orchestrator.
+# Exit codes: 0 ok, 2 bad arguments, 4 herdr error.
+set -euo pipefail
+
+# The run dir, absolute: a relative EDDY_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+scratch="$(eddy_run_dir)"
+teamdir="$scratch/.eddy"
+
+as_json=""; read_idle=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) as_json=1; shift ;;
+    --read-idle) read_idle=1; shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+list=$(herdr agent list) || exit 4
+lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+
+mkdir -p "$teamdir"
+PYTHONPATH="$lib" SCRATCH="$scratch" TEAMDIR="$teamdir" LIST="$list" AS_JSON="$as_json" READ_IDLE="$read_idle" python3 - <<'PY'
+import os, json, time, subprocess, sys
+from eddylib import agent_state, records, report_age
+scratch, teamdir = os.environ["SCRATCH"], os.environ["TEAMDIR"]
+now = int(os.environ.get("EDDY_NOW", int(time.time())))
+agents = json.loads(os.environ["LIST"]).get("result", {}).get("agents", [])
+recs = records(teamdir)
+
+def last_screen_line(pane):
+    out = subprocess.run(["herdr", "agent", "read", pane, "--source", "recent-unwrapped", "--lines", "8"],
+                         capture_output=True, text=True).stdout
+    lines = [l for l in out.splitlines() if l.strip()]
+    return lines[-1] if lines else ""
+
+# Agents are matched to records by Claude session id: herdr names do not
+# survive a restart, session ids do.
+cfg = {}
+try:
+    cfg = json.load(open(os.path.join(teamdir, "config.json")))
+except (OSError, ValueError):
+    pass
+if cfg and not cfg.get("orchestrator_session") and not cfg.get("envoy_session"):
+    print("warning: this team was started before team 0.5.0: the eddy mod does not "
+          "deliver its REPORT lines. Finish it by reading reports/ by hand, or start "
+          "a new run with /eddy:init.", file=sys.stderr)
+by_session = {}
+for a in agents:
+    sid = a.get("agent_session", {}).get("value")
+    if sid:  # an agent without a session id cannot match a config entry or a record
+        by_session[sid] = a
+# /eddy:release walks this roster and closes each pane on it. Two sessions are never on
+# it: the envoy (talks to the human) and the session that runs this script (EDDY_SESSION_ID,
+# set by the eddy mod), so a release cannot close its own pane.
+skip = {s for s in (cfg.get("envoy_session"), os.environ.get("EDDY_SESSION_ID")) if s}
+members, seen = [], set()
+def add(name, sid):
+    if sid and sid in by_session and sid not in skip and sid not in seen:
+        seen.add(sid)
+        members.append((name, by_session[sid]))
+add(cfg.get("orchestrator", "orchestrator"), cfg.get("orchestrator_session"))
+for rname, rec in sorted(recs.items()):
+    add(rname, rec.get("session"))
+
+out, text = [], []
+for name, a in members:
+    state = agent_state(a)
+    rec = recs.get(name, {})
+    role, topic = rec.get("role", ""), rec.get("topic", "")
+    age, stale = report_age(scratch, name, topic, now)
+    rec_out = {"name": name, "pane": a.get("pane_id", ""),
+               "session": a.get("agent_session", {}).get("value", "")[:8],
+               "state": state, "role": role, "topic": topic, "report_age": age}
+    out.append(rec_out)
+    row = "%s (%s, %s) %s %s %s %s" % (name, rec_out["pane"], rec_out["session"], state,
+                                       role or "-", topic or "-", age)
+    if os.environ.get("READ_IDLE") and state in ("idle", "done") and stale:
+        note = last_screen_line(a.get("pane_id", ""))
+        if note:
+            row += "  | " + note
+    text.append(row)
+
+with open(os.path.join(teamdir, "roster.md"), "w") as fh:
+    fh.write("\n".join(text) + ("\n" if text else ""))
+if os.environ.get("AS_JSON"):
+    print(json.dumps(out))
+else:
+    print("\n".join(text))
+PY

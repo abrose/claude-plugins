@@ -1,0 +1,3581 @@
+"""Behaviour tests for the eddy plugin scripts.
+
+Each test runs a bin/ script as a subprocess in a throwaway project directory.
+A shim directory on PATH exposes tests/fake-herdr as `herdr` and tests/fake-git
+as `git`; both record every invocation and answer with canned JSON, so the
+scripts run against a real (fake) CLI, never a mock.
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)          # plugins/eddy
+BIN = os.path.join(ROOT, "bin")
+SCRATCH = os.path.join(".eddy-runs", "current")
+
+
+def write_text(path, content):
+    with open(path, "w") as f:
+        f.write(content)
+
+
+def read_text(path):
+    with open(path) as f:
+        return f.read()
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.proj = tempfile.mkdtemp()
+        self.shim = os.path.join(self.proj, "_shim")
+        os.makedirs(self.shim)
+        os.symlink(os.path.join(HERE, "fake-herdr"), os.path.join(self.shim, "herdr"))
+        os.symlink(os.path.join(HERE, "fake-git"), os.path.join(self.shim, "git"))
+        os.symlink(os.path.join(HERE, "fake-claude"), os.path.join(self.shim, "claude"))
+        self.herdr_log = os.path.join(self.proj, "herdr.log")
+        self.git_log = os.path.join(self.proj, "git.log")
+        open(self.herdr_log, "w").close()
+        open(self.git_log, "w").close()
+
+    def tearDown(self):
+        shutil.rmtree(self.proj, ignore_errors=True)
+
+    def env(self, scenario="ok", **extra):
+        e = dict(os.environ)
+        e["PATH"] = self.shim + os.pathsep + e["PATH"]
+        e["FAKE_HERDR_LOG"] = self.herdr_log
+        e["FAKE_GIT_LOG"] = self.git_log
+        e["FAKE_HERDR_SCENARIO"] = scenario
+        e["EDDY_SCRATCH"] = SCRATCH
+        e["CLAUDE_PLUGIN_ROOT"] = ROOT
+        e["EDDY_INDEX_DIR"] = os.path.join(self.proj, "_index")
+        e["EDDY_SESSION_ID"] = "orch-sid"
+        e.pop("CLAUDE_CONFIG_DIR", None)
+        e.update(extra)
+        for k in [k for k, v in e.items() if v is None]:
+            del e[k]
+        return e
+
+    def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
+        env = self.env(scenario=scenario, **(env_extra or {}))
+        return subprocess.run(
+            [os.path.join(BIN, name), *args],
+            capture_output=True, text=True, env=env, cwd=cwd or self.proj,
+        )
+
+    def bar_env(self, model, mode="auto", cwd=None):
+        return {"FAKE_STATUS_MODEL": model, "FAKE_STATUS_MODE": mode,
+                "FAKE_STATUS_CWD": cwd or self.proj}
+
+    def herdr_calls(self):
+        with open(self.herdr_log) as f:
+            return [l.rstrip("\n") for l in f if l.strip()]
+
+    def sp(self, *parts):
+        return os.path.join(self.proj, SCRATCH, *parts)
+
+    def wait_for_calls(self, matches, timeout=5.0):
+        """Poll the herdr log until a call satisfies `matches`, for work that a
+        script hands to a background process. Returns all calls either way."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            calls = self.herdr_calls()
+            if any(matches(c) for c in calls):
+                return calls
+            time.sleep(0.05)
+        return self.herdr_calls()
+
+    def git_calls(self):
+        with open(self.git_log) as f:
+            return [l.rstrip("\n") for l in f if l.strip()]
+
+    def team_json(self, name):
+        return json.loads(read_text(self.sp(".eddy", name + ".json")))
+
+    def index_entry(self, session):
+        return json.loads(read_text(os.path.join(self.proj, "_index", session + ".json")))
+
+    # A Claude Code profile: its own config dir, with a space to prove quoting.
+    # The session index follows it when EDDY_INDEX_DIR is not set.
+    def profile(self):
+        return os.path.join(self.proj, "my profile")
+
+    def profile_env(self):
+        return {"CLAUDE_CONFIG_DIR": self.profile(), "EDDY_INDEX_DIR": None}
+
+    def profile_index(self, *parts):
+        return os.path.join(self.profile(), "eddy", "sessions", *parts)
+
+    def write_record(self, name, role, topic="", brief="", cwd=None, pane="w1:p2", session=None):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        rec = {"role": role, "topic": topic, "brief": brief, "pane": pane, "started": "t"}
+        if cwd is not None:
+            rec["cwd"] = cwd
+        if session is not None:
+            rec["session"] = session
+        write_text(os.path.join(d, name + ".json"), json.dumps(rec))
+
+
+class TeamStart(Base):
+    UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+
+    def test_assigns_session_id_and_records_launch_flags(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        start = next(c for c in self.herdr_calls() if c.startswith("agent start "))
+        sid = re.search(r"--session-id (%s)" % self.UUID, start).group(1)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["session"], sid)
+        self.assertEqual((rec["model"], rec["effort"], rec["mode"]),
+                         ("claude-opus-5-5", "medium", "auto"))
+
+    def test_writes_session_index_entry(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        sid = self.team_json("scout")["session"]
+        entry = self.index_entry(sid)
+        self.assertEqual(entry["name"], "scout")
+        self.assertEqual(entry["scratch"], os.path.realpath(self.sp()))
+
+    def test_session_index_follows_the_claude_profile(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5", cwd=self.proj), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        sid = self.team_json("scout")["session"]
+        self.assertEqual(json.loads(read_text(self.profile_index(sid + ".json")))["name"], "scout")
+
+    def test_pane_gets_the_claude_profile(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export EDDY_NAME=scout EDDY_SCRATCH=%s CLAUDE_CONFIG_DIR=%s"
+                      % (self.abs_scratch(), self.profile().replace(" ", "\\ ")), self.herdr_calls())
+
+    def test_split_pane_gets_the_claude_profile(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "down",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("pane split") and "--env CLAUDE_CONFIG_DIR=%s " % self.profile() in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_new_tab_gets_the_claude_profile(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--new-tab", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), **self.profile_env()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("tab create") and "--env CLAUDE_CONFIG_DIR=%s " % self.profile() in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_no_profile_passes_no_config_dir(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "down",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any("CLAUDE_CONFIG_DIR" in c for c in self.herdr_calls()), self.herdr_calls())
+
+    def start_argv(self, name, agent, model, effort, mode="auto"):
+        return re.compile(
+            r"agent start %s --kind claude --pane w1:p2 --timeout 90000 "
+            r"-- --agent %s --session-id %s --model %s --effort %s --permission-mode %s "
+            r"--name %s --settings \{\"crossSessionInbound\":\"accept\"\}(?: --plugin-dir \S+)?$"
+            % (name, agent, self.UUID, model, effort, mode, name))
+
+    def assert_started(self, pattern):
+        self.assertTrue(any(pattern.match(c) for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_builds_exact_agent_start_argv_per_role(self):
+        cases = {
+            "investigator": ("eddy-investigator", "claude-opus-5-5", "medium", "Opus 5.5"),
+            "implementer": ("eddy-implementer", "claude-sonnet-5-5", "medium", "Sonnet 5.5"),
+            "tester": ("eddy-tester", "claude-sonnet-5-5", "low", "Sonnet 5.5"),
+        }
+        for role, (agent, model, effort, bar) in cases.items():
+            with self.subTest(role=role):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("eddy-start", role[:4], role, "--pane", "w1:p2",
+                                    "--cwd", self.proj,
+                                    env_extra=self.bar_env(bar, cwd=self.proj))
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assert_started(self.start_argv(role[:4], agent, model, effort))
+                self.assertEqual(json.loads(p.stdout)["model"], model)
+
+    def test_orchestrator_role_starts_the_orchestrator_agent(self):
+        p = self.run_script("eddy-start", "orch", "orchestrator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assert_started(self.start_argv("orch", "eddy-orchestrator", "claude-opus-5-5", "medium"))
+        self.assertEqual(self.team_json("orch")["role"], "orchestrator")
+
+    def test_model_and_effort_override_role_defaults(self):
+        cases = {
+            "opus-5-5": ("claude-opus-5-5", "Opus 5.5"),
+            "sonnet-5-5": ("claude-sonnet-5-5", "Sonnet 5.5"),
+        }
+        for flag, (model, bar) in cases.items():
+            with self.subTest(model=flag):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2",
+                                    "--cwd", self.proj, "--model", flag, "--effort", "xhigh",
+                                    env_extra=self.bar_env(bar))
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assert_started(self.start_argv("maker", "eddy-implementer", model, "xhigh"))
+                self.assertEqual(json.loads(p.stdout)["model"], model)
+
+    def test_haiku_starts_in_auto_mode(self):
+        p = self.run_script("eddy-start", "clerk", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--model", "haiku-5-5", "--effort", "low",
+                            env_extra=self.bar_env("Haiku 5.5"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_started(self.start_argv("clerk", "eddy-implementer", "claude-haiku-5-5", "low"))
+        out = json.loads(p.stdout)
+        self.assertEqual(out["mode"], "auto")
+
+    def test_haiku_defaults_to_high_effort(self):
+        # The model default effort wins over the role default (implementer: medium).
+        p = self.run_script("eddy-start", "clerk", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--model", "haiku-5-5",
+                            env_extra=self.bar_env("Haiku 5.5"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_started(self.start_argv("clerk", "eddy-implementer", "claude-haiku-5-5", "high"))
+
+    def test_accept_edits_mode_uses_claude_permission_mode_name(self):
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--mode", "accept-edits",
+                            env_extra=self.bar_env("Sonnet 5.5", mode="accept edits on"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assert_started(self.start_argv("maker", "eddy-implementer", "claude-sonnet-5-5",
+                                            "medium", mode="acceptEdits"))
+
+    def test_rejects_model_outside_allowlist(self):
+        for flag in ("fable", "opus", "opus-4-8", "sonnet-5", "claude-opus-5-5"):
+            with self.subTest(model=flag):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                                    "--cwd", self.proj, "--model", flag)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("unknown model: %s" % flag, p.stderr)
+                self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_effort_accepts_every_claude_level(self):
+        for effort in ("low", "medium", "high", "xhigh", "max"):
+            with self.subTest(effort=effort):
+                p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                                    "--cwd", self.proj, "--effort", effort, "--dry-run")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("--effort %s " % effort, p.stdout)
+
+    def test_rejects_unknown_effort(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--effort", "extreme")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("unknown effort: extreme", p.stderr)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_passes_resolved_name_to_claude(self):
+        # ListAgents/SendMessage on other sessions match by name, so the name
+        # given to claude after `--` must be the same resolved name eddy-start
+        # gives Herdr, including the team id prefix.
+        self.config()
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("agent start app-1-maker ") and "--name app-1-maker" in c
+                             for c in calls), calls)
+
+    def test_passes_cross_session_inbound_accept_setting(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        start_call = next(c for c in calls if c.startswith("agent start scout "))
+        self.assertIn('--settings {"crossSessionInbound":"accept"}', start_call)
+        settings_arg = start_call.split("--settings ", 1)[1].split(" --plugin-dir ")[0]
+        json.loads(settings_arg)  # must be valid JSON, one argument
+
+    def started_argv(self, p):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return next(c for c in self.herdr_calls() if c.startswith("agent start "))
+
+    def test_the_agent_loads_the_plugin_this_script_came_from(self):
+        # The new pane's claude has no --plugin-dir of its own and would load only the installed
+        # copy. With a copy that lacks agents/eddy-orchestrator.md (or a newer mod), the orchestrator
+        # never becomes ready and `herdr agent start` times out (live check, PROBE-1).
+        p = self.run_script("eddy-start", "orch", "orchestrator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertTrue(self.started_argv(p).endswith(" --plugin-dir %s" % os.path.realpath(ROOT)))
+
+    def test_every_role_loads_that_plugin(self):
+        for role, bar in (("investigator", "Opus 5.5"), ("implementer", "Sonnet 5.5"), ("tester", "Sonnet 5.5")):
+            with self.subTest(role=role):
+                open(self.herdr_log, "w").close()
+                p = self.run_script("eddy-start", role[:4], role, "--pane", "w1:p2",
+                                    "--cwd", self.proj, env_extra=self.bar_env(bar, cwd=self.proj))
+                self.assertIn(" --plugin-dir %s" % os.path.realpath(ROOT), self.started_argv(p))
+
+    def test_dry_run_shows_the_plugin_dir(self):
+        p = self.run_script("eddy-start", "orch", "orchestrator", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--plugin-dir %s" % os.path.realpath(ROOT), p.stdout)
+
+    def test_an_installed_copy_adds_no_plugin_dir(self):
+        # Under <profile>/plugins/cache the installed plugin loads by itself: no --plugin-dir.
+        cfg = os.path.join(self.proj, "profile")
+        root = os.path.join(cfg, "plugins", "cache", "market", "eddy", "0.5.6")
+        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns("__pycache__"))  # bin/ sources lib/
+        copy = os.path.join(root, "bin", "eddy-start")
+        env = self.env(**{**self.bar_env("Opus 5.5", cwd=self.proj), "CLAUDE_CONFIG_DIR": cfg})
+        p = subprocess.run([copy, "orch", "orchestrator", "--pane", "w1:p2", "--cwd", self.proj],
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertNotIn("--plugin-dir", self.started_argv(p))
+
+    def test_dry_run_echoes_name_and_settings(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--name scout", p.stdout)
+        self.assertIn("--model claude-opus-5-5", p.stdout)
+        self.assertIn('--settings \'{"crossSessionInbound":"accept"}\'', p.stdout)
+
+    # Decision 1 (option A): a worktree agent reads and writes the main run dir by absolute
+    # path, so its claude gets the run dir as an added directory. The main checkout needs none.
+    def worktree(self):
+        wt = os.path.join(self.proj, "wt")
+        os.makedirs(wt)
+        return wt
+
+    def test_a_worktree_agent_gets_the_main_run_dir_as_an_added_dir(self):
+        wt = self.worktree()
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", wt,
+                            env_extra=self.bar_env("Sonnet 5.5", cwd=wt))
+        self.assertIn(" --add-dir %s --name maker " % self.abs_scratch(), self.started_argv(p))
+
+    def test_the_main_checkout_agent_gets_no_added_dir(self):
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", self.proj,
+                            env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+        self.assertNotIn("--add-dir", self.started_argv(p))
+
+    def test_dry_run_shows_the_added_dir_for_a_worktree_only(self):
+        wt = self.worktree()
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", wt, "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--add-dir %s" % self.abs_scratch(), p.stdout)
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2", "--cwd", self.proj,
+                            "--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("--add-dir", p.stdout)
+
+    def test_writes_team_record(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["role"], "investigator")
+        self.assertEqual(rec["pane"], "w1:p2")
+        self.assertEqual(rec["cwd"], os.path.realpath(self.proj))
+        out = json.loads(p.stdout)
+        self.assertEqual(out["model"], "claude-opus-5-5")
+
+    def test_startup_dialog_is_handed_to_the_human(self):
+        # A trust dialog is a security decision: eddy-start never answers it.
+        # It names the pane and shows the dialog, and writes no record.
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="first_run_dialog",
+                            env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("scout is at a startup dialog in pane w1:p2", p.stderr)
+        self.assertIn("Yes, I trust this folder", p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("agent send-keys") for c in calls), calls)
+        self.assertEqual(sum(c.startswith("agent start ") for c in calls), 1)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "scout.json")))
+
+    def test_start_error_is_reported_as_herdr_error(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="start_fails",
+                            env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("agent_pane_not_found", p.stderr)
+        # w1:p2 is a caller-provided pane, never ours to close.
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_retries_agent_start_on_pane_busy_until_shell_is_ready(self):
+        # A pane eddy-start just created is not at its shell prompt yet, so
+        # `agent start` answers agent_pane_busy on the first call(s). eddy-start
+        # must retry and still succeed, for both a pane it creates via grid
+        # split (--into-tab) and via a direct split (--split).
+        cases = {
+            "into_tab": ("--into-tab", "w1:tG"),
+            "split": ("--split", "w1:p1", "right"),
+        }
+        for kind, args in cases.items():
+            with self.subTest(kind=kind):
+                open(self.herdr_log, "w").close()
+                scenario = "grid2" if kind == "into_tab" else "ok"
+                p = self.run_script("eddy-start", "scout", "investigator", *args,
+                                    "--cwd", self.proj, scenario=scenario,
+                                    env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1",
+                                               "FAKE_AGENT_START_BUSY_COUNT": "2",
+                                               "EDDY_START_BUSY_BACKOFF_MS": "1"})
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertTrue(os.path.exists(self.sp(".eddy", "scout.json")))
+                starts = [c for c in self.herdr_calls() if c.startswith("agent start ")]
+                self.assertGreater(len(starts), 1, starts)
+
+    def test_persistent_pane_busy_fails_once_budget_spent(self):
+        # A pane whose shell never reaches its prompt must not retry forever:
+        # eddy-start gives up once the budget (env-overridable so the test
+        # stays fast) is spent, and exits 4 like any other herdr error.
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"),
+                                       "FAKE_AGENT_START_BUSY_COUNT": "999",
+                                       "EDDY_START_BUSY_BUDGET_MS": "20",
+                                       "EDDY_START_BUSY_BACKOFF_MS": "5"})
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("agent_pane_busy", p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "scout.json")))
+        # The pane eddy-start created (w1:p9, from the fake "pane split"
+        # response) is closed so no orphan empty shell is left behind.
+        self.assertTrue(any(c.startswith("pane close w1:p9") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_other_error_code_on_created_pane_is_not_retried(self):
+        # Only agent_pane_busy is transient on a fresh pane. Any other error
+        # code (e.g. agent_pane_not_found) is a real failure: report it at
+        # once, with a single agent start call, not a retry loop.
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, scenario="start_fails",
+                            env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        starts = [c for c in self.herdr_calls() if c.startswith("agent start ")]
+        self.assertEqual(len(starts), 1, starts)
+        self.assertTrue(any(c.startswith("pane close w1:p9") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_startup_dialog_leaves_created_pane_open(self):
+        # eddy-start's own message tells the human to answer the startup
+        # dialog in this pane, then close it themselves: eddy-start must not
+        # close a pane it created out from under that instruction.
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, scenario="first_run_dialog",
+                            env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_status_bar_mismatch_closes_the_pane_it_created(self):
+        # The agent is live in a pane eddy-start made, but it is the wrong model:
+        # no record is written, so nobody else could find that pane. Close it.
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("status bar mismatch", p.stderr)
+        self.assertIn("pane close w1:p9", self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".eddy", "scout.json")))
+
+    def test_status_bar_mismatch_closes_the_tab_pane_it_created(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--new-tab",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("pane close w1:p9", self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".eddy", "tabs.json")))
+
+    def test_status_bar_mismatch_never_closes_a_caller_pane(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_failed_status_bar_read_closes_the_pane_it_created(self):
+        # Same state as a mismatch: a live agent, no record, nobody can find the pane (N7).
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Opus 5.5"), "FAKE_AGENT_READ_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("pane close w1:p9", self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".eddy", "scout.json")))
+
+    def test_failed_status_bar_read_never_closes_a_caller_pane(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Opus 5.5"), "FAKE_AGENT_READ_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("pane close") for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_refusing_a_live_name_creates_and_closes_no_pane(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
+        p = self.run_script("eddy-start", "orch", "orchestrator", "--new-tab", "--cwd", self.proj,
+                            scenario="names_app1_taken", env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("name already in use by a live agent: app-1-orch", p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith(("tab create", "pane split", "pane close")) for c in calls), calls)
+
+    def test_pending_marker_exists_before_first_agent_start_call(self):
+        # The marker must protect a created pane from the watcher's empty-pane
+        # cleanup before eddy-start ever calls `agent start` on it, not after.
+        check_log = os.path.join(self.proj, "marker_check.log")
+        open(check_log, "w").close()
+        marker = self.sp(".eddy", "pending", "w1_p9")
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "right",
+                            "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"),
+                                       "FAKE_MARKER_CHECK_GROUP": "agent",
+                                       "FAKE_MARKER_CHECK_SUB": "start",
+                                       "FAKE_MARKER_CHECK_FILE": marker,
+                                       "FAKE_MARKER_CHECK_LOG": check_log})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        with open(check_log) as f:
+            lines = [l.strip() for l in f if l.strip()]
+        self.assertEqual(lines, ["present"], lines)
+
+    def test_writes_record_when_bar_shows_basename_only(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj,
+                            env_extra=self.bar_env("Opus 5.5", cwd=os.path.basename(self.proj)))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["role"], "investigator")
+
+    def test_aborts_on_wrong_model(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+
+    def test_unknown_role_is_bad_args(self):
+        p = self.run_script("eddy-start", "x", "wizard", "--pane", "w1:p2")
+        self.assertEqual(p.returncode, 2)
+
+    def test_rejects_path_traversal_name(self):
+        p = self.run_script("eddy-start", "../evil", "investigator", "--pane", "w1:p2")
+        self.assertEqual(p.returncode, 2)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_prefixes_name_with_team_id_from_config(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start app-5066-scout ") for c in self.herdr_calls()))
+        self.assertTrue(os.path.exists(os.path.join(d, "app-5066-scout.json")))
+        out = json.loads(p.stdout)
+        self.assertEqual(out["name"], "app-5066-scout")
+
+    def test_does_not_double_prefix_already_namespaced_name(self):
+        # The orchestrator refers to agents by their full <team_id>-<label> name
+        # everywhere, so it may pass that name to eddy-start. Prepending again
+        # would produce app-5066-app-5066-scout. It must not.
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-5066", "orchestrator": "app-5066-orch"}))
+        p = self.run_script("eddy-start", "app-5066-scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start app-5066-scout ") for c in self.herdr_calls()),
+                        self.herdr_calls())
+        out = json.loads(p.stdout)
+        self.assertEqual(out["name"], "app-5066-scout")
+
+    def test_no_team_id_keeps_bare_name(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start scout ") for c in self.herdr_calls()))
+
+    def config(self, team_id="app-1", orch="app-1-orch"):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": team_id, "orchestrator": orch}))
+
+    # Run mismatch guard. EDDY_SCRATCH unset puts the run at the .eddy-runs/current
+    # fallback of the project root (FAKE_GIT_TOPLEVEL); the fake herdr puts the
+    # caller in workspace w1 unless FAKE_CALLER_WS says otherwise.
+    def run_with_tabs(self, scenario, tabs=("w4:t1", "w4:t2"), caller="w4", scratch_unset=True,
+                      args=("--new-tab", "--cwd")):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "orchestrator": "app-1-orch",
+             "envoy_tab": tabs[0], "orchestrator_tab": tabs[1]}))
+        write_text(os.path.join(d, "tabs.json"), json.dumps(list(tabs)))
+        extra = {**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj, "FAKE_CALLER_WS": caller}
+        if scratch_unset:
+            extra["EDDY_SCRATCH"] = None
+        return self.run_script("eddy-start", "scout", "investigator", *args, self.proj,
+                               env_extra=extra, scenario=scenario)
+
+    def test_refuses_a_run_that_belongs_to_another_workspace(self):
+        # The incident: a probe from a new tab of workspace w6, no EDDY_SCRATCH, the
+        # run's tabs all in w4. Nothing may change in the run.
+        p = self.run_with_tabs("ok", caller="w6")
+        self.assertEqual(p.returncode, 3, p.stderr)
+        for fact in (os.path.realpath(self.sp()), "app-1", "w4", "w6", "EDDY_SCRATCH"):
+            self.assertIn(fact, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "app-1-scout.json")))
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "tabs.json"))), ["w4:t1", "w4:t2"])
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith(("tab create", "pane split", "agent start", "pane run")) for c in calls), calls)
+
+    def test_run_mismatch_also_refuses_into_tab_and_split(self):
+        for args in (("--into-tab", "w6:tG", "--cwd"), ("--split", "w6:p1", "down", "--cwd")):
+            with self.subTest(args=args):
+                p = self.run_with_tabs("ok", caller="w6", args=args)
+                self.assertEqual(p.returncode, 3, p.stderr)
+                self.assertFalse(any(c.startswith(("pane split", "agent start")) for c in self.herdr_calls()))
+
+    def test_run_in_the_callers_workspace_starts_with_new_tab_into_tab_and_split(self):
+        cases = {"new-tab": ("ok", ("--new-tab", "--cwd")),
+                 "into-tab": ("grid2", ("--into-tab", "w1:tG", "--cwd")),
+                 "split": ("guard", ("--split", "w1:w1", "down", "--cwd"))}
+        for label, (scenario, args) in cases.items():
+            with self.subTest(label):
+                p = self.run_with_tabs(scenario, tabs=("w1:tE", "w1:tO"), caller="w1", args=args)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertTrue(os.path.exists(self.sp(".eddy", "app-1-scout.json")))
+
+    def test_orchestrator_start_from_the_envoy_tab_of_a_fresh_run_passes(self):
+        # eddy-init: config holds only the team id and the envoy tab, in the caller's workspace.
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "orchestrator": "app-1-orch", "envoy_tab": "w1:t1"}))
+        p = self.run_script("eddy-start", "orch", "orchestrator", "--new-tab", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj,
+                                       "EDDY_SCRATCH": None})
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_a_run_with_no_recorded_tab_passes(self):
+        self.config()
+        p = self.run_script("eddy-start", "scout", "investigator", "--new-tab", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj,
+                                       "EDDY_SCRATCH": None, "FAKE_CALLER_WS": "w6"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_an_explicit_eddy_scratch_is_not_second_guessed(self):
+        # A tester's throwaway run in another workspace, EDDY_SCRATCH set on purpose.
+        p = self.run_with_tabs("ok", caller="w6", scratch_unset=False,
+                               args=("--new-tab", "--cwd"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_after_a_restart_a_new_pane_id_in_the_same_workspace_passes(self):
+        # eddy-resurrect relaunches by itself; the orchestrator then starts agents into a new pane.
+        p = self.run_with_tabs("ok", tabs=("w1:tE", "w1:tOLD"), caller="w1",
+                               args=("--pane", "w1:p2", "--cwd"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_refuses_name_already_live(self):
+        # Starting a label whose namespaced name is already a live agent would
+        # reuse its pane and cross-poison it. Refuse before touching herdr.
+        self.config()
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="name_scout_taken",
+                            env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_starts_when_namespaced_name_free(self):
+        self.config()
+        p = self.run_script("eddy-start", "maker", "implementer", "--pane", "w1:p2",
+                            "--cwd", self.proj, scenario="name_scout_taken",
+                            env_extra=self.bar_env("Sonnet 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("agent start app-1-maker ") for c in self.herdr_calls()))
+
+    def test_into_full_tab_spills_to_new_tab(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("tab create") for c in calls), calls)
+        self.assertTrue(any("agent start maker --kind claude --pane w1:p9" in c for c in calls))
+        tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
+        self.assertIn("w1:t9", tabs)
+
+    def test_into_underbudget_tab_splits_in_place(self):
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:tG",
+                            "--cwd", self.proj, scenario="grid2",
+                            env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("tab create") for c in calls))
+        self.assertTrue(any(c.startswith("pane split") for c in calls), calls)
+        self.assertTrue(any("agent start maker --kind claude --pane w1:p9" in c for c in calls))
+
+    def test_spill_defers_tab_registration_until_agent_live(self):
+        # A spilled tab must not be registered while its root pane is still
+        # empty; register only after the agent is live (a failed start = no tab).
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 3, p.stderr)   # wrong model bar -> pre-flight fail
+        tabs = json.loads(read_text(os.path.join(d, "tabs.json")))
+        self.assertNotIn("w1:t9", tabs)
+
+    def grid_split(self, scenario):
+        p = self.run_script("eddy-start", "scout", "investigator", "--into-tab", "w1:tG",
+                            "--cwd", self.proj, scenario=scenario,
+                            env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return [c for c in self.herdr_calls() if c.startswith("pane split")]
+
+    def test_grid_pane2_starts_two_columns(self):
+        splits = self.grid_split("grid1")
+        self.assertTrue(any("pane split --pane w1:g1 --direction right --ratio 0.5" in c for c in splits), splits)
+
+    def test_grid_pane3_splits_left_column_into_rows(self):
+        splits = self.grid_split("grid2")
+        self.assertTrue(any("pane split --pane w1:g1 --direction down --ratio 0.333" in c for c in splits), splits)
+
+    def test_grid_pane4_splits_right_column_into_rows(self):
+        splits = self.grid_split("grid3")
+        self.assertTrue(any("pane split --pane w1:g2 --direction down --ratio 0.333" in c for c in splits), splits)
+
+    def test_grid_pane5_fills_left_bottom_row(self):
+        splits = self.grid_split("grid4")
+        self.assertTrue(any("pane split --pane w1:g3 --direction down --ratio 0.5" in c for c in splits), splits)
+
+    def test_grid_pane6_fills_right_bottom_row(self):
+        splits = self.grid_split("grid5")
+        self.assertTrue(any("pane split --pane w1:g4 --direction down --ratio 0.5" in c for c in splits), splits)
+
+    def abs_scratch(self):
+        return os.path.realpath(self.sp())
+
+    def test_direct_pane_exports_eddy_env(self):
+        # eddy-start did not create this pane, so it exports EDDY_NAME and the
+        # absolute EDDY_SCRATCH into the pane's shell before the agent starts,
+        # so the agent (and its Stop hook) inherits them. The absolute path
+        # keeps the hook working after the agent changes its cwd.
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export EDDY_NAME=scout EDDY_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
+
+    def test_split_stamps_eddy_env(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--split", "w1:p1", "down",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("pane split") and "--env EDDY_NAME=scout" in c
+                            and "--env EDDY_SCRATCH=%s " % self.abs_scratch() in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_grid_split_stamps_eddy_env(self):
+        splits = self.grid_split("grid1")
+        self.assertTrue(any("--env EDDY_NAME=scout" in c
+                            and "--env EDDY_SCRATCH=%s " % self.abs_scratch() in c
+                            for c in splits), splits)
+
+    def test_spilled_tab_stamps_eddy_env(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(any(c.startswith("tab create") and "--env EDDY_NAME=maker" in c
+                            and "--env EDDY_SCRATCH=%s " % self.abs_scratch() in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
+        # The caller stands in a sub directory (a shell cd). The stamped EDDY_SCRATCH and the
+        # agent record still use the project root's run dir.
+        sub = os.path.join(self.proj, "sub", "dir")
+        os.makedirs(sub)
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, cwd=sub,
+                            env_extra={**self.bar_env("Opus 5.5"), "FAKE_GIT_TOPLEVEL": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export EDDY_NAME=scout EDDY_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
+        self.assertTrue(os.path.exists(self.sp(".eddy", "scout.json")))
+        self.assertFalse(os.path.exists(os.path.join(sub, SCRATCH)))
+
+    def test_absolute_scratch_is_stamped_as_is_after_a_cd(self):
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, cwd=sub,
+                            env_extra={**self.bar_env("Opus 5.5"), "EDDY_SCRATCH": self.sp()})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export EDDY_NAME=scout EDDY_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
+        self.assertTrue(os.path.exists(self.sp(".eddy", "scout.json")))
+
+    def test_namespaced_name_exported_to_pane(self):
+        self.config(team_id="app-1", orch="app-1-orch")
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            "--cwd", self.proj, env_extra=self.bar_env("Opus 5.5"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p2 export EDDY_NAME=app-1-scout EDDY_SCRATCH=%s" % self.abs_scratch(),
+                      self.herdr_calls())
+
+    def test_pane_placement_without_cwd_uses_panes_cwd_from_herdr(self):
+        # A caller-provided --pane with no --cwd must resolve the pane's real
+        # cwd from Herdr (pane get), not fall back to eddy-start's own $PWD,
+        # so the status-bar cwd check compares against the right value.
+        pane_cwd = os.path.join(self.proj, "elsewhere")
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2",
+                            env_extra={**self.bar_env("Opus 5.5", cwd=os.path.basename(pane_cwd)),
+                                       "FAKE_PANE_CWD": pane_cwd})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(any(c.startswith("pane get w1:p2") for c in self.herdr_calls()),
+                        self.herdr_calls())
+
+    def test_into_tab_with_pane_is_bad_args(self):
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:t2", "--pane", "w1:p2")
+        self.assertEqual(p.returncode, 2)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_into_empty_tab_is_bad_args(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w1:t2"]))
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, env_extra={**self.bar_env("Sonnet 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 2)
+
+    # The pane env's HERDR_WORKSPACE_ID is a spawn-time snapshot; "w7" stands
+    # for a stale one. The live workspace of the calling pane is w1.
+    STALE_WS = {"HERDR_WORKSPACE_ID": "w7"}
+
+    def new_tab(self, model="Opus 5.5", *extra):
+        return self.run_script("eddy-start", "scout", "investigator", "--new-tab", *extra,
+                               "--cwd", self.proj,
+                               env_extra={**self.bar_env(model), **self.STALE_WS})
+
+    def test_new_tab_starts_agent_in_its_root_pane(self):
+        p = self.new_tab("Opus 5.5", "--label", "T1 scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("pane split") for c in calls), calls)
+        self.assertTrue(any(c.startswith("tab create") and "--label T1 scout" in c
+                            and "--env EDDY_NAME=scout" in c for c in calls), calls)
+        self.assertTrue(any("agent start scout --kind claude --pane w1:p9" in c for c in calls), calls)
+
+    def test_new_tab_goes_to_the_callers_live_workspace(self):
+        p = self.new_tab()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
+
+    def test_new_tab_is_registered_once_its_agent_is_live(self):
+        p = self.new_tab()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        tabs = json.loads(read_text(self.sp(".eddy", "tabs.json")))
+        self.assertIn("w1:t9", tabs)
+
+    def test_new_tab_is_not_registered_when_start_fails(self):
+        p = self.new_tab("Sonnet 5.5")   # wrong model bar -> pre-flight fail
+        self.assertEqual(p.returncode, 3, p.stderr)
+        tabs_path = self.sp(".eddy", "tabs.json")
+        self.assertFalse(os.path.exists(tabs_path) and "w1:t9" in json.loads(read_text(tabs_path)))
+
+    def test_new_tab_with_other_placement_is_bad_args(self):
+        p = self.run_script("eddy-start", "maker", "implementer", "--new-tab", "--pane", "w1:p2")
+        self.assertEqual(p.returncode, 2)
+        self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()))
+
+    def test_spill_goes_to_the_callers_live_workspace(self):
+        p = self.run_script("eddy-start", "maker", "implementer", "--into-tab", "w1:t2",
+                            "--cwd", self.proj, scenario="panes_overbudget",
+                            env_extra={**self.bar_env("Sonnet 5.5"), **self.STALE_WS})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
+
+    def test_into_tab_fills_a_lone_empty_pane_instead_of_splitting(self):
+        # A tab created by hand holds one bare shell pane. Splitting it would
+        # leave that shell empty next to the agent.
+        p = self.run_script("eddy-start", "scout", "investigator", "--into-tab", "w1:tG",
+                            "--cwd", self.proj, scenario="fresh_tab",
+                            env_extra={**self.bar_env("Opus 5.5"), "HERDR_WORKSPACE_ID": "w1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith("pane split") for c in calls), calls)
+        self.assertIn("pane run w1:g1 export EDDY_NAME=scout EDDY_SCRATCH=%s" % self.abs_scratch(), calls)
+        self.assertTrue(any("agent start scout --kind claude --pane w1:g1" in c for c in calls), calls)
+
+    # Tab guard: scenario "guard" lists the orchestrator's tab (w1:tO), the
+    # envoy's tab (w1:tE), a worker tab with a live agent (w1:w1 in w1:tW) and
+    # a worker tab with one empty pane (w1:g1 in w1:tG).
+    def guard_config(self, orchestrator_tab="w1:tO", envoy_tab="w1:tE"):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        cfg = {}
+        if orchestrator_tab:
+            cfg["orchestrator_tab"] = orchestrator_tab
+        if envoy_tab:
+            cfg["envoy_tab"] = envoy_tab
+        write_text(os.path.join(d, "config.json"), json.dumps(cfg))
+
+    def guarded(self, *placement, env_extra=None):
+        return self.run_script("eddy-start", "maker", "implementer", *placement,
+                               "--cwd", self.proj, scenario="guard",
+                               env_extra={**self.bar_env("Sonnet 5.5"), **(env_extra or {})})
+
+    def assert_refused(self, p):
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertTrue(p.stderr.strip(), "a refusal says why")
+        creating = ("agent start ", "pane split", "tab create", "pane run", "pane close")
+        self.assertFalse(any(c.startswith(creating) for c in self.herdr_calls()), self.herdr_calls())
+
+    def test_guard_refuses_into_tab_of_the_orchestrator(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--into-tab", "w1:tO"))
+
+    def test_guard_refuses_into_tab_of_the_envoy(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--into-tab", "w1:tE"))
+
+    def test_guard_refuses_split_of_a_pane_in_the_orchestrator_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--split", "w1:o1", "right"))
+
+    def test_guard_refuses_split_of_a_pane_in_the_envoy_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--split", "w1:e1", "down"))
+
+    def test_guard_refuses_pane_in_the_orchestrator_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:o1"))
+
+    def test_guard_refuses_pane_in_the_envoy_tab(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:e1"))
+
+    def test_guard_refuses_pane_that_runs_a_live_agent(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:w1"))
+
+    def test_guard_refuses_when_herdr_cannot_name_the_pane(self):
+        self.guard_config()
+        p = self.guarded("--pane", "w1:g1", env_extra={"FAKE_PANE_LIST_FAILS": "1"})
+        self.assert_refused(p)
+        p = self.guarded("--split", "w1:g1", "right", env_extra={"FAKE_PANE_LIST_FAILS": "1"})
+        self.assert_refused(p)
+
+    def test_guard_refuses_a_pane_herdr_does_not_list(self):
+        self.guard_config()
+        self.assert_refused(self.guarded("--pane", "w1:nope"))
+
+    def test_guard_allows_new_tab(self):
+        self.guard_config()
+        p = self.guarded("--new-tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_allows_into_tab_of_another_worker_tab(self):
+        self.guard_config()
+        p = self.guarded("--into-tab", "w1:tG")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_allows_split_of_a_pane_in_a_worker_tab(self):
+        self.guard_config()
+        p = self.guarded("--split", "w1:g1", "right")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_allows_pane_that_is_empty_in_a_worker_tab(self):
+        # The eddy-slice path: an empty pane in a fresh worker tab.
+        self.guard_config()
+        p = self.guarded("--pane", "w1:g1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_does_nothing_without_a_run_config(self):
+        p = self.guarded("--into-tab", "w1:tG")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = self.guarded("--pane", "w1:o1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_guard_works_with_only_one_tab_recorded(self):
+        self.guard_config(envoy_tab=None)
+        self.assert_refused(self.guarded("--into-tab", "w1:tO"))
+
+
+class AgentFiles(unittest.TestCase):
+    def frontmatter(self, name):
+        text = read_text(os.path.join(ROOT, "agents", name + ".md"))
+        return text.split("---")[1]
+
+    def test_every_role_has_an_agent_file(self):
+        for role in ("investigator", "implementer", "tester", "orchestrator", "envoy"):
+            with self.subTest(role=role):
+                self.assertIn("name: eddy-%s" % role, self.frontmatter("eddy-" + role))
+
+    def test_orchestrator_preloads_the_protocol_skill(self):
+        self.assertIn("- eddy-orchestration", self.frontmatter("eddy-orchestrator"))
+
+    def test_envoy_cannot_edit_files(self):
+        self.assertIn("disallowedTools: Edit, MultiEdit, NotebookEdit, Write", self.frontmatter("eddy-envoy"))
+
+    def test_envoy_preloads_its_role_skill(self):
+        fm = self.frontmatter("eddy-envoy")
+        self.assertIn("- eddy-role-envoy", fm)
+        self.assertTrue(os.path.exists(os.path.join(ROOT, "skills", "eddy-role-envoy", "SKILL.md")))
+
+
+class TeamBriefCompose(Base):
+    def overlay(self):
+        d = os.path.join(self.proj, ".claude", "team")
+        os.makedirs(os.path.join(d, "roles"))
+        write_text(os.path.join(d, "roles", "investigator.md"), "OVERLAY-ROLE-FRAGMENT\n")
+        write_text(os.path.join(d, "env.md"), "OVERLAY-ENV-BODY\n")
+        write_text(os.path.join(d, "gate.md"), "OVERLAY-GATE-BODY\n")
+
+    def test_concatenates_in_order_and_substitutes(self):
+        self.write_record("scout", "investigator")
+        self.overlay()
+        p = self.run_script("eddy-brief", "compose", "scout", "digest", "--var", "ticket=APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = read_text(os.path.join(self.proj, p.stdout.strip()))
+        order = [text.index(m) for m in ("# Brief: scout / digest",
+                                         "OVERLAY-ROLE-FRAGMENT",
+                                         "## Environment", "OVERLAY-ENV-BODY",
+                                         "## Gate", "OVERLAY-GATE-BODY",
+                                         "## Report back", "## Rules")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("You are scout", text)
+        self.assertIn("decisions-APP-1.md", text)
+        self.assertIn('REPORT scout digest', text)
+        self.assertNotIn("{{", text)
+
+    def test_refuses_to_overwrite(self):
+        self.write_record("scout", "investigator")
+        first = self.run_script("eddy-brief", "compose", "scout", "digest", "--var", "ticket=APP-1")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        again = self.run_script("eddy-brief", "compose", "scout", "digest", "--var", "ticket=APP-1")
+        self.assertEqual(again.returncode, 1)
+
+    def test_rejects_path_traversal_topic(self):
+        self.write_record("scout", "investigator")
+        p = self.run_script("eddy-brief", "compose", "scout", "../../oops", "--var", "ticket=APP-1")
+        self.assertEqual(p.returncode, 2)
+
+    def test_empty_overlay_still_valid(self):
+        self.write_record("maker", "implementer")
+        p = self.run_script("eddy-brief", "compose", "maker", "build")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = read_text(os.path.join(self.proj, p.stdout.strip()))
+        for marker in ("# Brief: maker / build", "## Report back", "## Rules"):
+            self.assertIn(marker, text)
+
+
+class TeamBriefPrepare(Base):
+    def kickoff(self, name="scout", topic="digest"):
+        # The kick-off names the brief by its absolute path in the main run dir, for every agent.
+        return ("Read %s and execute it fully. "
+                "Report back as it describes. You are in execution mode; if your session "
+                "shows plan mode, say so immediately."
+                % os.path.join(os.path.realpath(self.sp()), "brief-%s-%s.md" % (name, topic)))
+
+    def prep(self, name="scout", topic="digest"):
+        self.write_record(name, "investigator", topic=topic)
+        os.makedirs(self.sp(), exist_ok=True)
+        write_text(self.sp("brief-%s-%s.md" % (name, topic)), "x")
+
+    def test_prepare_prints_kickoff_and_updates_record(self):
+        self.write_record("scout", "investigator")
+        os.makedirs(self.sp(), exist_ok=True)
+        write_text(self.sp("brief-scout-digest.md"), "brief")
+        p = self.run_script("eddy-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), self.kickoff())
+        rec = self.team_json("scout")
+        self.assertEqual((rec["topic"], rec["brief"]), ("digest", ".eddy-runs/current/brief-scout-digest.md"))
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_send_is_gone(self):
+        self.prep()
+        p = self.run_script("eddy-brief", "send", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 2)
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_missing_brief_is_bad_args(self):
+        self.write_record("scout", "investigator")
+        p = self.run_script("eddy-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no brief", p.stderr)
+
+    def test_a_worktree_agent_gets_the_absolute_brief_path_and_no_copy(self):
+        # Decision 1 (option A): a worktree agent reads the brief and the decisions file
+        # in the main run dir by absolute path (its session gets --add-dir for it).
+        # prepare copies nothing into the worktree, so the agent never reads a stale snapshot.
+        wt = tempfile.mkdtemp()
+        try:
+            self.write_record("scout", "investigator", topic="digest", cwd=wt)
+            d = self.sp(".eddy")
+            os.makedirs(d, exist_ok=True)
+            write_text(os.path.join(d, "config.json"), json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+            write_text(self.sp("decisions-APP-1.md"), "1. decision\n")
+            write_text(self.sp("brief-scout-digest.md"), "brief body\n")
+
+            p = self.run_script("eddy-brief", "prepare", "scout", "--topic", "digest")
+
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(p.stdout.strip(), self.kickoff())
+            self.assertFalse(os.path.exists(os.path.join(wt, ".eddy-runs")), os.listdir(wt))
+            self.assertEqual(os.listdir(wt), [])
+        finally:
+            shutil.rmtree(wt, ignore_errors=True)
+
+    def test_the_main_repo_agent_gets_the_absolute_brief_path_too(self):
+        self.prep()
+        p = self.run_script("eddy-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), self.kickoff())
+
+
+class TeamSlice(Base):
+    WS = {"HERDR_WORKSPACE_ID": "w1"}
+
+    def overlay(self, text):
+        d = os.path.join(self.proj, ".claude", "team")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "project.yaml"), text)
+
+    def slice(self, *extra):
+        return self.run_script("eddy-slice", "feat", "main", "--label", "T1 APP-1 slug", *extra,
+                               env_extra=self.WS)
+
+    def test_without_overlay_refuses_and_touches_nothing(self):
+        p = self.slice()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no worktree_cmd in .claude/team/project.yaml - ask the human how this repo makes worktrees",
+                      p.stderr)
+        self.assertEqual(self.git_calls(), [])
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_without_worktree_dir_refuses(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\n')
+        p = self.slice()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no worktree_dir in .claude/team/project.yaml - ask the human how this repo makes worktrees",
+                      p.stderr)
+        self.assertEqual(self.git_calls(), [])
+
+    def test_uses_the_repos_own_worktree_command(self):
+        self.overlay('stacked: true\nworktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        git = self.git_calls()
+        self.assertIn("worktree add feat main", git)
+        self.assertIn("m add feat --onto main", git)
+
+    def test_herdr_gets_the_absolute_worktree_cwd(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        expect_abs = os.path.join(os.path.realpath(self.proj), "feat")
+        self.assertTrue(any(("--cwd %s " % expect_abs) in c for c in creates), creates)
+
+    def test_tab_goes_to_the_callers_live_workspace(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        p = self.run_script("eddy-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            env_extra={"HERDR_WORKSPACE_ID": "w7"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        creates = [c for c in self.herdr_calls() if c.startswith("tab create")]
+        self.assertTrue(creates and all("--workspace w1 " in c for c in creates), creates)
+
+    def test_copy_lands_in_the_worktrees_run_dir(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "specs"))
+        write_text(os.path.join(self.proj, "specs", "a.md"), "spec\n")
+        p = self.slice("--copy", "specs")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(os.path.join(self.proj, "feat", ".eddy-runs", "current", "specs", "a.md")), "spec\n")
+
+    def test_generated_types_land_at_the_same_relative_path(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        for plugin in ("team", "other"):
+            types = os.path.join(self.proj, "plugins", plugin, ".claude-plugin", "types")
+            os.makedirs(os.path.join(types, "claude-code"))
+            write_text(os.path.join(types, "tsconfig.json"), "{%s}\n" % plugin)
+            write_text(os.path.join(types, "claude-code", "index.d.ts"), "// %s\n" % plugin)
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for plugin in ("team", "other"):
+            base = os.path.join(self.proj, "feat", "plugins", plugin, ".claude-plugin", "types")
+            self.assertEqual(read_text(os.path.join(base, "tsconfig.json")), "{%s}\n" % plugin)
+            self.assertEqual(read_text(os.path.join(base, "claude-code", "index.d.ts")), "// %s\n" % plugin)
+
+    def test_a_missing_types_folder_is_skipped(self):
+        self.overlay('worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n')
+        os.makedirs(os.path.join(self.proj, "feat"))
+        os.makedirs(os.path.join(self.proj, "plugins", "team", ".claude-plugin"))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "feat", "plugins")))
+
+    SLICE_OVERLAY = 'worktree_cmd: "git worktree add {branch} {parent}"\nworktree_dir: "{branch}"\n'
+
+    def test_slice_tab_is_registered(self):
+        # The mod releases agents only in tabs listed in tabs.json, so the
+        # tab eddy-slice creates must be listed (fake herdr makes w1:t9).
+        self.overlay(self.SLICE_OVERLAY)
+        os.makedirs(self.sp(".eddy"))
+        write_text(self.sp(".eddy", "tabs.json"), json.dumps(["w1:t1"]))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "tabs.json"))), ["w1:t1", "w1:t9"])
+
+    def test_slice_tab_registered_once(self):
+        self.overlay(self.SLICE_OVERLAY)
+        os.makedirs(self.sp(".eddy"))
+        write_text(self.sp(".eddy", "tabs.json"), json.dumps(["w1:t9"]))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "tabs.json"))), ["w1:t9"])
+
+    def test_slice_without_a_team_dir_still_works_and_creates_it(self):
+        # No run dir yet (no eddy-init): like eddy-start, eddy-slice makes
+        # .eddy and starts tabs.json instead of failing on the missing file.
+        self.overlay(self.SLICE_OVERLAY)
+        self.assertFalse(os.path.exists(self.sp(".eddy")))
+        p = self.slice()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout.splitlines()[0])["tab"], "w1:t9")
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "tabs.json"))), ["w1:t9"])
+
+    def test_slice_failed_tab_create_exits_nonzero_and_leaves_tabs_json_alone(self):
+        self.overlay(self.SLICE_OVERLAY)
+        os.makedirs(self.sp(".eddy"))
+        write_text(self.sp(".eddy", "tabs.json"), json.dumps(["w1:t1"]))
+        p = self.run_script("eddy-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            scenario="tab_create_fails", env_extra=self.WS)
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "tabs.json"))), ["w1:t1"])
+
+    def test_slice_failed_tab_create_writes_no_tabs_json(self):
+        self.overlay(self.SLICE_OVERLAY)
+        p = self.run_script("eddy-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            scenario="tab_create_fails", env_extra=self.WS)
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "tabs.json")))
+
+    def test_slice_absolute_eddy_scratch_registers_under_it_not_under_cwd(self):
+        self.overlay(self.SLICE_OVERLAY)
+        abs_scratch = os.path.join(self.proj, "elsewhere", "run")
+        os.makedirs(os.path.join(abs_scratch, ".eddy"))
+        write_text(os.path.join(abs_scratch, ".eddy", "tabs.json"), json.dumps(["w1:t1"]))
+        p = self.run_script("eddy-slice", "feat", "main", "--label", "T1 APP-1 slug",
+                            env_extra={**self.WS, "EDDY_SCRATCH": abs_scratch})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(os.path.join(abs_scratch, ".eddy", "tabs.json"))),
+                         ["w1:t1", "w1:t9"])
+        self.assertFalse(os.path.exists(self.sp(".eddy")))
+
+    def test_rejects_unsafe_git_ref(self):
+        p = self.run_script("eddy-slice", "evil;rm -rf x", "main", "--label", "T1 X y", env_extra=self.WS)
+        self.assertEqual(p.returncode, 2)
+        self.assertEqual(self.git_calls(), [])
+
+
+class TeamStatus(Base):
+    def test_joins_roster_and_reads_idle_by_pane(self):
+        self.write_record("scout", "investigator", topic="digest", session="11111111aaaa")
+        self.write_record("maker", "implementer", topic="build", session="22222222bbbb")
+        p = self.run_script("eddy-status", "--read-idle", scenario="status_mixed")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("agent read w1:p2") for c in calls))
+        self.assertFalse(any(c.startswith("agent read w1:p3") for c in calls))
+        roster = self.sp(".eddy", "roster.md")
+        self.assertTrue(os.path.exists(roster))
+
+    def cfg(self, orch="app-1-orch"):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": orch,
+                               "orchestrator_session": "oooo0000dddd"}))
+
+    def test_roster_lists_only_team_agents_and_orchestrator(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest", session="11111111aaaa")
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), [
+            "app-1-orch (w2:p1, oooo0000) working - - -",
+            "app-1-scout (w2:p2, 11111111) idle investigator digest -",
+        ])
+
+    def test_maps_records_by_session_not_name(self):
+        # w2:pB has no herdr name at all, as after a restart.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="c23a1be5eeee")
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("app-1-scout (w2:pB, c23a1be5) idle investigator", p.stdout)
+
+    def test_warns_about_a_team_started_before_session_ids(self):
+        # Such a team gets no REPORT delivery from the eddy mod: say so.
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch"}))
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("started before team 0.5.0", p.stderr)
+        self.assertIn("/eddy:init", p.stderr)
+
+    def test_no_warning_for_a_current_team(self):
+        self.cfg()
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.stderr, "")
+
+    def envoy_cfg(self):
+        # What eddy-init writes when the orchestrator did not start (live run, PROBE-1).
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+                               "envoy_session": "eeee0000ffff", "envoy_tab": "w4:tX"}))
+        write_text(os.path.join(d, "tabs.json"), json.dumps(["w4:tX"]))
+
+    def test_envoy_run_without_an_orchestrator_does_not_crash_or_warn(self):
+        self.envoy_cfg()
+        write_text(self.sp(".eddy", "toasted.json"), "[]")
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.strip(), "")
+
+    def test_a_json_list_in_the_team_dir_is_no_record(self):
+        # Any file the mod keeps there may hold a list; only objects are records.
+        self.cfg()
+        write_text(self.sp(".eddy", "stray.json"), "[1]")
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), [
+            "app-1-orch (w2:p1, oooo0000) working - - -",
+            "app-1-scout (w2:p2, 11111111) idle investigator - -",
+        ])
+
+    def test_the_envoy_session_is_never_on_the_roster(self):
+        # /eddy:release walks this roster and closes each pane on it: the envoy's own pane
+        # must not be there, even when a record or the orchestrator entry names its session.
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "orchestrator": "app-1-orch",
+                               "orchestrator_session": "oooo0000dddd", "envoy_session": "c23a1be5eeee"}))
+        self.write_record("app-1-ghost", "investigator", session="c23a1be5eeee")
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("eddy-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch", "app-1-scout"])
+
+    def test_the_orchestrator_is_listed_once_when_config_and_record_name_it(self):
+        # Live run F-3: config.json and .eddy/<orchestrator>.json both name the session.
+        self.cfg()
+        self.write_record("app-1-orch", "orchestrator", session="oooo0000dddd")
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("eddy-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch", "app-1-scout"])
+        with open(self.sp(".eddy", "roster.md")) as fh:
+            self.assertEqual(len(fh.read().splitlines()), 2)
+
+    def test_an_agent_without_a_session_does_not_crash_a_config_without_one(self):
+        # N9: by_session gets the key None; no orchestrator_session looked it up.
+        self.envoy_cfg()
+        p = self.run_script("eddy-status", scenario="status_sessionless")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "")
+
+    def test_a_record_without_a_session_is_no_member(self):
+        # N9: a record `{}` has no session; it must not match the sessionless agent.
+        self.envoy_cfg()
+        write_text(self.sp(".eddy", "app-1-ghost.json"), "{}")
+        p = self.run_script("eddy-status", scenario="status_sessionless")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "")
+
+    def test_the_session_that_runs_it_is_never_on_the_roster(self):
+        # N11: /eddy:release all in this session must not find its own pane.
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("eddy-status", "--json", scenario="status_two_teams",
+                            env_extra={"EDDY_SESSION_ID": "11111111aaaa"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-orch"])
+
+    def test_the_orchestrator_that_runs_it_is_left_off_its_own_roster(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="11111111aaaa")
+        p = self.run_script("eddy-status", "--json", scenario="status_two_teams",
+                            env_extra={"EDDY_SESSION_ID": "oooo0000dddd"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual([m["name"] for m in json.loads(p.stdout)], ["app-1-scout"])
+
+    def test_record_without_a_live_session_is_left_out(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", session="gone0000")
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["app-1-orch (w2:p1, oooo0000) working - - -"])
+
+    def test_an_agent_whose_record_was_forgotten_is_not_on_the_roster(self):
+        # F-4: /eddy:release deletes the record; eddy-status then has nothing to join, and no error.
+        self.cfg()
+        p = self.run_script("eddy-status", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(p.stdout.splitlines(), ["app-1-orch (w2:p1, oooo0000) working - - -"])
+
+    def test_json_reports_herdr_agent_status(self):
+        self.cfg()
+        self.write_record("app-1-scout", "investigator", topic="digest", session="11111111aaaa")
+        p = self.run_script("eddy-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        states = {r["name"]: r["state"] for r in json.loads(p.stdout)}
+        self.assertEqual(states, {"app-1-orch": "working", "app-1-scout": "idle"})
+
+    def test_empty_record_fields_keep_columns(self):
+        self.cfg()
+        self.write_record("app-1-scout", "", session="11111111aaaa")
+        p = self.run_script("eddy-status", "--json", scenario="status_two_teams")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        scout = [r for r in json.loads(p.stdout) if r["name"] == "app-1-scout"][0]
+        self.assertEqual(scout, {"name": "app-1-scout", "pane": "w2:p2", "session": "11111111",
+                                 "state": "idle", "role": "", "topic": "", "report_age": "-"})
+
+
+class DefaultScratch(Base):
+    """With EDDY_SCRATCH unset, every run file lives in .eddy-runs/current/."""
+    UNSET = {"EDDY_SCRATCH": None}
+
+    def cfg(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+
+    def test_init_with_default_path_creates_current(self):
+        p = self.run_script("eddy-init", "APP-1",
+                            env_extra={**self.UNSET, **self.bar_env("Opus 5.5")})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".eddy", "config.json")))
+
+    def test_status_writes_roster_under_current(self):
+        self.cfg()
+        p = self.run_script("eddy-status", scenario="status_two_teams", env_extra=self.UNSET)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".eddy", "roster.md")))
+
+    def test_stop_hook_writes_report_under_current(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = os.path.join(self.proj, "t.jsonl")
+        write_text(tr, json.dumps({"type": "assistant", "message": {"role": "assistant",
+                   "content": [{"type": "text", "text": "REPORT scout digest: done"}]}}) + "\n")
+        env = self.env(EDDY_NAME="scout", EDDY_SCRATCH=None)
+        p = subprocess.run(["bash", os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")],
+                           input=json.dumps({"session_id": "s", "transcript_path": tr, "cwd": self.proj}),
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp("reports", "scout-digest.md")))
+
+
+class StopHook(Base):
+    HOOK = os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")
+
+    def run_hook(self, payload, **env_extra):
+        env = self.env(**env_extra)
+        return subprocess.run(["bash", self.HOOK], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, cwd=self.proj)
+
+    def transcript(self, *messages):
+        path = os.path.join(self.proj, "transcript.jsonl")
+        with open(path, "w") as f:
+            for m in messages:
+                f.write(json.dumps({"type": "assistant",
+                                    "message": {"role": "assistant",
+                                                "content": [{"type": "text", "text": m}]}}) + "\n")
+        return path
+
+    def report_path(self, name, topic):
+        return self.sp("reports", "%s-%s.md" % (name, topic))
+
+    def write_index(self, session, name):
+        d = os.path.join(self.proj, "_index")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, session + ".json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": name}))
+
+    def test_finds_agent_by_session_id_without_eddy_env(self):
+        self.write_record("scout", "investigator", topic="digest")
+        rec = self.team_json("scout"); rec["session"] = "sid-1"
+        write_text(self.sp(".eddy", "scout.json"), json.dumps(rec))
+        self.write_index("sid-1", "scout")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"session_id": "sid-1", "transcript_path": tr, "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
+
+    def test_finds_agent_in_the_index_of_the_claude_profile(self):
+        self.write_record("scout", "investigator", topic="digest", session="sid-1")
+        os.makedirs(self.profile_index())
+        write_text(self.profile_index("sid-1.json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": "scout"}))
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"session_id": "sid-1", "transcript_path": tr, "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None, **self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
+
+    def test_index_entry_for_another_session_is_ignored(self):
+        self.write_record("scout", "investigator", topic="digest")
+        rec = self.team_json("scout"); rec["session"] = "sid-2"
+        write_text(self.sp(".eddy", "scout.json"), json.dumps(rec))
+        self.write_index("sid-1", "scout")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"session_id": "sid-1", "transcript_path": tr, "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.report_path("scout", "digest")))
+
+    def test_never_forwards_to_the_orchestrator(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        time.sleep(0.3)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+
+    def test_identifies_by_eddy_name_env(self):
+        # EDDY_NAME wins over the session id while the env is there. A second
+        # record is present to prove it picks the record by name.
+        self.write_record("scout", "investigator", topic="digest")
+        self.write_record("maker", "implementer", topic="build")
+        tr = self.transcript("REPORT scout digest: done, 2 files")
+
+        p = self.run_hook({"session_id": "no-such-session", "transcript_path": tr,
+                           "cwd": self.proj}, EDDY_NAME="scout")
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done, 2 files",
+                      read_text(self.report_path("scout", "digest")))
+        self.assertFalse(os.path.exists(self.report_path("maker", "build")))
+
+    def test_reports_after_agent_moves_its_cwd(self):
+        # An agent may cd into .eddy-runs/ or a worktree. eddy-start stamps an
+        # absolute EDDY_SCRATCH, so the hook still finds the team dir.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        moved = self.sp()
+
+        p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": moved},
+                          EDDY_NAME="scout", EDDY_SCRATCH=moved)
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
+
+    def test_relative_scratch_resolves_from_the_project_root_not_the_payload_cwd(self):
+        # No absolute EDDY_SCRATCH (a session that predates the stamp). The payload cwd moved
+        # into a sub directory; the run dir stays under the project root.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        sub = os.path.join(self.proj, "sub", "dir")
+        os.makedirs(sub)
+
+        p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": sub},
+                          EDDY_NAME="scout", EDDY_SCRATCH=SCRATCH, FAKE_GIT_TOPLEVEL=self.proj)
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
+        self.assertFalse(os.path.exists(os.path.join(sub, SCRATCH)))
+
+    def test_absolute_scratch_wins_over_the_project_root(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+
+        p = self.run_hook({"session_id": "s", "transcript_path": tr, "cwd": sub},
+                          EDDY_NAME="scout", EDDY_SCRATCH=self.sp(), FAKE_GIT_TOPLEVEL=sub)
+
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.report_path("scout", "digest")))
+
+    def test_no_eddy_name_is_silent(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+
+        p = self.run_hook({"session_id": "whatever", "transcript_path": tr, "cwd": self.proj})
+
+        self.assertEqual(p.returncode, 0)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+        self.assertFalse(os.path.exists(self.report_path("scout", "digest")))
+
+    def test_eddy_name_without_record_is_silent(self):
+        tr = self.transcript("REPORT ghost x: done")
+
+        p = self.run_hook({"session_id": "whatever", "transcript_path": tr, "cwd": self.proj},
+                          EDDY_NAME="ghost")
+
+        self.assertEqual(p.returncode, 0)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+
+    def test_invalid_eddy_name_is_silent(self):
+        # Guard against a hostile EDDY_NAME reaching the report path.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("REPORT scout digest: done")
+
+        p = self.run_hook({"session_id": "whatever", "transcript_path": tr, "cwd": self.proj},
+                          EDDY_NAME="../evil")
+
+        self.assertEqual(p.returncode, 0)
+        self.assertFalse(any(c.startswith("agent prompt ") for c in self.herdr_calls()))
+
+    def test_writes_report_for_match(self):
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("earlier", "final answer")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        body = read_text(self.report_path("scout", "digest"))
+        self.assertIn("# Report: scout / digest", body)
+        self.assertIn("final answer", body)
+
+    def test_reports_last_message_the_transcript_does_not_hold_yet(self):
+        # Claude Code may flush the final message to the transcript after the
+        # Stop hook runs. The payload's last_assistant_message already holds it.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("Now writing the deliverable.")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj,
+                           "last_assistant_message": "Done.\n\nREPORT scout digest: done, 1 file"},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done, 1 file", read_text(self.report_path("scout", "digest")))
+
+    def test_later_stop_without_report_keeps_the_fresh_report(self):
+        # The eddy mod picks reports up every 15 s; a second stop in between
+        # (a peer message woke the worker) must not erase the REPORT.
+        self.write_record("scout", "investigator", topic="digest")
+        p = self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                           "last_assistant_message": "REPORT scout digest: done"}, EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                           "last_assistant_message": "noted, nothing to add"}, EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("REPORT scout digest: done", read_text(self.report_path("scout", "digest")))
+
+    def test_a_new_brief_lets_the_next_stop_replace_the_old_report(self):
+        self.write_record("scout", "investigator", topic="digest")
+        self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                       "last_assistant_message": "REPORT scout digest: done"}, EDDY_NAME="scout")
+        brief = self.sp("brief-scout-digest.md")
+        write_text(brief, "# Brief\n")
+        later = os.path.getmtime(self.report_path("scout", "digest")) + 5
+        os.utime(brief, (later, later))
+        self.run_hook({"transcript_path": self.transcript("x"), "cwd": self.proj,
+                       "last_assistant_message": "working on the new brief"}, EDDY_NAME="scout")
+        self.assertIn("working on the new brief", read_text(self.report_path("scout", "digest")))
+
+    def test_stop_without_report_line_writes_report(self):
+        # A stop without a REPORT line is often a pause (the worker waits on its
+        # own subagents); the report file still holds the latest message.
+        self.write_record("scout", "investigator", topic="digest")
+        tr = self.transcript("two subagents still running, waiting")
+        p = self.run_hook({"transcript_path": tr, "cwd": self.proj}, EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("waiting", read_text(self.report_path("scout", "digest")))
+
+    def test_unreadable_transcript_logs_and_exits_zero(self):
+        self.write_record("scout", "investigator", topic="digest")
+        p = self.run_hook({"transcript_path": "/does/not/exist", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        log = self.sp(".eddy", "hook.log")
+        self.assertTrue(os.path.exists(log))
+        self.assertIn("transcript unreadable", read_text(log))
+
+
+class SessionStartHook(Base):
+    HOOK = os.path.join(ROOT, "hooks", "handlers", "session-start.sh")
+
+    def run_hook(self, payload, **env_extra):
+        return subprocess.run(["bash", self.HOOK], input=json.dumps(payload),
+                              capture_output=True, text=True, env=self.env(**env_extra), cwd=self.proj)
+
+    def setup_worker(self, session):
+        self.write_record("scout", "investigator", topic="digest")
+        rec = self.team_json("scout"); rec["session"] = session
+        write_text(self.sp(".eddy", "scout.json"), json.dumps(rec))
+        d = os.path.join(self.proj, "_index"); os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, session + ".json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": "scout"}))
+
+    def test_clear_moves_identity_to_the_new_session(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["session"], "new-2")
+        self.assertEqual(self.index_entry("new-2")["name"], "scout")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "_index", "old-1.json")))
+
+    def test_clear_writes_the_index_of_the_claude_profile(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          EDDY_NAME="scout", **self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(read_text(self.profile_index("new-2.json")))["name"], "scout")
+
+    def test_clear_without_eddy_name_changes_nothing(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["session"], "old-1")
+
+    def setup_briefed_worker(self, session):
+        self.setup_worker(session)
+        rec = self.team_json("scout"); rec["brief_sent_session"] = session
+        write_text(self.sp(".eddy", "scout.json"), json.dumps(rec))
+
+    def test_compact_lifts_the_brief_mark(self):
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertNotIn("brief_sent_session", rec)
+        self.assertEqual(rec["session"], "s-1")
+
+    def test_compact_keeps_the_watch_session(self):
+        self.setup_briefed_worker("s-1")
+        rec = self.team_json("scout"); rec["watch_session"] = "s-1"
+        write_text(self.sp(".eddy", "scout.json"), json.dumps(rec))
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertNotIn("brief_sent_session", rec)
+        self.assertEqual(rec["watch_session"], "s-1")
+
+    def test_clear_keeps_the_old_watch_session_beside_the_new_session(self):
+        self.setup_worker("old-1")
+        rec = self.team_json("scout"); rec["watch_session"] = "old-1"
+        write_text(self.sp(".eddy", "scout.json"), json.dumps(rec))
+        p = self.run_hook({"session_id": "new-2", "source": "clear", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.team_json("scout")
+        self.assertEqual(rec["session"], "new-2")
+        self.assertEqual(rec["watch_session"], "old-1")
+
+    def test_compact_of_another_session_keeps_the_brief_mark(self):
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "other", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["brief_sent_session"], "s-1")
+
+    def test_compact_without_eddy_name_keeps_the_brief_mark(self):
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("scout")["brief_sent_session"], "s-1")
+
+    def test_resume_without_eddy_env_marks_restored_worker(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "old-1", "source": "resume", "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp(".eddy", "restored", "scout")))
+
+    def test_resume_with_eddy_env_is_not_marked(self):
+        self.setup_worker("old-1")
+        p = self.run_hook({"session_id": "old-1", "source": "resume", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "restored", "scout")))
+
+    def test_unrelated_session_is_silent(self):
+        p = self.run_hook({"session_id": "x", "source": "startup", "cwd": self.proj},
+                          EDDY_NAME=None, EDDY_SCRATCH=None)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def setup_orchestrator_config(self):
+        d = self.sp(".eddy"); os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps(
+            {"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+             "orchestrator_session": "orch-1"}))
+
+    def test_compact_of_the_orchestrator_points_at_the_handover(self):
+        self.setup_orchestrator_config()
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="app-1-orch")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "SessionStart")
+        for part in ("eddy-orchestration", "orch-handover.md", "orchestration-decisions.md", "decisions file",
+                     ".eddy-runs/current/.eddy/questions/Q-*.json", "whose status is open or assumed"):
+            self.assertIn(part, out["additionalContext"])
+
+    def test_the_pointer_names_what_the_mod_instructions_name(self):
+        # The mod's COMPACT_INSTRUCTIONS and this pointer say the same: each file name of the pointer is in both.
+        self.setup_orchestrator_config()
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="app-1-orch")
+        context = json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"]
+        mod = read_text(os.path.join(ROOT, "hooks", "mod", "reset.ts"))
+        for part in ("eddy-orchestration", "orch-handover.md", "orchestration-decisions.md",
+                     ".eddy-runs/current/.eddy/questions/Q-*.json", "whose status is open or assumed"):
+            self.assertIn(part, context)
+            self.assertIn(part, mod)
+
+    def test_compact_of_a_worker_prints_nothing(self):
+        self.setup_orchestrator_config()
+        self.setup_briefed_worker("s-1")
+        p = self.run_hook({"session_id": "s-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="scout")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_clear_of_the_orchestrator_prints_nothing(self):
+        self.setup_orchestrator_config()
+        p = self.run_hook({"session_id": "orch-2", "source": "clear", "cwd": self.proj},
+                          EDDY_NAME="app-1-orch")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_compact_with_no_config_prints_nothing(self):
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="app-1-orch")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_compact_of_the_orchestrator_still_lifts_its_brief_mark(self):
+        self.setup_orchestrator_config()
+        self.write_record("app-1-orch", "orchestrator", session="orch-1")
+        rec = self.team_json("app-1-orch"); rec["brief_sent_session"] = "orch-1"
+        write_text(self.sp(".eddy", "app-1-orch.json"), json.dumps(rec))
+        p = self.run_hook({"session_id": "orch-1", "source": "compact", "cwd": self.proj},
+                          EDDY_NAME="app-1-orch")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("brief_sent_session", self.team_json("app-1-orch"))
+        self.assertIn("orch-handover.md", p.stdout)
+
+
+class TeamResurrect(Base):
+    def setup_team(self):
+        d = self.sp(".eddy"); os.makedirs(os.path.join(d, "restored"))
+        for name, sid, role in (("scout", "sid-scout", "investigator"), ("maker", "sid-maker", "implementer"),
+                                ("ghost", "sid-ghost", "tester")):
+            write_text(os.path.join(d, name + ".json"), json.dumps(
+                {"role": role, "topic": "", "brief": "", "pane": "w1:p2", "session": sid,
+                 "model": "claude-sonnet-5-5", "effort": "low", "mode": "auto", "cwd": self.proj}))
+        open(os.path.join(d, "restored", "scout"), "w").close()
+        open(os.path.join(d, "restored", "ghost"), "w").close()
+
+    def test_relaunches_marked_workers_with_saved_flags(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertIn("agent prompt w1:p5 /exit", calls)
+        self.assertIn("agent wait w1:p5 --until unknown --timeout 30000", calls)
+        self.assertIn("pane run w1:p5 export EDDY_NAME=scout EDDY_SCRATCH=%s" % os.path.realpath(self.sp()), calls)
+        self.assertIn(
+            'agent start scout --kind claude --pane w1:p5 --timeout 90000 -- --resume sid-scout '
+            '--agent eddy-investigator --model claude-sonnet-5-5 --effort low --permission-mode auto '
+            '--name scout --settings {"crossSessionInbound":"accept"} --plugin-dir %s'
+            % os.path.realpath(ROOT), calls)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "restored", "scout")))
+        self.assertIn("relaunched scout (w1:p5)", p.stdout)
+
+    def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
+        self.setup_team()
+        sub = os.path.join(self.proj, "sub")
+        os.makedirs(sub)
+        p = self.run_script("eddy-resurrect", scenario="resurrect", cwd=sub,
+                            env_extra={"FAKE_GIT_TOPLEVEL": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p5 export EDDY_NAME=scout EDDY_SCRATCH=%s" % os.path.realpath(self.sp()),
+                      self.herdr_calls())
+        self.assertFalse(os.path.exists(self.sp(".eddy", "restored", "scout")))
+
+    def resurrect_argv(self, p, name="scout"):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return next(c for c in self.herdr_calls() if c.startswith("agent start %s " % name))
+
+    def test_a_dev_copy_relaunches_with_its_own_plugin_dir(self):
+        # N10: the relaunched claude has no --plugin-dir of its own and would load only the
+        # installed copy, which may lack this version's agents and mod (same as eddy-start).
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertTrue(self.resurrect_argv(p).endswith(" --plugin-dir %s" % os.path.realpath(ROOT)))
+
+    def test_an_installed_copy_relaunches_without_a_plugin_dir(self):
+        # Under <profile>/plugins/cache the installed plugin loads by itself: no --plugin-dir.
+        self.setup_team()
+        cfg = os.path.join(self.proj, "profile")
+        copy = os.path.join(cfg, "plugins", "cache", "market", "eddy", "0.5.6")
+        shutil.copytree(ROOT, copy, ignore=shutil.ignore_patterns("__pycache__"))
+        env = self.env(scenario="resurrect", CLAUDE_CONFIG_DIR=cfg)
+        p = subprocess.run([os.path.join(copy, "bin", "eddy-resurrect")],
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertNotIn("--plugin-dir", self.resurrect_argv(p))
+
+    def test_a_worktree_worker_relaunches_with_the_main_run_dir_as_an_added_dir(self):
+        self.setup_team()
+        wt = os.path.join(self.proj, "wt")
+        os.makedirs(wt)
+        rec = self.team_json("scout")
+        write_text(self.sp(".eddy", "scout.json"), json.dumps({**rec, "cwd": wt}))
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertIn(" --permission-mode auto --add-dir %s --name scout " % os.path.realpath(self.sp()),
+                      self.resurrect_argv(p))
+
+    def test_a_main_checkout_worker_relaunches_without_an_added_dir(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertNotIn("--add-dir", self.resurrect_argv(p))
+
+    def test_unmarked_worker_is_healthy_and_untouched(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertIn("healthy maker", p.stdout)
+        self.assertFalse(any("w1:p6" in c and c.startswith(("agent prompt", "agent start", "pane run"))
+                             for c in self.herdr_calls()))
+
+    def test_worker_missing_from_herdr_is_reported(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertIn("missing ghost: session sid-ghost not in herdr", p.stdout)
+
+    def test_missing_worker_loses_its_restored_marker(self):
+        self.setup_team()
+        self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertFalse(os.path.exists(self.sp(".eddy", "restored", "ghost")))
+
+    def test_marker_without_a_record_is_removed(self):
+        self.setup_team()
+        open(self.sp(".eddy", "restored", "released"), "w").close()
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "restored", "released")))
+
+    def test_eddy_name_is_shell_quoted_in_the_pane(self):
+        self.setup_team()
+        os.rename(self.sp(".eddy", "scout.json"), self.sp(".eddy", "sc out.json"))
+        os.rename(self.sp(".eddy", "restored", "scout"), self.sp(".eddy", "restored", "sc out"))
+        p = self.run_script("eddy-resurrect", scenario="resurrect")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p5 export EDDY_NAME=sc\\ out EDDY_SCRATCH=%s" % os.path.realpath(self.sp()),
+                      self.herdr_calls())
+
+    def test_relaunched_pane_gets_the_claude_profile(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect", env_extra=self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pane run w1:p5 export EDDY_NAME=scout EDDY_SCRATCH=%s CLAUDE_CONFIG_DIR=%s"
+                      % (os.path.realpath(self.sp()), self.profile().replace(" ", "\\ ")), self.herdr_calls())
+
+    def test_herdr_down_is_a_herdr_error(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="list_fails")
+        self.assertEqual(p.returncode, 4)
+
+    def cleared_worker(self, marked):
+        # Restored without its env, then /clear'd: its record still names the
+        # old session, while its pane now runs a session no record claims.
+        d = self.sp(".eddy"); os.makedirs(os.path.join(d, "restored"))
+        write_text(os.path.join(d, "scout.json"), json.dumps(
+            {"role": "investigator", "topic": "", "brief": "", "pane": "w1:p5", "session": "sid-old",
+             "model": "claude-sonnet-5-5", "effort": "low", "mode": "auto", "cwd": self.proj}))
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "sid-old.json"),
+                   json.dumps({"scratch": os.path.realpath(self.sp()), "name": "scout"}))
+        if marked:
+            open(os.path.join(d, "restored", "scout"), "w").close()
+
+    def test_adopts_the_session_a_restored_worker_got_from_a_clear(self):
+        self.cleared_worker(marked=True)
+        p = self.run_script("eddy-resurrect", scenario="resurrect_cleared")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("relaunched scout (w1:p5), adopted session sid-cleared", p.stdout)
+        self.assertTrue(any(c.startswith("agent start scout ") and "--resume sid-cleared " in c
+                            for c in self.herdr_calls()), self.herdr_calls())
+        self.assertEqual(self.team_json("scout")["session"], "sid-cleared")
+        self.assertEqual(self.index_entry("sid-cleared")["name"], "scout")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "_index", "sid-old.json")))
+
+    def test_never_adopts_a_pane_session_of_an_unmarked_worker(self):
+        self.cleared_worker(marked=False)
+        p = self.run_script("eddy-resurrect", scenario="resurrect_cleared")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("missing scout: session sid-old not in herdr", p.stdout)
+        self.assertEqual(self.team_json("scout")["session"], "sid-old")
+
+    def test_pane_is_pending_while_its_agent_restarts(self):
+        # The eddy mod closes an empty pane a record names; a pane between
+        # /exit and the relaunched Claude looks empty, so it must be pending.
+        self.setup_team()
+        marker_log = os.path.join(self.proj, "marker.log")
+        p = self.run_script("eddy-resurrect", scenario="resurrect", env_extra={
+            "FAKE_MARKER_CHECK_GROUP": "agent", "FAKE_MARKER_CHECK_SUB": "start",
+            "FAKE_MARKER_CHECK_FILE": self.sp(".eddy", "pending", "w1_p5"),
+            "FAKE_MARKER_CHECK_LOG": marker_log})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(marker_log).split(), ["present"])
+        self.assertFalse(os.path.exists(self.sp(".eddy", "pending", "w1_p5")))
+
+    def test_claude_that_does_not_exit_is_skipped(self):
+        self.setup_team()
+        p = self.run_script("eddy-resurrect", scenario="resurrect",
+                            env_extra={"FAKE_AGENT_WAIT_FAILS": "1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("could not stop scout (w1:p5)", p.stdout)
+        calls = self.herdr_calls()
+        self.assertFalse(any(c.startswith(("pane run w1:p5", "agent start scout")) for c in calls), calls)
+        self.assertTrue(os.path.exists(self.sp(".eddy", "restored", "scout")))
+        self.assertIn("healthy maker", p.stdout)
+
+
+class TeamForget(Base):
+    """F-4: /eddy:release deletes the record of each agent it released, with this script."""
+
+    def exists(self, name):
+        return os.path.lexists(self.sp(".eddy", name + ".json"))
+
+    def test_deletes_the_record_of_the_named_agent_only(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="sid-maker")
+        write_text(self.sp(".eddy", "config.json"), "{}")
+        write_text(self.sp(".eddy", "tabs.json"), "[]")
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout"])
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(self.exists("maker"))
+        self.assertTrue(self.exists("config"))
+        self.assertTrue(self.exists("tabs"))
+
+    def test_deletes_several_records(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="sid-maker")
+        p = self.run_script("eddy-forget", "scout", "maker")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout", "forgot maker"])
+        self.assertFalse(self.exists("scout") or self.exists("maker"))
+
+    def test_a_record_without_a_session_goes_too(self):
+        self.write_record("scout", "investigator")
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(self.exists("scout"))
+
+    def test_a_missing_record_is_said_not_failed(self):
+        # A second release of the same name, or an agent that never had a record.
+        os.makedirs(self.sp(".eddy"))
+        p = self.run_script("eddy-forget", "ghost")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["no record: ghost"])
+
+    def test_only_a_plain_name_is_accepted(self):
+        os.makedirs(self.sp(".eddy"))
+        write_text(self.sp("victim.json"), "{}")
+        for bad in ("../victim", "sub/victim", "/etc/passwd", ".hidden", "-x", "a b", ""):
+            with self.subTest(name=bad):
+                p = self.run_script("eddy-forget", bad)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("bad name", p.stderr)
+        self.assertTrue(os.path.exists(self.sp("victim.json")))
+
+    def test_a_state_file_is_no_record(self):
+        for name in ("config", "tabs", "watch-state", "layout-flags", "delivered", "toasted"):
+            with self.subTest(name=name):
+                os.makedirs(self.sp(".eddy"), exist_ok=True)
+                write_text(self.sp(".eddy", name + ".json"), "{}")
+                p = self.run_script("eddy-forget", name)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertTrue(self.exists(name))
+
+    def test_one_bad_name_deletes_nothing(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.run_script("eddy-forget", "scout", "../x")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertTrue(self.exists("scout"))
+
+    def test_no_name_is_bad_arguments(self):
+        p = self.run_script("eddy-forget")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("usage: eddy-forget", p.stderr)
+
+    def test_help_prints_usage(self):
+        p = self.run_script("eddy-forget", "--help")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("usage: eddy-forget <name>", p.stdout)
+
+    def test_a_live_agent_keeps_its_record(self):
+        # The pane is closed first; an agent herdr still lists is not released.
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="gone0000")
+        p = self.run_script("eddy-forget", "scout", "maker", scenario="resurrect")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scout is still live (w1:p5): close its pane first", p.stderr)
+        self.assertTrue(self.exists("scout"))
+        self.assertFalse(self.exists("maker"))
+        self.assertEqual(p.stdout.splitlines(), ["forgot maker"])
+
+    def test_a_herdr_error_deletes_nothing(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        for scenario in ("list_fails", "bad_list"):
+            with self.subTest(scenario=scenario):
+                p = self.run_script("eddy-forget", "scout", scenario=scenario)
+                self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+                self.assertTrue(self.exists("scout"))
+
+    def test_only_the_record_of_this_run_goes(self):
+        run = os.path.join("work", "run")
+        os.makedirs(os.path.join(self.proj, run, ".eddy"))
+        write_text(os.path.join(self.proj, run, ".eddy", "scout.json"), "{}")
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.run_script("eddy-forget", "scout", env_extra={"EDDY_SCRATCH": run})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, run, ".eddy", "scout.json")))
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_symlink_record_is_unlinked_not_followed(self):
+        outside = os.path.join(self.proj, "outside.json")
+        write_text(outside, "{}")
+        os.makedirs(self.sp(".eddy"))
+        os.symlink(outside, self.sp(".eddy", "scout.json"))
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(os.path.exists(outside))
+
+    def test_a_directory_is_no_record(self):
+        os.makedirs(self.sp(".eddy", "scout.json"))
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scout is not a record file", p.stderr)
+        self.assertTrue(os.path.isdir(self.sp(".eddy", "scout.json")))
+
+    # OQ7: the session index entry of a forgotten agent goes with its record, so /eddy:release
+    # needs no shell step with ${...} for it. The session comes from the record.
+    def index_path(self, session, base=None):
+        return os.path.join(base or os.path.join(self.proj, "_index"), session + ".json")
+
+    def write_index(self, session, name, base=None):
+        os.makedirs(os.path.dirname(self.index_path(session, base)), exist_ok=True)
+        write_text(self.index_path(session, base), json.dumps({"scratch": SCRATCH, "name": name}))
+
+    def test_the_index_entry_of_the_session_goes_with_the_record(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_record("maker", "implementer", session="sid-maker")
+        self.write_index("sid-scout", "scout")
+        self.write_index("sid-maker", "maker")
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout"])
+        self.assertFalse(os.path.lexists(self.index_path("sid-scout")))
+        self.assertTrue(os.path.exists(self.index_path("sid-maker")))
+        self.assertTrue(self.exists("maker"))
+
+    def test_a_record_without_an_index_entry_is_fine(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["forgot scout"])
+
+    def test_a_record_without_a_session_leaves_the_index_alone(self):
+        self.write_record("scout", "investigator")
+        self.write_index("sid-other", "other")
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(os.path.exists(self.index_path("sid-other")))
+
+    def test_the_index_follows_the_profile_without_eddy_index_dir(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_index("sid-scout", "scout", base=self.profile_index())
+        p = self.run_script("eddy-forget", "scout", env_extra=self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(self.index_path("sid-scout", base=self.profile_index())))
+
+    def test_a_session_that_is_not_a_plain_id_deletes_no_file_outside_the_index(self):
+        # The record is not trusted: "../victim" would reach proj/victim.json.
+        victim = os.path.join(self.proj, "victim.json")
+        for bad in ("../victim", "sub/x", "/etc/passwd", ".hidden", "-x", "a b", "..", "."):
+            with self.subTest(session=bad):
+                write_text(victim, "{}")
+                self.write_record("scout", "investigator", session=bad)
+                p = self.run_script("eddy-forget", "scout")
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("index entry kept", p.stderr)
+                self.assertFalse(self.exists("scout"))
+                self.assertTrue(os.path.exists(victim))
+
+    def test_a_non_string_session_leaves_the_index_alone(self):
+        self.write_index("sid-other", "other")
+        os.makedirs(self.sp(".eddy"), exist_ok=True)
+        write_text(self.sp(".eddy", "scout.json"), json.dumps({"session": ["sid-other"]}))
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.exists("scout"))
+        self.assertTrue(os.path.exists(self.index_path("sid-other")))
+
+    def test_a_live_agent_keeps_its_index_entry(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_index("sid-scout", "scout")
+        p = self.run_script("eddy-forget", "scout", scenario="resurrect")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(self.index_path("sid-scout")))
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_herdr_error_keeps_the_index_entry(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.write_index("sid-scout", "scout")
+        p = self.run_script("eddy-forget", "scout", scenario="list_fails")
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertTrue(os.path.exists(self.index_path("sid-scout")))
+
+    def test_a_symlink_index_entry_is_unlinked_not_followed(self):
+        outside = os.path.join(self.proj, "outside.json")
+        write_text(outside, "{}")
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(os.path.join(self.proj, "_index"))
+        os.symlink(outside, self.index_path("sid-scout"))
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.lexists(self.index_path("sid-scout")))
+        self.assertTrue(os.path.exists(outside))
+
+    def test_an_index_entry_that_cannot_go_keeps_the_record(self):
+        # The record goes last, so a retry finds both.
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(self.index_path("sid-scout"))
+        p = self.run_script("eddy-forget", "scout")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scout: cannot delete the index entry", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(self.exists("scout"))
+        self.assertTrue(os.path.isdir(self.index_path("sid-scout")))
+
+
+class TeamRelease(Base):
+    """One release script for /eddy:release and the mod's auto-release: lock, pane by session id, steps."""
+
+    LIVE = {"FAKE_PROMPT_STALLED": "1"}
+
+    def release(self, *args, scenario="release_live", env_extra=None):
+        return self.run_script("eddy-release", *args, scenario=scenario,
+                               env_extra={**self.LIVE, **(env_extra or {})})
+
+    def exists(self, name):
+        return os.path.lexists(self.sp(".eddy", name + ".json"))
+
+    def lock(self, name):
+        return self.sp(".eddy", "releasing", name)
+
+    def action_calls(self):
+        return [c for c in self.herdr_calls() if c.startswith(("agent prompt", "pane close"))]
+
+    def test_clears_closes_and_forgets_the_agent(self):
+        self.write_record("scout", "investigator", session="sid-scout", pane="w1:p2")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.action_calls(), ["agent prompt w1:p5 /clear --wait", "pane close w1:p5"])
+        self.assertFalse(self.exists("scout"))
+        self.assertIn("forgot scout", p.stdout)
+
+    def test_the_pane_comes_from_the_session_at_step_time_not_from_the_record(self):
+        # The record still says w1:p2; herdr lists the session in w1:p5 and may have given w1:p2 away.
+        self.write_record("scout", "investigator", session="sid-scout", pane="w1:p2")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("w1:p2", " ".join(self.action_calls()))
+        self.assertIn("agent list", self.herdr_calls()[0])
+
+    def test_the_agent_list_is_read_before_the_first_step(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        self.release("scout")
+        calls = self.herdr_calls()
+        self.assertEqual(calls[0], "agent list")
+        self.assertLess(calls.index("agent list"), calls.index("agent prompt w1:p5 /clear --wait"))
+
+    def test_a_held_lock_refuses_and_touches_nothing(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(self.lock("scout"))
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
+        self.assertIn("already runs", p.stderr)
+        self.assertEqual(self.herdr_calls(), [])
+        self.assertTrue(self.exists("scout"))
+        self.assertTrue(os.path.isdir(self.lock("scout")), "the lock of the other release stays")
+
+    def test_the_lock_of_one_agent_does_not_hold_another(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        os.makedirs(self.lock("maker"))
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_the_lock_is_gone_after_a_release(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.lock("scout")))
+
+    def test_the_lock_is_gone_after_a_failed_step(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", env_extra={"FAKE_PROMPT_STALLED": None, "FAKE_PROMPT_FAILS": "pane not found"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertFalse(os.path.exists(self.lock("scout")))
+
+    def test_a_failed_clear_stops_before_the_close(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", env_extra={"FAKE_PROMPT_STALLED": None, "FAKE_PROMPT_FAILS": "pane not found"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "clear")
+        self.assertIn("pane not found", p.stderr)
+        self.assertEqual(self.action_calls(), ["agent prompt w1:p5 /clear --wait"])
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_stalled_clear_is_the_expected_answer(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("pane close w1:p5", self.herdr_calls())
+
+    def test_a_failed_close_keeps_the_record(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", env_extra={"FAKE_PANE_CLOSE_FAILS": "pane busy"})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "close pane")
+        self.assertIn("pane busy", p.stderr)
+        self.assertTrue(self.exists("scout"))
+
+    def test_a_refused_forget_names_the_forget_step(self):
+        # The static "resurrect" list shows sid-scout live after its pane closed: eddy-forget refuses.
+        self.write_record("scout", "investigator", session="sid-scout")
+        p = self.release("scout", scenario="resurrect")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "forget")
+        self.assertIn("still live", p.stderr)
+        self.assertTrue(self.exists("scout"))
+
+    def test_an_unreadable_agent_list_fails_before_any_step(self):
+        self.write_record("scout", "investigator", session="sid-scout")
+        for scenario in ("list_fails", "bad_list"):
+            with self.subTest(scenario=scenario):
+                p = self.release("scout", scenario=scenario)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertEqual(p.stderr.splitlines()[0].split(": ")[0], "find pane")
+                self.assertEqual(self.action_calls(), [])
+                self.assertTrue(self.exists("scout"))
+
+    def test_a_gone_record_is_not_a_failure(self):
+        os.makedirs(self.sp(".eddy"))
+        p = self.release("ghost")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.stdout.splitlines(), ["no record: ghost"])
+        self.assertEqual(self.herdr_calls(), [])
+        self.assertFalse(os.path.exists(self.lock("ghost")))
+
+    def test_an_agent_herdr_no_longer_lists_is_forgotten_without_a_pane_step(self):
+        self.write_record("scout", "investigator", session="sid-gone")
+        p = self.release("scout")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.action_calls(), [])
+        self.assertFalse(self.exists("scout"))
+
+    def test_only_a_plain_name_is_accepted(self):
+        os.makedirs(self.sp(".eddy"))
+        for bad in ("../victim", "sub/victim", "/etc/passwd", ".hidden", "-x", "a b"):
+            with self.subTest(name=bad):
+                p = self.release(bad)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertEqual(self.herdr_calls(), [])
+        self.assertFalse(os.path.exists(self.sp(".eddy", "releasing")))
+
+    def test_a_state_file_is_no_record(self):
+        os.makedirs(self.sp(".eddy"))
+        write_text(self.sp(".eddy", "config.json"), "{}")
+        p = self.release("config")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertTrue(self.exists("config"))
+        self.assertEqual(self.action_calls(), [])
+
+    def test_usage_and_help(self):
+        p = self.release()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("usage: eddy-release <name>", p.stderr)
+        p = self.release("--help")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("usage: eddy-release <name>", p.stdout)
+
+class TeamId(Base):
+    def test_slug_lowercases_and_dashes(self):
+        p = self.run_script("eddy-id", "slug", "APP-5066")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "app-5066")
+
+    def test_slug_collapses_and_trims_and_caps_12(self):
+        p = self.run_script("eddy-id", "slug", "  Feature/Big__Thing 42  ")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        s = p.stdout.strip()
+        self.assertTrue(re.match(r"^[a-z][a-z0-9-]*$", s), s)
+        self.assertLessEqual(len(s), 12)
+        self.assertFalse(s.endswith("-"))
+
+    def test_hash_is_six_char_base36_letter_first(self):
+        p = self.run_script("eddy-id", "hash")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(p.stdout.strip(), r"^[a-z][a-z0-9]{5}$")
+
+    def test_for_uses_slug_when_ticket_present_else_hash(self):
+        p = self.run_script("eddy-id", "for", "APP-1")
+        self.assertEqual(p.stdout.strip(), "app-1")
+        q = self.run_script("eddy-id", "for", "")
+        self.assertRegex(q.stdout.strip(), r"^[a-z][a-z0-9]{5}$")
+
+    def test_missing_subcommand_is_bad_args(self):
+        p = self.run_script("eddy-id")
+        self.assertEqual(p.returncode, 2)
+
+
+class LinkedWorktreeRoot(Base):
+    """Real git, no fake-git. In a linked worktree `git rev-parse --show-toplevel` is the worktree,
+    but the run dir belongs to the main checkout (the parent of the common git dir)."""
+
+    def setUp(self):
+        super().setUp()
+        self.main = os.path.realpath(os.path.join(self.proj, "main"))
+        os.makedirs(self.main)
+        self.wt = os.path.join(self.proj, "wt")
+        for args in (["init", "-q"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+                     ["worktree", "add", "-q", self.wt]):
+            subprocess.run(["git", *args], cwd=self.main, check=True, capture_output=True)
+        self.wt = os.path.realpath(self.wt)
+        self.want = os.path.join(self.main, SCRATCH)
+        # fake-herdr and fake-claude on PATH, real git behind them.
+        self.herdr_shim = os.path.join(self.proj, "_herdr_shim")
+        os.makedirs(self.herdr_shim)
+        for tool in ("herdr", "claude"):
+            os.symlink(os.path.join(HERE, "fake-" + tool), os.path.join(self.herdr_shim, tool))
+
+    def real_env(self, **extra):
+        e = self.env(**{"EDDY_SCRATCH": None, **extra})
+        e["PATH"] = self.herdr_shim + os.pathsep + os.environ["PATH"]
+        return e
+
+    def run_dir_from(self, cwd):
+        src = os.path.join(ROOT, "lib", "run-dir.sh")
+        return subprocess.run(["bash", "-c", '. "$1"; eddy_run_dir', "bash", src],
+                              capture_output=True, text=True, env=self.real_env(), cwd=cwd)
+
+    def test_run_dir_from_inside_a_linked_worktree_is_the_main_checkouts(self):
+        p = self.run_dir_from(self.wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), self.want)
+
+    def test_run_dir_from_a_sub_directory_of_a_linked_worktree_is_the_main_checkouts(self):
+        sub = os.path.join(self.wt, "a", "b")
+        os.makedirs(sub)
+        self.assertEqual(self.run_dir_from(sub).stdout.strip(), self.want)
+
+    def test_run_dir_from_the_main_checkout_is_unchanged(self):
+        sub = os.path.join(self.main, "a")
+        os.makedirs(sub)
+        self.assertEqual(self.run_dir_from(self.main).stdout.strip(), self.want)
+        self.assertEqual(self.run_dir_from(sub).stdout.strip(), self.want)
+
+    def test_run_dir_outside_any_repo_falls_back_to_pwd(self):
+        plain = os.path.join(self.proj, "plain")
+        os.makedirs(plain)
+        self.assertEqual(self.run_dir_from(plain).stdout.strip(), os.path.join(os.path.realpath(plain), SCRATCH))
+
+    def test_stop_hook_from_inside_a_linked_worktree_reports_to_the_main_checkout(self):
+        os.makedirs(os.path.join(self.want, ".eddy"))
+        write_text(os.path.join(self.want, ".eddy", "scout.json"), json.dumps(
+            {"role": "investigator", "topic": "digest", "brief": "b", "pane": "w1:p2", "session": "s"}))
+        tr = os.path.join(self.proj, "tr.jsonl")
+        write_text(tr, json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "REPORT scout digest: done"}]}}) + "\n")
+        p = subprocess.run(
+            ["bash", os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")],
+            input=json.dumps({"session_id": "s", "transcript_path": tr, "cwd": self.wt}),
+            capture_output=True, text=True, env=self.real_env(EDDY_NAME="scout"), cwd=self.wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.want, "reports", "scout-digest.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+
+    def test_team_init_from_inside_a_linked_worktree_uses_the_main_checkout(self):
+        env = self.real_env(**self.bar_env("Opus 5.5", cwd=self.main))
+        p = subprocess.run([os.path.join(BIN, "eddy-init"), "APP-1"],
+                           capture_output=True, text=True, env=env, cwd=self.wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.want, "decisions-APP-1.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.main, ".claude", "settings.local.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".claude")))
+        self.assertIn("EDDY_SCRATCH=%s" % self.want, " ".join(self.herdr_calls()))
+
+    # eddy-orch-start and eddy-slice run from the mod or an agent, with the cwd of whoever called.
+    # Both must use the main checkout's run dir, as eddy-start does (decision 21 (3), G1 and G2).
+    def write_run(self):
+        os.makedirs(os.path.join(self.want, ".eddy"))
+        write_text(os.path.join(self.want, ".eddy", "config.json"), json.dumps(
+            {"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+             "envoy_session": "sid-human", "orchestrator_session": "sid-gone", "orchestrator_tab": "w1:t3"}))
+
+    def orch_start_from(self, cwd, started_in=None, **extra):
+        env = self.real_env(**self.bar_env("Opus 5.5", cwd=started_in or self.main), **extra)
+        return subprocess.run([os.path.join(BIN, "eddy-orch-start")],
+                              capture_output=True, text=True, env=env, cwd=cwd)
+
+    def assert_orch_start_used_the_main_run_dir(self, p, cwd):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        cfg = json.loads(read_text(os.path.join(self.want, ".eddy", "config.json")))
+        self.assertEqual(cfg["orchestrator_tab"], "w1:t9")
+        self.assertTrue(os.path.exists(os.path.join(self.want, ".eddy", "app-1-orch.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "orch-starting")))
+        self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+
+    def test_orch_start_from_a_linked_worktree_uses_the_main_run_dir_default(self):
+        self.write_run()
+        self.assert_orch_start_used_the_main_run_dir(self.orch_start_from(self.wt), self.wt)
+
+    def test_orch_start_from_a_sub_directory_uses_the_main_run_dir(self):
+        self.write_run()
+        sub = os.path.join(self.main, "a", "b")
+        os.makedirs(sub)
+        self.assert_orch_start_used_the_main_run_dir(self.orch_start_from(sub), sub)
+
+    def test_orch_start_from_a_worktree_with_a_relative_eddy_scratch_uses_the_main_run_dir(self):
+        self.write_run()
+        p = self.orch_start_from(self.wt, EDDY_SCRATCH=SCRATCH)
+        self.assert_orch_start_used_the_main_run_dir(p, self.wt)
+
+    def test_orch_start_hands_eddy_start_the_main_run_dir_and_checkout(self):
+        self.write_run()
+        p = self.orch_start_from(self.wt)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("EDDY_SCRATCH=%s" % self.want, " ".join(self.herdr_calls()))
+        rec = json.loads(read_text(os.path.join(self.want, ".eddy", "app-1-orch.json")))
+        self.assertEqual(rec["cwd"], self.main)
+
+    def slice_from(self, cwd, **extra):
+        overlay = os.path.join(self.main, "overlay")
+        os.makedirs(overlay)
+        write_text(os.path.join(overlay, "project.yaml"),
+                   'worktree_cmd: "mkdir -p {branch}"\nworktree_dir: "{branch}"\n')
+        env = self.real_env(EDDY_OVERLAY=overlay, HERDR_WORKSPACE_ID="w1", **extra)
+        return subprocess.run([os.path.join(BIN, "eddy-slice"), "feat", "main", "--label", "T1 APP-1 slug"],
+                              capture_output=True, text=True, env=env, cwd=cwd)
+
+    def assert_slice_registered_in_the_main_run_dir(self, p, cwd):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(json.loads(read_text(os.path.join(self.want, ".eddy", "tabs.json"))), ["w1:t9"])
+        self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+
+    def test_slice_from_a_linked_worktree_registers_its_tab_in_the_main_run_dir(self):
+        self.assert_slice_registered_in_the_main_run_dir(self.slice_from(self.wt), self.wt)
+
+    def test_slice_from_a_sub_directory_registers_its_tab_in_the_main_run_dir(self):
+        sub = os.path.join(self.main, "a")
+        os.makedirs(sub)
+        self.assert_slice_registered_in_the_main_run_dir(self.slice_from(sub), sub)
+
+    def test_slice_from_a_worktree_with_a_relative_eddy_scratch_registers_in_the_main_run_dir(self):
+        p = self.slice_from(self.wt, EDDY_SCRATCH=SCRATCH)
+        self.assert_slice_registered_in_the_main_run_dir(p, self.wt)
+
+    # Round 2 (Q-35, keep separable): eddy-brief, eddy-forget and eddy-status read and write
+    # the run dir too, so they take the main checkout's from any cwd.
+    def main_record(self, name, **fields):
+        os.makedirs(os.path.join(self.want, ".eddy"), exist_ok=True)
+        rec = {"role": "investigator", "topic": "", "brief": "", "pane": "w1:p2", **fields}
+        write_text(os.path.join(self.want, ".eddy", name + ".json"), json.dumps(rec))
+
+    def script_from(self, cwd, script, *args, **extra):
+        return subprocess.run([os.path.join(BIN, script), *args], capture_output=True, text=True,
+                              env=self.real_env(**extra), cwd=cwd)
+
+    def three_cwds(self):
+        sub = os.path.join(self.main, "a", "b")
+        os.makedirs(sub)
+        return [(self.wt, {}), (sub, {}), (self.wt, {"EDDY_SCRATCH": SCRATCH})]
+
+    def test_brief_compose_writes_the_brief_in_the_main_run_dir(self):
+        self.main_record("scout")
+        for i, (cwd, extra) in enumerate(self.three_cwds()):
+            with self.subTest(cwd=cwd, extra=extra):
+                brief = os.path.join(self.want, "brief-scout-t%d.md" % i)
+                p = self.script_from(cwd, "eddy-brief", "compose", "scout", "t%d" % i,
+                                     "--var", "ticket=APP-1", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertEqual(p.stdout.strip(), brief)
+                self.assertTrue(os.path.exists(brief))
+                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+
+    def test_brief_prepare_records_and_names_the_brief_from_the_main_run_dir(self):
+        self.main_record("scout", topic="digest")
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                p = self.script_from(cwd, "eddy-brief", "prepare", "scout", "--topic", "digest", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+
+    def test_brief_prepare_for_an_agent_in_the_main_checkout_names_the_absolute_brief(self):
+        self.main_record("scout", topic="digest", cwd=self.main)
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        p = self.script_from(self.wt, "eddy-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Read %s and execute" % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+        rec = json.loads(read_text(os.path.join(self.want, ".eddy", "scout.json")))
+        self.assertEqual(rec["brief"], ".eddy-runs/current/brief-scout-digest.md")
+
+    def test_brief_prepare_for_a_worktree_agent_copies_nothing_into_its_worktree(self):
+        self.main_record("scout", topic="digest", cwd=self.wt)
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        write_text(os.path.join(self.want, "decisions-APP-1.md"), "1. d\n")
+        write_text(os.path.join(self.want, ".eddy", "config.json"), json.dumps({"ticket": "APP-1"}))
+        p = self.script_from(self.main, "eddy-brief", "prepare", "scout", "--topic", "digest")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Read %s and execute" % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+
+    def test_brief_compose_renders_decisions_and_run_dir_as_absolute_paths(self):
+        self.main_record("maker", role="implementer")
+        p = self.script_from(self.wt, "eddy-brief", "compose", "maker", "build", "--var", "ticket=APP-1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        text = read_text(p.stdout.strip())
+        self.assertIn("1. %s  - binds you" % os.path.join(self.want, "decisions-APP-1.md"), text)
+        self.assertIn("`%s/impl-notes-build.md`" % self.want, text)
+        self.assertNotIn("{{", text)
+        # No run-dir path is left relative: strip every absolute one, then none may remain.
+        self.assertNotIn(".eddy-runs/current/", text.replace(self.want, ""))
+
+    def test_release_takes_its_lock_and_finds_the_record_in_the_main_run_dir(self):
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                self.main_record("scout", session="sid-scout")
+                p = self.script_from(cwd, "eddy-release", "scout", scenario="release_live",
+                                     EDDY_INDEX_DIR=os.path.join(self.proj, "_index"),
+                                     FAKE_PROMPT_STALLED="1", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "scout.json")))
+                self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "releasing", "scout")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+                open(self.herdr_log, "w").close()
+
+    def test_forget_removes_a_record_that_lives_in_the_main_run_dir(self):
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                self.main_record("scout")
+                p = self.script_from(cwd, "eddy-forget", "scout", EDDY_INDEX_DIR=os.path.join(self.proj, "_index"), **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("forgot scout", p.stdout)
+                self.assertFalse(os.path.exists(os.path.join(self.want, ".eddy", "scout.json")))
+
+    def test_status_lists_agents_from_the_main_run_dir_and_makes_no_team_dir_in_the_caller(self):
+        self.main_record("scout", topic="digest", session="11111111aaaa")
+        for cwd, extra in self.three_cwds():
+            with self.subTest(cwd=cwd, extra=extra):
+                p = self.script_from(cwd, "eddy-status", scenario="status_mixed", **extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
+                self.assertTrue(os.path.exists(os.path.join(self.want, ".eddy", "roster.md")))
+                self.assertFalse(os.path.exists(os.path.join(cwd, ".eddy-runs")))
+
+    # Tidy-up (review N1): an ABSOLUTE EDDY_SCRATCH from a linked worktree, the envoy's live case.
+    def test_orch_start_from_a_worktree_with_an_absolute_eddy_scratch_uses_that_run_dir(self):
+        self.write_run()
+        # An absolute EDDY_SCRATCH keeps $PWD: the orchestrator starts in the worktree, so its bar shows it.
+        p = self.orch_start_from(self.wt, started_in=self.wt, EDDY_SCRATCH=self.want)
+        self.assert_orch_start_used_the_main_run_dir(p, self.wt)
+        rec = json.loads(read_text(os.path.join(self.want, ".eddy", "app-1-orch.json")))
+        self.assertEqual(rec["cwd"], os.path.realpath(self.wt))
+
+    def test_brief_from_a_worktree_with_an_absolute_eddy_scratch_uses_that_run_dir(self):
+        self.main_record("scout", topic="digest")
+        extra = {"EDDY_SCRATCH": self.want}
+        brief = os.path.join(self.want, "brief-scout-t.md")
+        p = self.script_from(self.wt, "eddy-brief", "compose", "scout", "t", "--var", "ticket=APP-1", **extra)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.stdout.strip(), brief)
+        write_text(os.path.join(self.want, "brief-scout-digest.md"), "brief")
+        p = self.script_from(self.wt, "eddy-brief", "prepare", "scout", "--topic", "digest", **extra)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Read %s " % os.path.join(self.want, "brief-scout-digest.md"), p.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+
+    def test_status_from_a_worktree_with_an_absolute_eddy_scratch_uses_that_run_dir(self):
+        self.main_record("scout", topic="digest", session="11111111aaaa")
+        p = self.script_from(self.wt, "eddy-status", scenario="status_mixed", EDDY_SCRATCH=self.want)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("scout (w1:p2, 11111111) idle investigator digest -", p.stdout)
+        self.assertTrue(os.path.exists(os.path.join(self.want, ".eddy", "roster.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, ".eddy-runs")))
+
+
+class TeamInit(Base):
+    ALLOW = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)"]
+
+    def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
+        env = {**self.bar_env("Opus 5.5", cwd=self.proj), **(env_extra or {})}
+        return super().run_script(name, *args, scenario=scenario, env_extra=env, cwd=cwd)
+
+    def cfg(self):
+        return json.loads(read_text(self.sp(".eddy", "config.json")))
+
+    def test_records_this_session_as_envoy(self):
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.cfg()["envoy_session"], "orch-sid")
+
+    def test_starts_the_orchestrator_in_a_worker_tab(self):
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("tab create") and "--label eddy-orch" in c for c in calls), calls)
+        self.assertTrue(any("agent start app-1-orch " in c and "--agent eddy-orchestrator" in c for c in calls), calls)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertEqual(self.cfg()["orchestrator_tab"], "w1:t9")
+        self.assertIn("w1:t9", json.loads(read_text(self.sp(".eddy", "tabs.json"))))
+
+    def test_the_orchestrator_start_leaves_no_start_lock(self):
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.sp(".eddy", "orch-starting")))
+
+    def test_envoy_pane_records_the_envoy_tab(self):
+        p = self.run_script("eddy-init", "APP-1", "--envoy-pane", "w1:p1", scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.cfg()["envoy_tab"], "w1:t1")
+        self.assertIn("w1:t1", json.loads(read_text(self.sp(".eddy", "tabs.json"))))
+
+    def test_failed_orchestrator_start_is_a_herdr_error(self):
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator did not start", p.stderr)
+        self.assertIn("status bar mismatch", p.stderr)
+        self.assertNotIn("orchestrator_session", self.cfg())
+        self.assertEqual(self.cfg()["envoy_session"], "orch-sid")
+
+    def failed_start(self, scenario="ok"):
+        return self.run_script("eddy-init", "APP-1", scenario=scenario,
+                               env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+
+    def test_failed_start_closes_the_orchestrator_pane(self):
+        # eddy-start closes the pane it made; eddy-init asks herdr for no pane itself.
+        p = self.failed_start(scenario="orch_stuck")
+        self.assertEqual(p.returncode, 4, p.stderr)
+        calls = self.herdr_calls()
+        self.assertEqual(calls.count("pane close w1:p9"), 1, calls)
+        # eddy-init's live-team check, eddy-orch-start's re-check under the lock, eddy-start's name check.
+        self.assertEqual(sum(c == "agent list" for c in calls), 3, calls)
+
+    def test_failed_start_for_a_name_live_before_closes_no_pane(self):
+        # eddy-init's own agent list fails once, so it picks the id app-1 and
+        # eddy-orch-start's re-check under the lock then finds app-1-orch live
+        # (another team's agent in w1:p1) and starts nothing.
+        # Nothing here made that pane, so nothing here may close it.
+        p = self.run_script("eddy-init", "APP-1", scenario="orch_taken_late",
+                            env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("an orchestrator runs (w1:p1); left alone", p.stderr)
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("agent start")], self.herdr_calls())
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")], self.herdr_calls())
+
+    def test_startup_dialog_tells_the_human_to_close_the_pane_and_init_again(self):
+        # eddy-start's own advice is "re-run eddy-start"; through eddy-init the next step is
+        # /eddy:init, because a hand-made eddy-start would leave an orchestrator that the config does not know (N8).
+        p = self.run_script("eddy-init", "APP-1", scenario="first_run_dialog",
+                            env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator did not start: app-1-orch is at a startup dialog", p.stderr)
+        self.assertIn("close that pane, then run /eddy:init again; do not run eddy-start by hand", p.stderr)
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")])
+
+    def test_other_failed_starts_carry_no_dialog_advice(self):
+        p = self.failed_start()
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertNotIn("/eddy:init again", p.stderr)
+
+    def test_init_after_a_failed_start_is_not_refused(self):
+        self.assertEqual(self.failed_start(scenario="orch_stuck").returncode, 4)
+        p = self.run_script("eddy-init", "APP-1", scenario="orch_stuck")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("already initialised", p.stderr)
+
+    def test_failed_tab_lookup_keeps_the_orchestrator_session(self):
+        p = self.run_script("eddy-init", "APP-1", env_extra={"FAKE_PANE_GET_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator started, tab lookup failed:", p.stderr)
+        self.assertIn("pane lookup failed", p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith("pane close")])
+
+    def test_orchestrator_pane_flag_is_gone(self):
+        p = self.run_script("eddy-init", "APP-1", "--orchestrator-pane", "w1:p1")
+        self.assertEqual(p.returncode, 2)
+
+    def test_writes_config_with_team_id_and_orch(self):
+        p = self.run_script("eddy-init", "APP-5066")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(self.sp(".eddy", "config.json")))
+        self.assertEqual(cfg["team_id"], "app-5066")
+        self.assertEqual(cfg["ticket"], "APP-5066")
+        self.assertEqual(cfg["orchestrator"], "app-5066-orch")
+
+    def test_refuses_second_init_when_agent_still_live(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch"}))
+        p = self.run_script("eddy-init", "APP-2", scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("app-1-scout", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(d, "config.json")))
+
+    TODAY = "2026-01-02"
+
+    def init(self, ticket="APP-2", scenario="ok", **env):
+        return self.run_script("eddy-init", ticket, scenario=scenario,
+                               env_extra={"EDDY_TODAY": self.TODAY, **env})
+
+    def old_run(self, ticket="APP-1"):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": ticket, "orchestrator": "app-1-orch"}))
+        write_text(self.sp("brief-scout-digest.md"), "old brief\n")
+
+    def archive(self, *parts):
+        return os.path.join(self.proj, ".eddy-runs", ".archive", *parts)
+
+    # The loose-entry sweep runs only when the run dir's parent is named "scratchpad":
+    # these tests point EDDY_SCRATCH into a "scratchpad" folder on purpose.
+    SWEPT = {"EDDY_SCRATCH": os.path.join("scratchpad", "current")}
+
+    def swept_archive(self, *parts):
+        return os.path.join(self.proj, "scratchpad", ".archive", *parts)
+
+    def test_relative_scratch_resolves_from_the_project_root_after_a_cd(self):
+        # The envoy session ran a shell cd. The run dir, the settings file and the orchestrator's
+        # stamped EDDY_SCRATCH all belong to the project root, not the sub directory.
+        sub = os.path.join(self.proj, "sub", "dir")
+        os.makedirs(sub)
+        p = self.run_script("eddy-init", "APP-1", cwd=sub, env_extra={"FAKE_GIT_TOPLEVEL": self.proj})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.sp("decisions-APP-1.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, ".claude", "settings.local.json")))
+        self.assertFalse(os.path.exists(os.path.join(sub, ".eddy-runs")))
+        self.assertFalse(os.path.exists(os.path.join(sub, ".claude")))
+        self.assertIn("EDDY_SCRATCH=%s" % os.path.realpath(self.sp()), " ".join(self.herdr_calls()))
+
+    def test_help_prints_usage_and_touches_nothing(self):
+        self.old_run()
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                p = self.init(ticket=flag)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("usage: eddy-init <ticket>", p.stdout)
+                self.assertEqual(json.loads(read_text(self.sp(".eddy", "config.json")))["ticket"], "APP-1")
+                self.assertFalse(os.path.exists(self.archive()))
+
+    def test_ticket_that_looks_like_a_flag_is_bad_args(self):
+        self.old_run()
+        p = self.init(ticket="--label")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("usage: eddy-init <ticket>", p.stderr)
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "config.json")))["ticket"], "APP-1")
+        self.assertFalse(os.path.exists(self.archive()))
+
+    def test_archives_the_finished_run_and_starts_fresh(self):
+        self.old_run()
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(read_text(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")), "old brief\n")
+        self.assertEqual(sorted(os.listdir(self.sp())), [".eddy", "decisions-APP-2.md", "progress-APP-2.md"])
+        self.assertEqual(json.loads(read_text(self.sp(".eddy", "config.json")))["ticket"], "APP-2")
+
+    def test_archive_name_gets_a_suffix_when_taken(self):
+        self.old_run()
+        os.makedirs(self.archive("APP-1-2026-01-02"))
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02-2", "brief-scout-digest.md")))
+
+    def test_run_without_config_archives_as_run(self):
+        os.makedirs(self.sp())
+        write_text(self.sp("notes.md"), "ad hoc\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("run-2026-01-02", "notes.md")))
+
+    def test_sweeps_loose_entries_out_of_sight(self):
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, "reports"))
+        write_text(os.path.join(root, "decisions-OLD.md"), "old\n")
+        write_text(os.path.join(root, "reports", "x.md"), "old\n")
+        p = self.init(**self.SWEPT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(sorted(os.listdir(root)), [".archive", "current"])
+        self.assertTrue(os.path.exists(self.swept_archive("loose-2026-01-02", "decisions-OLD.md")))
+        self.assertTrue(os.path.exists(self.swept_archive("loose-2026-01-02", "reports", "x.md")))
+
+    def test_never_moves_a_worktree_and_warns(self):
+        wt = os.path.join(self.proj, "scratchpad", "wt-feat")
+        os.makedirs(os.path.join(wt, "src"))
+        write_text(os.path.join(wt, ".git"), "gitdir: /elsewhere\n")
+        nested = os.path.join(self.proj, "scratchpad", "deep", "a")
+        os.makedirs(os.path.join(nested, ".git"))
+        p = self.init(**self.SWEPT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(wt, ".git")))
+        self.assertTrue(os.path.exists(os.path.join(nested, ".git")))
+        self.assertIn("❗️ worktree inside scratchpad: scratchpad/wt-feat - move it out with git worktree move", p.stderr)
+        self.assertIn("❗️ worktree inside scratchpad: scratchpad/deep - move it out with git worktree move", p.stderr)
+
+    def test_live_agents_block_init_and_nothing_moves(self):
+        self.old_run()
+        write_text(os.path.join(self.proj, ".eddy-runs", "loose.md"), "x\n")
+        p = self.init(scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("app-1-scout", p.stderr)
+        self.assertTrue(os.path.exists(self.sp("brief-scout-digest.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, ".eddy-runs", "loose.md")))
+        self.assertFalse(os.path.exists(self.archive()))
+
+    def test_herdr_failure_blocks_init_and_nothing_moves(self):
+        # A herdr error or unparsable reply must not read as "no live agents":
+        # that would silence a real team's Stop hooks by archiving it live.
+        self.old_run()
+        for scenario in ("list_fails", "bad_list"):
+            with self.subTest(scenario=scenario):
+                p = self.init(scenario=scenario)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("cannot check live agents", p.stderr)
+                self.assertTrue(os.path.exists(self.sp("brief-scout-digest.md")))
+                self.assertFalse(os.path.exists(self.archive()))
+
+    def test_custom_scratch_archives_next_to_it_and_never_sweeps(self):
+        run = os.path.join(self.proj, "work", "run")
+        os.makedirs(os.path.join(run, ".eddy"))
+        write_text(os.path.join(run, ".eddy", "config.json"), json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+        write_text(os.path.join(self.proj, "work", "keep.md"), "mine\n")
+        p = self.init(EDDY_SCRATCH=os.path.join("work", "run"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "work", ".archive", "APP-1-2026-01-02", ".eddy")))
+        self.assertTrue(os.path.exists(os.path.join(self.proj, "work", "keep.md")))
+
+    def test_refuses_to_archive_a_run_dir_holding_a_worktree(self):
+        # An old-style EDDY_SCRATCH=scratchpad points at the whole scratchpad,
+        # worktrees included. Moving it would break them.
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, "wt-feat"))
+        write_text(os.path.join(root, "wt-feat", ".git"), "gitdir: /elsewhere\n")
+        p = self.init(EDDY_SCRATCH="scratchpad")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("scratchpad/wt-feat", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(root, "wt-feat", ".git")))
+
+    def test_ticket_with_slash_is_archived_under_a_flat_name(self):
+        self.old_run(ticket="team/ABC-1")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("team-ABC-1-2026-01-02", "brief-scout-digest.md")))
+
+    def test_trailing_slash_in_eddy_scratch_is_normalised(self):
+        self.old_run()
+        p = self.init(EDDY_SCRATCH=SCRATCH + "/")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")))
+
+    def test_symlink_is_swept_without_following_it(self):
+        target = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(target, ".git"))
+            os.makedirs(os.path.join(self.proj, "scratchpad"))
+            os.symlink(target, os.path.join(self.proj, "scratchpad", "link"))
+            p = self.init(**self.SWEPT)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertTrue(os.path.islink(self.swept_archive("loose-2026-01-02", "link")))
+            self.assertTrue(os.path.exists(os.path.join(target, ".git")))
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
+
+    def test_top_level_git_dir_is_never_swept(self):
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, ".git", "objects"))
+        os.makedirs(os.path.join(root, "notes"))
+        p = self.init(**self.SWEPT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(root, ".git", "objects")))
+        self.assertIn("❗️ worktree inside scratchpad: scratchpad/.git - move it out with git worktree move", p.stderr)
+
+    def test_refusal_names_a_top_level_git_dir_without_a_traceback(self):
+        root = os.path.join(self.proj, "scratchpad")
+        os.makedirs(os.path.join(root, ".git", "objects"))
+        p = self.init(EDDY_SCRATCH="scratchpad")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn("scratchpad/.git", p.stderr)
+
+    def test_worktree_inside_current_gets_move_advice(self):
+        # The default run dir IS .eddy-runs/current, so "set EDDY_SCRATCH to a
+        # run dir such as .eddy-runs/current" would tell the human to point at
+        # the very dir that already holds the worktree.
+        os.makedirs(self.sp("wt-x"))
+        write_text(self.sp("wt-x", ".git"), "gitdir: /elsewhere\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("move it out with git worktree move", p.stderr)
+        self.assertNotIn("such as .eddy-runs/current", p.stderr)
+
+    def test_old_layout_team_dir_blocks_init_when_live(self):
+        old_dir = os.path.join(self.proj, ".eddy-runs", ".eddy")
+        os.makedirs(old_dir)
+        write_text(os.path.join(old_dir, "config.json"),
+                   json.dumps({"team_id": "app-1", "ticket": "APP-1"}))
+        p = self.init(scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("app-1-scout", p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(old_dir, "config.json")))
+
+    def test_double_trailing_slash_in_eddy_scratch_is_normalised(self):
+        self.old_run()
+        p = self.init(EDDY_SCRATCH=SCRATCH + "//")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(self.archive("APP-1-2026-01-02", "brief-scout-digest.md")))
+
+    def test_malformed_config_archives_as_run_instead_of_crashing(self):
+        d = self.sp(".eddy")
+        os.makedirs(d, exist_ok=True)
+        write_text(os.path.join(d, "config.json"), json.dumps([1, 2, 3]))
+        write_text(self.sp("brief-scout-digest.md"), "old brief\n")
+        p = self.init()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(os.path.exists(self.archive("run-2026-01-02", "brief-scout-digest.md")))
+
+    def test_seeds_allowlist_without_clobbering(self):
+        d = os.path.join(self.proj, ".claude")
+        os.makedirs(d)
+        write_text(os.path.join(d, "settings.local.json"),
+                   json.dumps({"permissions": {"allow": ["Bash(custom:*)"]}, "env": {"X": "1"}}))
+        self.run_script("eddy-init", "APP-1")
+        s = json.loads(read_text(os.path.join(d, "settings.local.json")))
+        self.assertEqual(s["env"], {"X": "1"})
+        self.assertIn("Bash(custom:*)", s["permissions"]["allow"])
+        for a in self.ALLOW:
+            self.assertIn(a, s["permissions"]["allow"])
+
+    def test_allows_send_message_so_brief_send_skips_the_auto_mode_classifier(self):
+        # A message the eddy mod sends has no user request behind it, so auto
+        # mode's classifier gives no verdict; an explicit allow rule decides it.
+        self.run_script("eddy-init", "APP-1")
+        s = json.loads(read_text(os.path.join(self.proj, ".claude", "settings.local.json")))
+        self.assertIn("SendMessage", s["permissions"]["allow"])
+
+    def test_records_envoy_tab(self):
+        p = self.run_script("eddy-init", "APP-1", "--envoy-pane", "w1:p1",
+                            scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        tabs = json.loads(read_text(self.sp(".eddy", "tabs.json")))
+        self.assertIn("w1:t1", tabs)
+
+    def test_config_names_the_envoy_tab(self):
+        # The eddy mod exempts this tab from layout hygiene even while herdr
+        # does not yet know the envoy's session (just after a /clear).
+        p = self.run_script("eddy-init", "APP-1", "--envoy-pane", "w1:p1",
+                            scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.cfg()["envoy_tab"], "w1:t1")
+
+    def test_does_not_rename_the_orchestrator(self):
+        p = self.run_script("eddy-init", "APP-1", "--envoy-pane", "w1:p1",
+                            scenario="pane_in_tab")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any(c.startswith("agent rename") for c in self.herdr_calls()))
+
+    def test_records_orchestrator_session(self):
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+
+    def test_refuses_without_session_id(self):
+        p = self.run_script("eddy-init", "APP-1", env_extra={"EDDY_SESSION_ID": None})
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("EDDY_SESSION_ID is unset", p.stderr)
+
+    def test_refuses_old_claude_code(self):
+        p = self.run_script("eddy-init", "APP-1", env_extra={"FAKE_CLAUDE_VERSION": "2.1.291"})
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("Claude Code 2.1.291 is older than 2.1.292", p.stderr)
+
+    def test_keeps_an_index_entry_whose_record_it_cannot_read_right_now(self):
+        # Another team's record caught mid-write is not a dead agent.
+        other = os.path.join(self.proj, "other", ".eddy")
+        os.makedirs(other)
+        write_text(os.path.join(other, "w.json"), '{"session": "s')
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "live.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "other"), "name": "w"}))
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(idx, "live.json")))
+
+    def test_prunes_index_entry_of_another_session(self):
+        other = os.path.join(self.proj, "other", ".eddy")
+        os.makedirs(other)
+        write_text(os.path.join(other, "w.json"), json.dumps({"session": "newer"}))
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "older.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "other"), "name": "w"}))
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(idx, "older.json")))
+
+    def test_prunes_index_entries_without_a_matching_record(self):
+        idx = os.path.join(self.proj, "_index"); os.makedirs(idx)
+        write_text(os.path.join(idx, "gone.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "nowhere"), "name": "x"}))
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(idx, "gone.json")))
+
+    def test_prunes_the_index_of_the_claude_profile(self):
+        os.makedirs(self.profile_index())
+        write_text(self.profile_index("gone.json"),
+                   json.dumps({"scratch": os.path.join(self.proj, "nowhere"), "name": "x"}))
+        p = self.run_script("eddy-init", "APP-1", env_extra=self.profile_env())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.profile_index("gone.json")))
+
+    def test_missing_envoy_pane_value_is_bad_args(self):
+        p = self.run_script("eddy-init", "APP-1", "--envoy-pane")
+        self.assertEqual(p.returncode, 2)
+
+    def test_picks_free_team_id_when_slug_taken(self):
+        # A prior team for the same ticket left app-1-* agents live. Reusing the
+        # deterministic slug would cross-poison them, so init must disambiguate.
+        p = self.run_script("eddy-init", "APP-1", scenario="names_app1_taken")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cfg = json.loads(read_text(self.sp(".eddy", "config.json")))
+        self.assertEqual(cfg["team_id"], "app-1-2")
+        self.assertEqual(cfg["orchestrator"], "app-1-2-orch")
+
+    # F-1: eddy-init writes the decisions and plan files itself, from the templates of
+    # its own plugin root, so an envoy whose plugin lives outside its working directory
+    # never has to read them.
+    def template(self, name, ticket, root=ROOT):
+        path = os.path.join(root, "skills", "eddy-orchestration", "templates", name)
+        return read_text(path).replace("{{ticket}}", ticket)
+
+    def run_copy(self, root, *args, **env_extra):
+        """Run eddy-init from a copy of the plugin at `root`."""
+        env = self.env(**{**self.bar_env("Opus 5.5", cwd=self.proj), **env_extra})
+        return subprocess.run([os.path.join(root, "bin", "eddy-init"), *args],
+                              capture_output=True, text=True, env=env, cwd=self.proj)
+
+    def copy_plugin(self):
+        root = os.path.join(self.proj, "copy", "eddy")
+        shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns("__pycache__"))
+        return root
+
+    def test_writes_the_decisions_and_plan_files_from_the_templates(self):
+        p = self.run_script("eddy-init", "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(self.sp("decisions-APP-1.md")), self.template("decisions.md", "APP-1"))
+        self.assertEqual(read_text(self.sp("progress-APP-1.md")), self.template("progress.md", "APP-1"))
+        self.assertNotIn("{{ticket}}", read_text(self.sp("decisions-APP-1.md")))
+        self.assertIn("# APP-1", read_text(self.sp("progress-APP-1.md")))
+
+    def test_the_files_exist_after_every_exit_4(self):
+        # Decision 38 F2: a failed orchestrator start still leaves both files.
+        cases = {
+            "start fails": dict(),
+            "tab lookup fails": dict(env_extra={"FAKE_PANE_GET_FAILS": "1"}),
+            "envoy pane lookup fails": dict(args=("--envoy-pane", "w1:p1"), env_extra={"FAKE_PANE_GET_FAILS": "1"}),
+        }
+        for label, case in cases.items():
+            with self.subTest(label):
+                shutil.rmtree(os.path.join(self.proj, ".eddy-runs"), ignore_errors=True)
+                env_extra = case.get("env_extra") or self.bar_env("Sonnet 5.5", cwd=self.proj)
+                p = self.run_script("eddy-init", "APP-1", *case.get("args", ()), env_extra=env_extra)
+                self.assertEqual(p.returncode, 4, p.stderr)
+                self.assertTrue(os.path.exists(self.sp("decisions-APP-1.md")))
+                self.assertTrue(os.path.exists(self.sp("progress-APP-1.md")))
+
+    def test_the_templates_come_from_the_plugin_root_of_the_script(self):
+        # Not from CLAUDE_PLUGIN_ROOT (the env points at the real plugin): the copy's own templates win.
+        root = self.copy_plugin()
+        write_text(os.path.join(root, "skills", "eddy-orchestration", "templates", "decisions.md"), "# copy {{ticket}}\n")
+        p = self.run_copy(root, "APP-1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(read_text(self.sp("decisions-APP-1.md")), "# copy APP-1\n")
+
+    def test_an_unreadable_template_is_a_refusal_before_anything_starts(self):
+        root = self.copy_plugin()
+        os.remove(os.path.join(root, "skills", "eddy-orchestration", "templates", "progress.md"))
+        p = self.run_copy(root, "APP-1")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("cannot read template", p.stderr)
+        self.assertIn("progress.md", p.stderr)
+        self.assertFalse(os.path.exists(self.sp("decisions-APP-1.md")))
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith(("tab create", "agent start"))])
+
+    def test_refuses_to_overwrite_an_existing_file(self):
+        # The archive step empties the run dir, so a file can only be in the way if it appears
+        # after that. The fake herdr creates it while eddy-init picks its team id.
+        mine = self.sp("decisions-APP-1.md")
+        p = self.run_script("eddy-init", "APP-1", env_extra={"FAKE_CREATE_ON_AGENT_LIST": mine})
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("refusing to overwrite: " + os.path.join(SCRATCH, "decisions-APP-1.md"), p.stderr)
+        self.assertEqual(read_text(mine), "mine\n")
+        self.assertFalse(os.path.exists(self.sp("progress-APP-1.md")))
+        self.assertFalse(os.path.exists(self.sp(".eddy", "config.json")))
+        self.assertFalse([c for c in self.herdr_calls() if c.startswith(("tab create", "agent start"))])
+
+    # OQ1: the ticket is part of two file names the mod looks for, so eddy-init refuses a ticket
+    # that is not one plain file-name part before it archives anything.
+    def test_a_ticket_that_is_not_a_plain_name_is_bad_args_and_archives_nothing(self):
+        self.old_run()
+        for ticket in ("team/ABC-1", "a/../b", "", ".", "..", ".hidden", "-x", "a b", "a\nb", "a\\b", "ABC-1/"):
+            with self.subTest(ticket=ticket):
+                p = self.init(ticket=ticket)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("bad ticket", p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertEqual(json.loads(read_text(self.sp(".eddy", "config.json")))["ticket"], "APP-1")
+                self.assertEqual(read_text(self.sp("brief-scout-digest.md")), "old brief\n")
+                self.assertFalse(os.path.exists(self.archive()))
+                self.assertEqual(self.herdr_calls(), [])
+
+    def test_real_ticket_keys_are_accepted(self):
+        for ticket in ("ABC-123", "eddy-envoy", "PROBE-1", "v1.2_x"):
+            with self.subTest(ticket=ticket):
+                shutil.rmtree(os.path.join(self.proj, ".eddy-runs"), ignore_errors=True)
+                p = self.init(ticket=ticket)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertTrue(os.path.exists(self.sp("decisions-%s.md" % ticket)))
+
+
+class TeamOrchStart(Base):
+    """The orchestrator start that eddy-init and the mod's /eddy-envoy share."""
+
+    def run_script(self, name, *args, scenario="ok", env_extra=None, cwd=None):
+        env = {**self.bar_env("Opus 5.5", cwd=self.proj), **(env_extra or {})}
+        return super().run_script(name, *args, scenario=scenario, env_extra=env, cwd=cwd)
+
+    def cfg(self):
+        return json.loads(read_text(self.sp(".eddy", "config.json")))
+
+    def live_run(self, **fields):
+        os.makedirs(self.sp(".eddy"), exist_ok=True)
+        cfg = {"team_id": "app-1", "ticket": "APP-1", "orchestrator": "app-1-orch",
+               "envoy_session": "sid-human", "orchestrator_session": "sid-gone", "orchestrator_tab": "w1:t3"}
+        cfg.update(fields)
+        write_text(self.sp(".eddy", "config.json"), json.dumps(cfg))
+
+    def test_without_a_run_refuses_and_starts_nothing(self):
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("no team run:", p.stderr)
+        self.assertEqual(self.herdr_calls(), [])
+
+    def test_starts_a_new_orchestrator_and_records_its_session_and_tab(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = self.herdr_calls()
+        self.assertTrue(any(c.startswith("tab create") and "--label eddy-orch" in c for c in calls), calls)
+        self.assertTrue(any("agent start app-1-orch " in c and "--agent eddy-orchestrator" in c for c in calls), calls)
+        sid = self.team_json("app-1-orch")["session"]
+        self.assertEqual(self.cfg()["orchestrator_session"], sid)
+        self.assertEqual(self.cfg()["orchestrator_tab"], "w1:t9")
+        self.assertEqual(self.cfg()["envoy_session"], "sid-human")
+        self.assertEqual(p.stdout.strip(), "orchestrator=app-1-orch session=%s pane=w1:p9 tab=w1:t9" % sid)
+
+    def test_the_orchestrator_starts_in_the_project_root(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.team_json("app-1-orch")["cwd"], os.path.realpath(self.proj))
+
+    def test_a_failed_start_keeps_the_old_config(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start", env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator did not start:", p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], "sid-gone")
+
+    def test_a_failed_tab_lookup_keeps_the_new_session(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start", env_extra={"FAKE_PANE_GET_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertIn("orchestrator started, tab lookup failed:", p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+
+    def test_help_prints_usage(self):
+        p = self.run_script("eddy-orch-start", "--help")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("usage: eddy-orch-start", p.stdout)
+
+    def test_an_unknown_argument_is_bad_args(self):
+        p = self.run_script("eddy-orch-start", "--pane", "w1:p1")
+        self.assertEqual(p.returncode, 2)
+
+    def lock(self):
+        return self.sp(".eddy", "orch-starting")
+
+    def test_a_held_start_lock_refuses_with_exit_5_and_starts_nothing(self):
+        self.live_run(orchestrator_session=None)
+        os.mkdir(self.lock())
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
+        self.assertIn("an orchestrator is starting:", p.stderr)
+        self.assertIn("left alone", p.stderr)
+        self.assertEqual(self.herdr_calls(), [])
+        self.assertTrue(os.path.isdir(self.lock()))
+        self.assertIsNone(self.cfg()["orchestrator_session"])
+
+    def test_a_stale_start_lock_is_taken_over(self):
+        self.live_run()
+        os.mkdir(self.lock())
+        old = time.time() - 601
+        os.utime(self.lock(), (old, old))
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("taking over a stale start lock", p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+        self.assertFalse(os.path.exists(self.lock()))
+
+    def test_a_start_lock_just_under_the_age_limit_still_holds(self):
+        self.live_run()
+        os.mkdir(self.lock())
+        old = time.time() - 590
+        os.utime(self.lock(), (old, old))
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 5, p.stderr)
+
+    def test_a_start_the_mod_just_gave_up_on_is_not_taken_over(self):
+        self.live_run()
+        os.mkdir(self.lock())
+        old = time.time() - 301
+        os.utime(self.lock(), (old, old))
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertTrue(os.path.isdir(self.lock()))
+
+    def test_the_stale_age_is_twice_the_mod_start_timeout(self):
+        script = read_text(os.path.join(BIN, "eddy-orch-start"))
+        mod = read_text(os.path.join(ROOT, "hooks", "mod", "reattach.ts"))
+        stale = int(re.search(r"^stale_after=(\d+)$", script, re.M).group(1))
+        timeout_ms = int(re.search(r"const START_TIMEOUT_MS = ([\d_]+)", mod).group(1).replace("_", ""))
+        self.assertEqual(stale, 2 * timeout_ms // 1000)
+
+    def orch_record(self, name, pane, session):
+        write_text(self.sp(".eddy", name + ".json"),
+                   json.dumps({"role": "orchestrator", "topic": "", "brief": "", "pane": pane, "session": session}))
+
+    def assert_left_alone(self, p):
+        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
+        self.assertIn("an orchestrator runs", p.stderr)
+        self.assertIn("left alone", p.stderr)
+        self.assertFalse(any(c.startswith("agent start") or c.startswith("tab create") for c in self.herdr_calls()))
+        self.assertFalse(os.path.exists(self.lock()))
+
+    def test_after_the_lock_a_live_orchestrator_by_session_is_left_alone(self):
+        self.live_run(orchestrator_session="sid-cleared")
+        self.assert_left_alone(self.run_script("eddy-orch-start", scenario="resurrect_cleared"))
+        self.assertEqual(self.cfg()["orchestrator_session"], "sid-cleared")
+
+    def test_after_the_lock_a_live_orchestrator_by_name_is_left_alone(self):
+        self.live_run()
+        self.assert_left_alone(self.run_script("eddy-orch-start", scenario="names_app1_taken"))
+        self.assertEqual(self.cfg()["orchestrator_session"], "sid-gone")
+
+    def test_after_the_lock_a_live_orchestrator_in_the_record_pane_is_left_alone(self):
+        self.live_run()
+        self.orch_record("app-1-orch", "w1:p5", "sid-gone")
+        self.assert_left_alone(self.run_script("eddy-orch-start", scenario="resurrect_cleared"))
+
+    def test_a_worker_in_the_reused_record_pane_is_no_orchestrator(self):
+        self.live_run()
+        self.orch_record("app-1-orch", "w1:p5", "sid-gone")
+        write_text(self.sp(".eddy", "app-1-scout.json"),
+                   json.dumps({"role": "investigator", "topic": "t", "brief": "b", "pane": "w1:p2", "session": "sid-cleared"}))
+        p = self.run_script("eddy-orch-start", scenario="resurrect_cleared")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_the_envoy_in_the_reused_record_pane_is_no_orchestrator(self):
+        self.live_run(envoy_session="sid-cleared")
+        self.orch_record("app-1-orch", "w1:p5", "sid-gone")
+        p = self.run_script("eddy-orch-start", scenario="resurrect_cleared")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_when_herdr_does_not_answer_the_start_goes_on(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start", scenario="list_fails")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("cannot check for a live orchestrator", p.stderr)
+        self.assertEqual(self.cfg()["orchestrator_session"], self.team_json("app-1-orch")["session"])
+
+    def test_the_lock_is_gone_after_a_start(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.lock()))
+
+    def test_the_lock_is_gone_after_a_failed_start(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start", env_extra=self.bar_env("Sonnet 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertFalse(os.path.exists(self.lock()))
+
+    def test_the_lock_is_gone_after_a_failed_tab_lookup(self):
+        self.live_run()
+        p = self.run_script("eddy-orch-start", env_extra={"FAKE_PANE_GET_FAILS": "1"})
+        self.assertEqual(p.returncode, 4, p.stderr)
+        self.assertFalse(os.path.exists(self.lock()))
+
+    def test_config_writes_replace_the_file_and_leave_no_temp_file(self):
+        self.live_run()
+        before = os.stat(self.sp(".eddy", "config.json")).st_ino
+        p = self.run_script("eddy-orch-start")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotEqual(os.stat(self.sp(".eddy", "config.json")).st_ino, before)
+        self.assertEqual([f for f in os.listdir(self.sp(".eddy")) if f.startswith("config.json.")], [])
+
+
+class Coexist(Base):
+    """Eddy runs beside the team mod: no name, folder, variable or index of the two may meet."""
+    BANNED = ("mcp__team__", "TEAM_", "plugin: 'team'", "/team:", "team-overview", "team-envoy",
+              "team-orchestration", "team-role-", "bin/team-", "scratchpad/current", "/.team",
+              "team/sessions", "team mod")
+    ALLOWED = {os.path.join("hooks", "mod", "coexist.ts"), os.path.join("tests", "mod", "coexist.test.ts"),
+               os.path.join("tests", "test_eddy.py"), "README.md"}
+    GENERATED = os.path.join(".claude-plugin", "types")
+
+    def test_rename_is_complete(self):
+        hits = []
+        for folder, dirs, files in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in files:
+                path = os.path.join(folder, name)
+                rel = os.path.relpath(path, ROOT)
+                if rel in self.ALLOWED or rel.startswith(self.GENERATED):
+                    continue
+                text = read_text(path)
+                hits += ["%s: %s" % (rel, banned) for banned in self.BANNED if banned in text]
+        self.assertEqual(hits, [])
+
+    def test_start_records_the_session_index_under_eddy(self):
+        other = os.path.join(self.proj, "_team_index")
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2", "--cwd", self.proj,
+                            env_extra={**self.bar_env("Opus 5.5", cwd=self.proj), **self.profile_env(),
+                                       "TEAM_INDEX_DIR": other})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        sid = self.team_json("scout")["session"]
+        entry = json.loads(read_text(os.path.join(self.profile(), "eddy", "sessions", sid + ".json")))
+        self.assertEqual(entry["name"], "scout")
+        self.assertFalse(os.path.exists(other))
+
+    def test_start_runs_the_eddy_agent(self):
+        p = self.run_script("eddy-start", "scout", "investigator", "--pane", "w1:p2", "--cwd", self.proj,
+                            "--dry-run", env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--agent eddy-investigator ", p.stdout)
+        self.assertNotIn("--agent team-", p.stdout)
+
+    def team_agent_run(self):
+        """A run folder shaped like the team mod's: the default folder, a `.team` dir, one worker record."""
+        run = os.path.join(self.proj, "scratchpad", "current")
+        os.makedirs(os.path.join(run, ".team"))
+        write_text(os.path.join(run, ".team", "scout.json"), json.dumps(
+            {"role": "investigator", "topic": "digest", "brief": "", "pane": "w1:p2", "session": "sid-t"}))
+        return run
+
+    def test_stop_hook_ignores_a_team_agent(self):
+        run = self.team_agent_run()
+        env = self.env(TEAM_NAME="scout", TEAM_SCRATCH=run, EDDY_NAME=None, EDDY_SCRATCH=None,
+                       EDDY_INDEX_DIR=None, CLAUDE_CONFIG_DIR=os.path.join(self.proj, "no-profile"))
+        p = subprocess.run(["bash", os.path.join(ROOT, "hooks", "handlers", "stop-report.sh")],
+                           input=json.dumps({"session_id": "sid-t", "cwd": self.proj,
+                                             "last_assistant_message": "REPORT scout digest: done"}),
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(os.listdir(os.path.join(run, ".team")), ["scout.json"])
+        self.assertFalse(os.path.exists(os.path.join(run, "reports")))
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ".eddy-runs")))
+
+    def test_session_start_hook_ignores_the_team_index(self):
+        run = self.team_agent_run()
+        team_index = os.path.join(self.profile(), "team", "sessions")
+        os.makedirs(team_index)
+        write_text(os.path.join(team_index, "sid-t.json"), json.dumps({"scratch": run, "name": "scout"}))
+        env = self.env(EDDY_NAME=None, EDDY_SCRATCH=None, **self.profile_env())
+        p = subprocess.run(["bash", os.path.join(ROOT, "hooks", "handlers", "session-start.sh")],
+                           input=json.dumps({"session_id": "sid-t", "source": "resume", "cwd": self.proj}),
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(os.listdir(os.path.join(run, ".team")), ["scout.json"])
+
+        eddy_run = os.path.join(self.proj, ".eddy-runs", "current")
+        os.makedirs(os.path.join(eddy_run, ".eddy"))
+        write_text(os.path.join(eddy_run, ".eddy", "scout.json"), json.dumps({"role": "investigator", "session": "sid-e"}))
+        eddy_index = os.path.join(self.profile(), "eddy", "sessions")
+        os.makedirs(eddy_index)
+        write_text(os.path.join(eddy_index, "sid-e.json"), json.dumps({"scratch": eddy_run, "name": "scout"}))
+        p = subprocess.run(["bash", os.path.join(ROOT, "hooks", "handlers", "session-start.sh")],
+                           input=json.dumps({"session_id": "sid-e", "source": "resume", "cwd": self.proj}),
+                           capture_output=True, text=True, env=env, cwd=self.proj)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(eddy_run, ".eddy", "restored", "scout")))
+
+    def test_agent_files_preload_eddy_skills(self):
+        agents = os.path.join(ROOT, "agents")
+        files = sorted(os.listdir(agents))
+        self.assertGreaterEqual(len(files), 5)
+        for name in files:
+            with self.subTest(agent=name):
+                self.assertTrue(name.startswith("eddy-"), name)
+                lines = read_text(os.path.join(agents, name)).split("---")[1].splitlines()
+                skills = [l.strip()[2:] for l in lines[lines.index("skills:") + 1:] if l.startswith("  - ")]
+                self.assertTrue(skills)
+                for skill in skills:
+                    self.assertTrue(skill.startswith(("eddy-", "project-")), skill)
+
+
+if __name__ == "__main__":
+    unittest.main()

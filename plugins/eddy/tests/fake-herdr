@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# Test double for the herdr CLI. Records every invocation to $FAKE_HERDR_LOG
+# (one space-joined line per call) and answers with canned JSON selected by
+# $FAKE_HERDR_SCENARIO. It is a real executable on PATH, not a mock: the script
+# under test cannot tell it apart from herdr.
+set -euo pipefail
+
+log="${FAKE_HERDR_LOG:?FAKE_HERDR_LOG unset}"
+scenario="${FAKE_HERDR_SCENARIO:-ok}"
+
+# Count prior invocations of a "<group> <sub>" pair before recording this one,
+# so a response can vary across repeated calls (e.g. dialog then status bar).
+prior() { grep -c -E -- "^$1 $2( |\$)" "$log" 2>/dev/null || true; }
+
+group="${1:-}"
+sub="${2:-}"
+same_before="$(prior "$group" "$sub")"
+
+printf '%s\n' "$*" >>"$log"
+
+# Record whether a caller-named marker file exists at the moment this call
+# runs, so a test can prove eddy-start writes the pending marker before it
+# calls a given group/sub (e.g. "agent start").
+if [ -n "${FAKE_MARKER_CHECK_GROUP:-}" ] && [ "$group $sub" = "$FAKE_MARKER_CHECK_GROUP $FAKE_MARKER_CHECK_SUB" ]; then
+  if [ -e "${FAKE_MARKER_CHECK_FILE:?FAKE_MARKER_CHECK_FILE unset}" ]; then
+    echo present >>"${FAKE_MARKER_CHECK_LOG:?FAKE_MARKER_CHECK_LOG unset}"
+  else
+    echo missing >>"$FAKE_MARKER_CHECK_LOG"
+  fi
+fi
+
+# Create a caller-named file when `agent list` runs, as a stand-in for a file that
+# appears between two steps of the script under test.
+if [ -n "${FAKE_CREATE_ON_AGENT_LIST:-}" ] && [ "$group $sub" = "agent list" ]; then
+  mkdir -p "$(dirname "$FAKE_CREATE_ON_AGENT_LIST")"
+  [ -e "$FAKE_CREATE_ON_AGENT_LIST" ] || printf 'mine\n' >"$FAKE_CREATE_ON_AGENT_LIST"
+fi
+
+emit() { printf '%s\n' "$1"; }
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+
+case "$group $sub" in
+  "pane split")
+    emit '{"result":{"pane":{"pane_id":"w1:p9"}}}' ;;
+  "pane current")
+    # FAKE_CALLER_WS puts the calling pane in another workspace.
+    ws="${FAKE_CALLER_WS:-w1}"
+    emit "{\"result\":{\"pane\":{\"pane_id\":\"$ws:p1\",\"workspace_id\":\"$ws\",\"tab_id\":\"$ws:t1\"}}}" ;;
+  "pane run")
+    emit '{"result":{"ok":true}}' ;;
+  "pane layout")
+    case "$scenario" in
+      grid1)
+        emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":60},"panes":[
+          {"pane_id":"w1:g1","rect":{"x":0,"y":0,"width":200,"height":60}}
+        ]}}}' ;;
+      grid2)
+        emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":60},"panes":[
+          {"pane_id":"w1:g1","rect":{"x":0,"y":0,"width":100,"height":60}},
+          {"pane_id":"w1:g2","rect":{"x":100,"y":0,"width":100,"height":60}}
+        ]}}}' ;;
+      grid3)
+        emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":60},"panes":[
+          {"pane_id":"w1:g1","rect":{"x":0,"y":0,"width":100,"height":20}},
+          {"pane_id":"w1:g3","rect":{"x":0,"y":20,"width":100,"height":40}},
+          {"pane_id":"w1:g2","rect":{"x":100,"y":0,"width":100,"height":60}}
+        ]}}}' ;;
+      grid4)
+        emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":60},"panes":[
+          {"pane_id":"w1:g1","rect":{"x":0,"y":0,"width":100,"height":20}},
+          {"pane_id":"w1:g3","rect":{"x":0,"y":20,"width":100,"height":40}},
+          {"pane_id":"w1:g2","rect":{"x":100,"y":0,"width":100,"height":20}},
+          {"pane_id":"w1:g4","rect":{"x":100,"y":20,"width":100,"height":40}}
+        ]}}}' ;;
+      grid5)
+        emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":60},"panes":[
+          {"pane_id":"w1:g1","rect":{"x":0,"y":0,"width":100,"height":20}},
+          {"pane_id":"w1:g3","rect":{"x":0,"y":20,"width":100,"height":20}},
+          {"pane_id":"w1:g5","rect":{"x":0,"y":40,"width":100,"height":20}},
+          {"pane_id":"w1:g2","rect":{"x":100,"y":0,"width":100,"height":20}},
+          {"pane_id":"w1:g4","rect":{"x":100,"y":20,"width":100,"height":40}}
+        ]}}}' ;;
+      *)
+        emit '{"result":{"layout":{"area":{"x":0,"y":0,"width":200,"height":50},"panes":[]}}}' ;;
+    esac ;;
+  "pane close")
+    if [ -n "${FAKE_PANE_CLOSE_FAILS:-}" ]; then
+      fail "{\"error\":{\"code\":\"pane_busy\",\"message\":\"$FAKE_PANE_CLOSE_FAILS\"}}"
+    fi
+    emit '{"result":{"ok":true}}' ;;
+  "tab create")
+    if [ "$scenario" = "tab_create_fails" ]; then
+      fail '{"error":{"code":"workspace_not_found","message":"tab create failed"}}'
+    fi
+    emit '{"result":{"tab":{"tab_id":"w1:t9"},"root_pane":{"pane_id":"w1:p9"}}}' ;;
+  "agent start")
+    if [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
+      fail '{"error":{"code":"agent_not_ready","message":"agent is blocked during startup and is not ready for prompts"}}'
+    elif [ "$scenario" = "start_fails" ]; then
+      fail '{"error":{"code":"agent_pane_not_found","message":"agent target pane w1:p2 not found"}}'
+    # A pane just created by eddy-start is not yet at its shell prompt, so
+    # herdr answers agent_pane_busy for the first FAKE_AGENT_START_BUSY_COUNT
+    # calls, then succeeds. Independent of $scenario, which --into-tab still
+    # needs for its own pane list/layout picture.
+    elif [ "$same_before" -lt "${FAKE_AGENT_START_BUSY_COUNT:-0}" ]; then
+      fail '{"error":{"code":"agent_pane_busy","message":"agent target pane w1:p9 is not an available shell"}}'
+    else
+      emit '{"result":{"agent":{"name":"a","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef1234567890"}}}}'
+    fi ;;
+  "agent read")
+    if [ -n "${FAKE_AGENT_READ_FAILS:-}" ]; then
+      fail '{"error":{"code":"agent_not_found","message":"agent read failed"}}'
+    elif [ "$scenario" = "first_run_dialog" ] && [ "$same_before" -eq 0 ]; then
+      emit 'Quick safety check: Is this a project you created or one you trust?
+ ❯ No, exit
+   Yes, I trust this folder'
+    else
+      emit "${FAKE_STATUS_MODEL:-Opus 4.8} | ${FAKE_STATUS_MODE:-auto} | ${FAKE_STATUS_CWD:-/tmp}"
+    fi ;;
+  "pane get")
+    if [ -n "${FAKE_PANE_GET_FAILS:-}" ]; then
+      fail '{"error":{"code":"pane_not_found","message":"pane lookup failed"}}'
+    fi
+    # The pane eddy-start makes (w1:p9) sits in the tab eddy-start makes (w1:t9).
+    tab="w1:t1"
+    [ "${3:-}" != "w1:p9" ] || tab="w1:t9"
+    emit "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"tab_id\":\"$tab\",\"cwd\":\"${FAKE_PANE_CWD:-/tmp}\"}}}" ;;
+  "agent wait")
+    if [ -n "${FAKE_AGENT_WAIT_FAILS:-}" ]; then
+      fail '{"error":{"code":"timeout"}}'
+    fi
+    emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
+  "agent prompt")
+    if [ -n "${FAKE_PROMPT_FAILS:-}" ]; then
+      fail "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"$FAKE_PROMPT_FAILS\"}}"
+    fi
+    # /clear never starts a turn, so the real herdr answers it with agent_prompt_stalled.
+    if [ -n "${FAKE_PROMPT_STALLED:-}" ]; then
+      fail '{"error":{"code":"agent_prompt_stalled","message":"prompt did not start a turn"}}'
+    fi
+    emit '{"result":{"agent":{"agent_status":"idle"}}}' ;;
+  "agent list")
+    case "$scenario" in
+      bad_list)
+        emit 'not json' ;;
+      status_mixed)
+        emit '{"result":{"agents":[
+          {"name":"scout","pane_id":"w1:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}},
+          {"name":"maker","pane_id":"w1:p3","agent_status":"working","agent_session":{"value":"22222222bbbb"}}
+        ]}}' ;;
+      status_two_teams)
+        emit '{"result":{"agents":[
+          {"name":"bug-3-orch","pane_id":"w1:p7","agent_status":"done","agent_session":{"value":"99999999cccc"}},
+          {"name":"app-1-orch","pane_id":"w2:p1","agent_status":"working","agent_session":{"value":"oooo0000dddd"}},
+          {"name":"app-1-scout","pane_id":"w2:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}},
+          {"pane_id":"w2:pB","agent_status":"idle","agent_session":{"value":"c23a1be5eeee"}}
+        ]}}' ;;
+      status_sessionless)
+        emit '{"result":{"agents":[
+          {"pane_id":"w3:p1","agent_status":"idle"},
+          {"name":"app-1-scout","pane_id":"w3:p2","agent_status":"idle","agent_session":{"value":"11111111aaaa"}}
+        ]}}' ;;
+      names_app1_taken)
+        emit '{"result":{"agents":[
+          {"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}},
+          {"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}
+        ]}}' ;;
+      name_scout_taken)
+        emit '{"result":{"agents":[{"name":"app-1-scout","pane_id":"w1:p2","agent_status":"working","agent_session":{"value":"ssss1111"}}]}}' ;;
+      list_fails)
+        fail '{"error":{"code":"server_unavailable"}}' ;;
+      orch_stuck)
+        # app-1-orch is live in w1:p9 from the first agent start until a call closes that pane.
+        if ! grep -q '^agent start ' "$log" 2>/dev/null || grep -qx 'pane close w1:p9' "$log" 2>/dev/null; then
+          emit '{"result":{"agents":[]}}'
+        else
+          emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p9","agent_status":"idle","agent_session":{"value":"abcdef12"}}]}}'
+        fi ;;
+      orch_taken_late)
+        # The first agent list is unreadable (a caller treats that as no live agents);
+        # every later one shows app-1-orch live in a pane the caller never made.
+        if [ "$same_before" -eq 0 ]; then
+          emit 'not json'
+        else
+          emit '{"result":{"agents":[{"name":"app-1-orch","pane_id":"w1:p1","agent_status":"idle","agent_session":{"value":"oooo0000"}}]}}'
+        fi ;;
+      release_live)
+        # sid-scout is live in w1:p5 until a call closes that pane.
+        if grep -qx 'pane close w1:p5' "$log" 2>/dev/null; then
+          emit '{"result":{"agents":[]}}'
+        else
+          emit '{"result":{"agents":[{"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-scout"}}]}}'
+        fi ;;
+      resurrect_cleared)
+        emit '{"result":{"agents":[
+          {"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-cleared"}}
+        ]}}' ;;
+      resurrect)
+        emit '{"result":{"agents":[
+          {"pane_id":"w1:p5","agent_status":"idle","agent_session":{"value":"sid-scout"}},
+          {"pane_id":"w1:p6","agent_status":"idle","agent_session":{"value":"sid-maker"}}
+        ]}}' ;;
+      *)
+        emit '{"result":{"agents":[]}}' ;;
+    esac ;;
+  "pane list")
+    if [ -n "${FAKE_PANE_LIST_FAILS:-}" ]; then
+      fail '{"error":{"code":"server_unavailable"}}'
+    fi
+    case "$scenario" in
+      guard)
+        # w1:tO orchestrator tab, w1:tE envoy tab, w1:tW worker tab with a live
+        # agent, w1:tG worker tab with one empty pane.
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:o1","tab_id":"w1:tO","agent_status":"working"},
+          {"pane_id":"w1:e1","tab_id":"w1:tE","agent_status":"idle"},
+          {"pane_id":"w1:w1","tab_id":"w1:tW","agent_status":"working"},
+          {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"unknown"}
+        ]}}' ;;
+      panes_overbudget)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:p2","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p3","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p4","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p5","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p6","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p7","tab_id":"w1:t2","agent_status":"working"},
+          {"pane_id":"w1:p8","tab_id":"w1:t2","agent_status":"working"}
+        ]}}' ;;
+      grid1)
+        emit '{"result":{"panes":[{"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"}]}}' ;;
+      fresh_tab)
+        emit '{"result":{"panes":[{"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"unknown"}]}}' ;;
+      grid2)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g2","tab_id":"w1:tG","agent_status":"working"}
+        ]}}' ;;
+      grid3)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g3","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g2","tab_id":"w1:tG","agent_status":"working"}
+        ]}}' ;;
+      grid4)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g3","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g2","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g4","tab_id":"w1:tG","agent_status":"working"}
+        ]}}' ;;
+      grid5)
+        emit '{"result":{"panes":[
+          {"pane_id":"w1:g1","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g3","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g5","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g2","tab_id":"w1:tG","agent_status":"working"},
+          {"pane_id":"w1:g4","tab_id":"w1:tG","agent_status":"working"}
+        ]}}' ;;
+      *)
+        # One empty shell pane, the w1:p2 that tests pass to --pane.
+        emit '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t1","agent_status":"unknown"}]}}' ;;
+    esac ;;
+  *)
+    emit '{"result":{"ok":true}}' ;;
+esac

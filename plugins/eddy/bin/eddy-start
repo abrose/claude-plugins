@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+# Start a team agent in a Herdr pane and record it under $EDDY_SCRATCH/.eddy.
+# Exit codes: 0 ok, 2 bad arguments, 3 pre-flight failed, 4 herdr error.
+set -euo pipefail
+
+usage() {
+  echo "usage: eddy-start <name> <role> (--pane <id> | --split <pane> right|down | --into-tab <tab_id> | --new-tab [--label <text>])" >&2
+  echo "       [--model opus-5-5|sonnet-5-5|haiku-5-5] [--effort low|medium|high|xhigh|max]" >&2
+  echo "       [--mode auto|accept-edits] [--cwd <dir>] [--dry-run]" >&2
+  exit 2
+}
+
+json_get() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)"; }
+
+[ $# -ge 2 ] || usage
+name="$1"; role="$2"; shift 2
+[[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "bad name: $name" >&2; exit 2; }
+
+case "$role" in
+  investigator) def_effort=medium; def_model=opus-5-5 ;;
+  implementer)  def_effort=medium; def_model=sonnet-5-5 ;;
+  tester)       def_effort=low;    def_model=sonnet-5-5 ;;
+  orchestrator) def_effort=medium; def_model=opus-5-5 ;;
+  *) echo "unknown role: $role" >&2; exit 2 ;;
+esac
+
+pane=""; split_pane=""; split_dir=""; into_tab=""; new_tab=""; tab_label=""; model_flag=""; effort=""; mode=""; cwd=""; dry_run=""; created_tab=""; pane_created=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pane)     pane="${2:?}"; shift 2 ;;
+    --split)    split_pane="${2:?}"; split_dir="${3:?}"; shift 3 ;;
+    --into-tab) into_tab="${2:?}"; shift 2 ;;
+    --new-tab)  new_tab=1; shift ;;
+    --label)    tab_label="${2:?}"; shift 2 ;;
+    --model)    model_flag="${2:?}"; shift 2 ;;
+    --effort)   effort="${2:?}"; shift 2 ;;
+    --mode)     mode="${2:?}"; shift 2 ;;
+    --cwd)      cwd="${2:?}"; shift 2 ;;
+    --dry-run)  dry_run=1; shift ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+model_flag="${model_flag:-$def_model}"
+model_effort=""
+case "$model_flag" in
+  opus-5-5)   model=claude-opus-5-5;   bar_model=Opus;   def_mode=auto ;;
+  sonnet-5-5) model=claude-sonnet-5-5; bar_model=Sonnet; def_mode=auto ;;
+  haiku-5-5)  model=claude-haiku-5-5;  bar_model=Haiku;  def_mode=auto; model_effort=high ;;
+  *) echo "unknown model: $model_flag" >&2; exit 2 ;;
+esac
+
+# A model default effort wins over the role default; --effort wins over both.
+effort="${effort:-${model_effort:-$def_effort}}"
+case "$effort" in
+  low|medium|high|xhigh|max) ;;
+  *) echo "unknown effort: $effort" >&2; exit 2 ;;
+esac
+
+mode="${mode:-$def_mode}"
+case "$mode" in
+  auto)         permission_mode=auto;        bar_mode=auto ;;
+  accept-edits) permission_mode=acceptEdits; bar_mode="accept edits" ;;
+  *) echo "unknown mode: $mode" >&2; exit 2 ;;
+esac
+
+session_id="$(python3 -c "import uuid;print(uuid.uuid4())")"
+index_dir="${EDDY_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/eddy/sessions}"
+
+placements=0
+for p in "$pane" "$split_pane" "$into_tab" "$new_tab"; do [ -n "$p" ] && placements=$((placements + 1)); done
+[ "$placements" -ge 1 ] || usage
+if [ "$placements" -gt 1 ]; then
+  echo "--pane, --split, --into-tab and --new-tab are mutually exclusive" >&2
+  exit 2
+fi
+[ -z "$tab_label" ] || [ -n "$new_tab" ] || { echo "--label needs --new-tab" >&2; exit 2; }
+case "$split_dir" in ""|right|down) ;; *) echo "bad --split direction: $split_dir" >&2; exit 2 ;; esac
+
+# The run dir, absolute. A relative EDDY_SCRATCH is the project root's, not this $PWD's.
+# shellcheck source=../lib/run-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/run-dir.sh"
+scratch_abs="$(eddy_run_dir)"
+teamcfg="$scratch_abs/.eddy/config.json"
+
+# Run mismatch guard. With EDDY_SCRATCH unset the run dir is the .eddy-runs/current
+# fallback, a guess. Refuse when that run's recorded tabs (config envoy_tab and
+# orchestrator_tab, tabs.json) all sit in other herdr workspaces than the caller's.
+# A set EDDY_SCRATCH is the caller's own choice and is never second-guessed. No
+# config, no recorded tab, or no readable caller workspace means no fact: pass.
+# Runs before any herdr call that changes state and before any write.
+if [ -z "${EDDY_SCRATCH:-}" ] && [ -f "$teamcfg" ]; then
+  caller_json="$(herdr pane current --current 2>/dev/null)" || caller_json=""
+  CALLER_JSON="$caller_json" RUN_DIR="$scratch_abs" python3 - "$teamcfg" "$scratch_abs/.eddy/tabs.json" <<'PY' || exit 3
+import json, os, sys
+
+def load(path, default):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return default
+
+cfg = load(sys.argv[1], {})
+tabs = load(sys.argv[2], [])
+recorded = [cfg.get(k) for k in ("envoy_tab", "orchestrator_tab")] + (tabs if isinstance(tabs, list) else [])
+run_ws = sorted({t.split(":")[0] for t in recorded if isinstance(t, str) and ":" in t})
+try:
+    pane = json.loads(os.environ["CALLER_JSON"])["result"]["pane"]
+    caller_ws = pane["workspace_id"]
+except Exception:
+    sys.exit(0)
+if not run_ws or caller_ws in run_ws:
+    sys.exit(0)
+print("eddy-start: refusing to start here. EDDY_SCRATCH is not set, so the run folder is the fallback %s." % os.environ["RUN_DIR"], file=sys.stderr)
+print("  That run belongs to team %s; its tabs sit in workspace %s." % (cfg.get("team_id") or "(no id)", ", ".join(run_ws)), file=sys.stderr)
+print("  This caller is in workspace %s (tab %s)." % (caller_ws, pane.get("tab_id", "unknown")), file=sys.stderr)
+print("  Fix: set EDDY_SCRATCH to the right run folder, or start from the run's own tab.", file=sys.stderr)
+sys.exit(3)
+PY
+fi
+
+# Tab guard (rule 15): the orchestrator runs alone in its tab, and the envoy's
+# tab is the human's. Refuse a placement into either, and a --pane that already
+# runs a live agent, before any herdr call creates or changes a pane. Without a
+# run config there is no team yet, so nothing to guard. One `herdr pane list`
+# read answers --split and --pane; if herdr cannot answer, refuse.
+if [ -f "$teamcfg" ] && [ -z "$new_tab" ]; then
+  panes_json=""
+  if [ -n "$pane" ] || [ -n "$split_pane" ]; then
+    panes_json="$(herdr pane list 2>/dev/null)" || panes_json=""
+  fi
+  PANES_JSON="$panes_json" INTO_TAB="$into_tab" PANE="$pane" SPLIT_PANE="$split_pane" python3 - "$teamcfg" <<'PY' || exit 2
+import json, os, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    cfg = {}
+guarded = {cfg.get(k): k for k in ("orchestrator_tab", "envoy_tab") if cfg.get(k)}
+into_tab, pane, split = os.environ["INTO_TAB"], os.environ["PANE"], os.environ["SPLIT_PANE"]
+
+def refuse(msg):
+    print("eddy-start: " + msg, file=sys.stderr)
+    sys.exit(2)
+
+if into_tab in guarded:
+    refuse("refusing --into-tab %s: it is the %s. The orchestrator runs alone in its tab and the envoy's tab is the human's; use --new-tab." % (into_tab, guarded[into_tab].replace("_tab", "'s tab")))
+target = pane or split
+if target:
+    try:
+        panes = json.loads(os.environ["PANES_JSON"])["result"]["panes"]
+    except Exception:
+        refuse("refusing placement at %s: herdr pane list gave no readable answer, so the pane's tab and state are unknown." % target)
+    found = next((p for p in panes if p.get("pane_id") == target), None)
+    if found is None:
+        refuse("refusing placement at %s: herdr does not list that pane." % target)
+    if found.get("tab_id") in guarded:
+        refuse("refusing placement at %s: it sits in the %s (%s). The orchestrator runs alone in its tab and the envoy's tab is the human's; use --new-tab." % (target, guarded[found["tab_id"]].replace("_tab", "'s tab"), found["tab_id"]))
+    if pane and found.get("agent_status", "unknown") in ("idle", "working", "blocked", "done"):
+        refuse("refusing --pane %s: a live agent runs there (%s)." % (pane, found["agent_status"]))
+PY
+fi
+
+# A caller-provided --pane with no --cwd: read the pane's real cwd from Herdr
+# instead of defaulting to this script's own $PWD, which is wrong whenever the
+# caller runs eddy-start from a different directory than the pane it targets.
+if [ -z "$cwd" ] && [ -n "$pane" ]; then
+  cwd="$(herdr pane get "$pane" | json_get "d['result']['pane']['cwd']")" || exit 4
+fi
+[ -n "$cwd" ] || cwd="$PWD"
+
+# A worktree agent reads the brief and the decisions file, and writes its outputs, in the
+# main run dir by absolute path. Its claude blocks reads outside its working directories
+# (blockReadsOutsideWorkingDirectories), so the run dir is added with --add-dir. An agent
+# whose cwd is the main checkout root needs none. Same resolver as the scripts: eddy_run_dir.
+add_dir_args=()
+realpath_of() { python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$1"; }
+[ "$(realpath_of "$cwd")" = "$(realpath_of "$(eddy_project_root)")" ] || add_dir_args=(--add-dir "$scratch_abs")
+
+label="$name"
+if [ -f "$teamcfg" ]; then
+  team_id="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('team_id',''))" <"$teamcfg" 2>/dev/null || true)"
+  if [ -n "${team_id:-}" ]; then
+    # Prepend the team id, but tolerate a name that already carries it: the
+    # orchestrator refers to agents by their full <team_id>-<label> name, so it
+    # may pass that back here. Prepending again would double the id.
+    case "$label" in
+      "${team_id}-"*) name="$label" ;;
+      *) name="${team_id}-${label}" ;;
+    esac
+    [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo "namespaced name too long: $name" >&2; exit 2; }
+  fi
+fi
+
+# Hand the new pane's claude the plugin this script came from (sets plugin_args).
+# shellcheck source=../lib/plugin-dir.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/plugin-dir.sh"
+
+if [ -n "$dry_run" ]; then
+  echo "herdr agent start $name --kind claude --pane <pane> --timeout 90000 -- --agent eddy-$role --session-id $session_id --model $model --effort $effort --permission-mode $permission_mode${add_dir_args[*]:+ ${add_dir_args[*]}} --name $name --settings '{\"crossSessionInbound\":\"accept\"}'${plugin_args[*]:+ ${plugin_args[*]}}"
+  exit 0
+fi
+
+# Refuse a name a live agent already holds: starting it would seize that agent's
+# pane and cross-poison it. A dead agent (absent from the list) is fine to reuse.
+if herdr agent list 2>/dev/null | NAME="$name" python3 -c "import sys, os, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if any(a.get('name') == os.environ['NAME'] for a in d.get('result', {}).get('agents', [])) else 1)"; then
+  echo "name already in use by a live agent: $name" >&2
+  exit 3
+fi
+
+# The agent and its Stop hook identify themselves from this env. EDDY_SCRATCH is
+# absolute so the hook finds the team dir wherever the agent moves its cwd.
+team_env=(--env "EDDY_NAME=$name" --env "EDDY_SCRATCH=$scratch_abs")
+# A herdr pane's shell takes its env from the herdr server, not from this
+# session, so the worker runs in this session's Claude profile only if passed.
+profile_export=""
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  team_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  profile_export=" CLAUDE_CONFIG_DIR=$(printf %q "$CLAUDE_CONFIG_DIR")"
+fi
+
+# The pending marker shields a pane from the eddy mod's empty-pane cleanup.
+# Mark a created pane right after herdr hands it back, before any other herdr
+# call touches it, so the mod can never see it unmarked.
+pending_dir="$scratch_abs/.eddy/pending"
+pending_file_for() { printf '%s/%s' "$pending_dir" "$(printf '%s' "$1" | tr ':/' '__')"; }
+mark_pending() { mkdir -p "$pending_dir"; : > "$(pending_file_for "$1")"; }
+
+# Create a tab in the caller's live workspace and take its root pane. The pane
+# env's HERDR_WORKSPACE_ID is a spawn-time snapshot and goes stale after a pane
+# move; herdr resolves the calling pane live. The tab is registered only after
+# its agent is live (see below): a registered tab with an empty root pane would
+# let the eddy mod close it.
+create_tab() {
+  local ws out
+  ws=$(herdr pane current --current | json_get "d['result']['pane']['workspace_id']") || exit 4
+  local -a args=(--workspace "$ws" --cwd "$cwd" "${team_env[@]}" --no-focus)
+  [ -z "$tab_label" ] || args+=(--label "$tab_label")
+  out=$(herdr tab create "${args[@]}") || exit 4
+  created_tab=$(echo "$out" | json_get "d['result']['tab']['tab_id']")
+  pane=$(echo "$out" | json_get "d['result']['root_pane']['pane_id']")
+  pane_created=1
+  mark_pending "$pane"
+}
+
+if [ -n "$new_tab" ]; then
+  create_tab
+fi
+
+if [ -n "$into_tab" ]; then
+  count="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(sum(1 for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t))")"
+  # A tab holding one bare shell (e.g. made by hand) gets its agent in that
+  # shell; splitting it would leave the shell empty beside the agent.
+  lone_shell="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';ps=[p for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t];print(ps[0]['pane_id'] if len(ps)==1 and ps[0].get('agent_status','unknown') not in ('idle','working','blocked','done') else '')")"
+  if [ -n "$lone_shell" ]; then
+    pane="$lone_shell"
+  elif [ "$count" -ge 6 ]; then
+    create_tab
+  else
+    # Place the new pane into a 2-column x 3-row grid so agents tile instead of
+    # stacking in one tall column. Read the tab geometry and pick which pane to
+    # split and how, from the count of panes already there.
+    probe="$(herdr pane list | python3 -c "import sys,json;t='$into_tab';print(next((p['pane_id'] for p in json.load(sys.stdin)['result']['panes'] if p.get('tab_id')==t), ''))")"
+    [ -n "$probe" ] || { echo "target tab has no panes: $into_tab" >&2; exit 2; }
+    layout_json="$(herdr pane layout --pane "$probe")" || exit 4
+    sel="$(GRID_COUNT="$count" LAYOUT="$layout_json" python3 - <<'PY'
+import os, json
+count = int(os.environ["GRID_COUNT"])
+layout = json.loads(os.environ["LAYOUT"])["result"]["layout"]
+panes = layout["panes"]
+H = layout["area"]["height"]
+def rect(p): return p["rect"]
+def near(a, b, tol=2): return abs(a - b) <= tol
+xs = sorted(set(rect(p)["x"] for p in panes))
+left_x, right_x = xs[0], xs[-1]
+if count <= 1:                       # 1 -> 2: start the two columns
+    t, d, ratio = panes[0], "right", "0.5"
+elif count == 2:                     # 2 -> 3: first row split, left column
+    t = next(p for p in panes if near(rect(p)["x"], left_x) and near(rect(p)["height"], H))
+    d, ratio = "down", "0.333"
+elif count == 3:                     # 3 -> 4: first row split, right column
+    t = next(p for p in panes if near(rect(p)["x"], right_x) and near(rect(p)["height"], H))
+    d, ratio = "down", "0.333"
+elif count == 4:                     # 4 -> 5: second row split, left column
+    t = max((p for p in panes if near(rect(p)["x"], left_x)), key=lambda p: rect(p)["height"])
+    d, ratio = "down", "0.5"
+else:                                # 5 -> 6: second row split, right column
+    t = max((p for p in panes if near(rect(p)["x"], right_x)), key=lambda p: rect(p)["height"])
+    d, ratio = "down", "0.5"
+print("%s\t%s\t%s" % (t["pane_id"], d, ratio))
+PY
+)" || exit 4
+    IFS=$'\t' read -r target_pane grid_dir grid_ratio <<<"$sel"
+    [ -n "$target_pane" ] || { echo "could not pick a grid target in $into_tab" >&2; exit 4; }
+    out=$(herdr pane split --pane "$target_pane" --direction "$grid_dir" --ratio "$grid_ratio" --cwd "$cwd" "${team_env[@]}" --no-focus) || exit 4
+    pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
+    pane_created=1
+    mark_pending "$pane"
+  fi
+fi
+
+if [ -z "$pane" ]; then
+  out=$(herdr pane split --pane "$split_pane" --direction "$split_dir" --cwd "$cwd" "${team_env[@]}" --no-focus) || exit 4
+  pane=$(echo "$out" | json_get "d['result']['pane']['pane_id']")
+  pane_created=1
+  mark_pending "$pane"
+fi
+
+# A caller-provided pane was not created by us, so it carries no team env.
+# Export it into the pane's shell before the agent starts, so the agent and its
+# Stop hook inherit it. The pane feeds one PTY in order, so this runs first.
+if [ -z "$pane_created" ]; then
+  herdr pane run "$pane" "export EDDY_NAME=$name EDDY_SCRATCH=$(printf %q "$scratch_abs")$profile_export" >/dev/null || exit 4
+fi
+
+start() {
+  # --name gives claude the same resolved name Herdr knows it by, so
+  # ListAgents/SendMessage match. --settings accepts cross-session messages so
+  # a peer question never sits held pending human approval.
+  herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- \
+    --agent "eddy-$role" --session-id "$session_id" --model "$model" --effort "$effort" \
+    --permission-mode "$permission_mode" ${add_dir_args[@]+"${add_dir_args[@]}"} \
+    --name "$name" --settings '{"crossSessionInbound":"accept"}' \
+    ${plugin_args[@]+"${plugin_args[@]}"}
+}
+
+# Re-mark the target pane so the trap below always has a marker to remove,
+# including a caller-provided --pane that create_tab/split never marked.
+pending_file="$(pending_file_for "$pane")"
+mark_pending "$pane"
+
+# A startup dialog (folder trust, MCP servers) is a security decision for the
+# human, so hand it over instead of answering it. Answering it trusts the
+# folder; a re-run then needs a fresh pane, since this one holds the agent.
+start_err="$(mktemp)"
+trap 'rm -f "$pending_file" "$start_err"' EXIT
+
+# A pane eddy-start just created is handed back before its shell has drawn its
+# interactive prompt, so `agent start` fails with agent_pane_busy on the first
+# call(s) (herdr agent start --help: "pane must be at its interactive shell
+# prompt"). Retry only that code, only on a pane we created, with a short
+# backoff, bounded by a budget (env-overridable for fast tests).
+busy_budget_ms="${EDDY_START_BUSY_BUDGET_MS:-90000}"
+busy_backoff_ms="${EDDY_START_BUSY_BACKOFF_MS:-500}"
+now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
+deadline_ms=$(( $(now_ms) + busy_budget_ms ))
+
+while true; do
+  if out=$(start 2>"$start_err"); then
+    break
+  fi
+  code="$(python3 -c "import sys,json;print(json.load(sys.stdin).get('error',{}).get('code',''))" <"$start_err" 2>/dev/null || true)"
+  if [ "$code" = "agent_not_ready" ]; then
+    echo "$name is at a startup dialog in pane $pane. Answer it there, close that pane, then re-run eddy-start:" >&2
+    herdr agent read "$name" --source detection --lines 20 >&2 || true
+    exit 3
+  fi
+  if [ "$code" = "agent_pane_busy" ] && [ -n "$pane_created" ] && [ "$(now_ms)" -lt "$deadline_ms" ]; then
+    python3 -c "import time;time.sleep($busy_backoff_ms/1000)"
+    continue
+  fi
+  # agent start failed for good: close the pane we created so no empty shell
+  # is left behind. A caller-provided --pane is never ours to close.
+  [ -z "$pane_created" ] || herdr pane close "$pane" >/dev/null 2>&1 || true
+  cat "$start_err" >&2
+  exit 4
+done
+
+if ! bar=$(herdr agent read "$name" --source detection --lines 20); then
+  # Same state as a mismatch below: a live agent that no record names. Close our own pane.
+  [ -z "$pane_created" ] || herdr pane close "$pane" >/dev/null 2>&1 || true
+  exit 4
+fi
+if ! { echo "$bar" | grep -qF "$bar_model" \
+    && echo "$bar" | grep -qF "$bar_mode" \
+    && echo "$bar" | grep -qF "$(basename "$cwd")"; }; then
+  echo "status bar mismatch (want $bar_model/$bar_mode/$(basename "$cwd")):" >&2
+  echo "$bar" >&2
+  # The agent is live but wrong, and no record names its pane, so nobody else
+  # could find it. Close the pane we created (and with it a tab we made). A
+  # caller-provided --pane is never ours to close.
+  [ -z "$pane_created" ] || herdr pane close "$pane" >/dev/null 2>&1 || true
+  exit 3
+fi
+
+session="${session_id:0:8}"
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+teamdir="$scratch_abs/.eddy"
+mkdir -p "$teamdir"
+
+# Register a created tab now that its agent is live and its root pane occupied.
+if [ -n "$created_tab" ]; then
+  TAB="$created_tab" python3 - "$teamdir/tabs.json" <<'PY'
+import os, json, sys
+path = sys.argv[1]
+tabs = json.load(open(path)) if os.path.exists(path) else []
+t = os.environ["TAB"]
+if t not in tabs: tabs.append(t)
+json.dump(tabs, open(path, "w"))
+PY
+fi
+
+cwd_abs="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$cwd")"
+ROLE="$role" PANE="$pane" STARTED="$started" CWD_ABS="$cwd_abs" SESSION="$session_id" \
+MODEL="$model" EFFORT="$effort" MODE="$permission_mode" python3 - "$teamdir/$name.json" <<'PY'
+import json, os, sys
+json.dump({"role": os.environ["ROLE"], "topic": "", "brief": "", "pane": os.environ["PANE"],
+           "started": os.environ["STARTED"], "cwd": os.environ["CWD_ABS"],
+           "session": os.environ["SESSION"], "model": os.environ["MODEL"],
+           "effort": os.environ["EFFORT"], "mode": os.environ["MODE"]},
+          open(sys.argv[1], "w"))
+PY
+
+mkdir -p "$index_dir"
+SCRATCH="$scratch_abs" NAME="$name" python3 - "$index_dir/$session_id.json" <<'PY'
+import json, os, sys
+json.dump({"scratch": os.environ["SCRATCH"], "name": os.environ["NAME"]}, open(sys.argv[1], "w"))
+PY
+
+printf '{"name":"%s","role":"%s","pane":"%s","session":"%s","model":"%s","mode":"%s"}\n' \
+  "$name" "$role" "$pane" "$session" "$model" "$mode"

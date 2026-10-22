@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# SessionStart hook: a team worker keeps its identity across /clear, a /compact
+# lifts its brief mark, and a worker restored without its team env is marked
+# for /eddy:resurrect. Runs in
+# every session, so it stays silent and cheap when it does not apply.
+set -uo pipefail
+
+PAYLOAD="$(cat)" python3 - <<'PY' || true
+import json, os, re
+
+p = json.loads(os.environ["PAYLOAD"])
+sid, source = p.get("session_id", ""), p.get("source", "")
+index = os.environ.get("EDDY_INDEX_DIR") or os.path.join(
+    os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "eddy", "sessions")
+if not re.match(r"^[A-Za-z0-9-]{1,64}$", sid):
+    raise SystemExit(0)
+
+def load(path):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return None
+
+def save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(data, open(path, "w"))
+
+name = os.environ.get("EDDY_NAME", "")
+if source == "clear" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
+    scratch = os.path.realpath(os.environ.get("EDDY_SCRATCH", ".eddy-runs/current"))
+    recf = os.path.join(scratch, ".eddy", name + ".json")
+    rec = load(recf)
+    if rec is None:
+        raise SystemExit(0)
+    old = rec.get("session", "")
+    rec["session"] = sid
+    save(recf, rec)
+    save(os.path.join(index, sid + ".json"), {"scratch": scratch, "name": name})
+    if old and old != sid:
+        try:
+            os.remove(os.path.join(index, old + ".json"))
+        except OSError:
+            pass
+elif source == "compact" and re.match(r"^[a-z][a-z0-9_-]{0,31}$", name):
+    # A /compact keeps the session id, so it lifts the brief mark itself:
+    # brief_send then accepts the compacted worker for its next brief.
+    scratch = os.path.realpath(os.environ.get("EDDY_SCRATCH", ".eddy-runs/current"))
+    recf = os.path.join(scratch, ".eddy", name + ".json")
+    rec = load(recf)
+    if rec and rec.get("session") == sid and "brief_sent_session" in rec:
+        del rec["brief_sent_session"]
+        save(recf, rec)
+    # The orchestrator's own compact: point the session at its handover. Same text as COMPACT_INSTRUCTIONS
+    # in hooks/mod/reset.ts, which a compact hook adds to the summary; this one is inserted after the compact,
+    # whatever the summary holds. Workers and the other sources print nothing.
+    cfg = load(os.path.join(scratch, ".eddy", "config.json"))
+    if isinstance(cfg, dict) and cfg.get("orchestrator") == name:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": (
+                "Your context was compacted. You are the team orchestrator. Reload the eddy-orchestration skill, "
+                "read the decisions file, then .eddy-runs/current/orch-handover.md, the plan file and "
+                ".eddy-runs/current/orchestration-decisions.md, then the reports newer than orch-handover.md, "
+                "then the open cards (the files .eddy-runs/current/.eddy/questions/Q-*.json whose status is "
+                "open or assumed). Continue from the handover."),
+        }}))
+elif source == "resume" and not name:
+    entry = load(os.path.join(index, sid + ".json"))
+    if entry and re.match(r"^[a-z][a-z0-9_-]{0,31}$", entry.get("name", "")):
+        teamdir = os.path.join(entry.get("scratch", ""), ".eddy")
+        rec = load(os.path.join(teamdir, entry["name"] + ".json"))
+        if rec and rec.get("session") == sid:
+            os.makedirs(os.path.join(teamdir, "restored"), exist_ok=True)
+            open(os.path.join(teamdir, "restored", entry["name"]), "w").close()
+PY
+
+exit 0

@@ -1,0 +1,182 @@
+# Lessons
+
+Hard-won operational lessons for the team workflow. Not auto-loaded. Read it
+when you plan a run. Everything project-specific belongs in a project overlay,
+never here.
+
+## Briefs
+
+- A brief names exact files, field names, and tool paths. It never says
+  "explore" or "look into". Vague briefs produce vague work.
+- Re-verify every `file:line` pointer before you rely on it. Pointers rot.
+- A revision is a new file (`-rev2`), so the original brief and the decision
+  trail stay intact.
+- Cite only a `file:line` you opened yourself. If an agent sub-delegates, it
+  re-opens and re-verifies every anchor before the anchor enters its report,
+  or marks the anchor as unverified. Second-hand anchors dilute a read-only
+  investigator's guarantee.
+
+## Decisions
+
+- The numbered decisions file is the only binding source. If it is not written
+  down and numbered, it did not happen.
+- Number one-word answers too. "Yes" to a numbered question is itself a
+  decision and gets its own number.
+- The `decide` tool does not mirror the decisions file. `eddy-brief prepare`
+  copies the decisions file into the worktree of each agent it briefs, and the
+  orchestrator passes each DECISION line on to the waiting worker (rule 6), so
+  an agent in a worktree reads the same truth.
+- For a review or diff run, pin the exact range in the decisions file up front:
+  `parent = merge-base = <sha>, head = <sha>`. Every report then cites the same
+  parent, so you never reconcile "origin/main" against a merge-base label.
+
+## Agents
+
+- Idle is not done. An agent that stays quiet without a REPORT until the
+  eddy mod flags it gets an `agent read` of its pane. Silence is not success. A short idle
+  is not silence: a worker that waits on its own subagents ends a turn each
+  time one reports back.
+- Reset an agent before every new task. Never brief a new task on an un-reset
+  context: each reuse stacks another layer and the context grows every round.
+  `/clear` when the new task is unrelated to the current one (the brief and
+  the decisions file carry the context), `/compact` for every other new task.
+  A stale, un-reset context poisons the next brief and wastes tokens.
+- Do not `/clear` an agent until its deliverable file is confirmed on disk.
+- A worker writes its REPORT line as plain text and stops; the Stop hook saves
+  the whole message to the report file, and the eddy mod delivers the REPORT
+  line to the orchestrator. The
+  REPORT summary never goes into the deliverable file. An agent that writes its
+  closing summary to the deliverable path overwrites the deliverable. The summary
+  can look healthy while the file holds 21 lines of a 587-line catalogue.
+- Reference every agent in a card as `name (pane, session)` so the human can
+  find it.
+- `eddy-status` lists only the agents whose session ids your `.eddy/` records
+  hold, so agents from other sessions on this machine never show up there.
+- Names are unique by construction. `eddy-init` skips a `<team_id>-*` namespace
+  that live agents already hold, so a re-run for the same ticket gets a fresh id
+  (`app-1` then `app-1-2`), never the old team's names. `eddy-start` refuses a
+  label whose namespaced name is already a live agent. Trust the id init prints.
+
+## Secrets
+
+- Rule 20 and a project's secret hook can collide. In BUG-3359 the hook
+  blocked a bare `gopass show` and prescribed `$(...)` substitution, which
+  rule 20 then banned. The worker wrote its own Python helpers instead and
+  reported a deviation. The prescribed form is allowed by rule 20:
+  `GRAFANA_PASS="$(gopass show -o <path>)" <command>`, with
+  `<path>` a placeholder here. Use it, and never print the value.
+
+## Fan-out
+
+- `brief_send` returns as soon as the kick-off is queued at the agent. To fan
+  out N independent agents, call it once per agent; their REPORT lines come back
+  through the eddy mod, several of one tick in one prompt.
+
+## Loops and limits
+
+- Cap fix loops at three rounds. Say the round number in every status. A fourth
+  round needs the human's explicit go.
+- Behaviour-neutral tidy-ups do not count as rounds.
+
+## Commit gos
+
+- A commit go is a numbered decision that names the branch, the commit message
+  and the scope (commit only). The envoy records it with `decide`. Push, merge,
+  bump, tag and MR creation each need their own decision. Nobody types a go
+  into a worker or orchestrator pane.
+- A tracker write (Jira or any other tracker: comment, field change,
+  transition, worklog, issue creation, posted note) is a decision too. It names
+  the tracker item, what gets written and the scope. A plain go is no go.
+- Evidence (team envoy run, 2026-10-09): impl3 committed 7ec1f1f under
+  decision 16 with no go in its pane. The relayed gos without a decision (Q-8,
+  Q-11) were refused by auto mode.
+- Fallback, if auto mode refuses a commit that has a decision: the worker stops
+  and files a card. Option 1 then applies: the worker stages and writes the
+  message file, and the envoy runs a `team-commit` script on the human's
+  first-hand go (about 2 h to build). That script does not exist yet.
+
+## Testing and verification
+
+- Verify one load-bearing claim of every report before you relay it.
+- Verify a report's size claim against the file. "Report says 587 lines, file
+  has 21" is a one-line check that catches a clobbered deliverable.
+- A tester runs one probe per round and stops the driver last, after every
+  observation is recorded.
+- A blocked login or a missing port is a BLOCKED report with the port list, not
+  a reason to start guessing credentials.
+
+## Eddy mod
+
+- The watcher is the eddy mod in the orchestrator session and in the envoy
+  session: nothing to start or restart. The overview and the `Eddy questions` pane
+  show in the envoy session. The mod activates within 15 s of `/eddy:init`,
+  and again by itself when a session comes back after a restart. The `Eddy`
+  pane's footer shows the last tick; a tick older than a minute means the mod
+  is not running (check the Claude Code version, and that the plugin is
+  enabled).
+- `/eddy-overview` hides or shows both the `Eddy` and the `Eddy questions` pane.
+  Closing one with ✕ or Esc hides it too; the choice is kept per team.
+- `/eddy-envoy`, run by the human in a fresh session, makes that session the
+  envoy of the live run. If the orchestrator's session is gone, it starts a new
+  orchestrator from zero: that orchestrator knows only the decisions file, the
+  plan file and the reports, so the human tells it with `relay` where to go on.
+- The `Eddy` pane lists a tab as "consider release" only when the tab holds a
+  briefed agent and every briefed agent there has a fresh report. A freshly
+  spawned, un-briefed agent looks idle but is not a release candidate. The row
+  is no WATCH line and names the pane statuses seen. An agent that stays idle
+  with a fresh report and no open or assumed card for 30 minutes is released by the mod
+  itself (`/clear`, close the pane, forget the record), but only in a team tab
+  (one `eddy-start` made, listed in `tabs.json`); it then sends
+  `released <name> (<pane>) after 30 min idle`. To keep an agent past that, give
+  it its next brief within 30 minutes, or leave a card of it open. A
+  `WATCH <name>: auto-release failed at <step>` line means the mod stopped at
+  that step and will not try again until the agent worked, blocked or lost its
+  report, or herdr was down (then after a fresh 30 minutes): finish the
+  release by hand with `/eddy:release <name>`.
+- `eddy-start` marks a pane it creates as pending until its agent is live, and
+  registers a spilled tab only after that. The mod never closes a pending pane
+  or an empty root pane of a fresh tab.
+- The envoy tab is the human's own workspace, and the orchestrator runs in its
+  own worker tab, alone. The mod never closes or budget-flags panes in either
+  tab, and `eddy-start` refuses (exit 2) `--into-tab`, `--split` or `--pane`
+  into either tab, and `--pane` on a pane with a live agent. Pane hygiene
+  applies to the other worker tabs only.
+
+## Restarts
+
+- herdr restores panes and resumes each Claude session with the same session
+  id, but not herdr names, pane env, or the team launch flags. Agents are
+  addressed by session id, so reports and briefs keep flowing. After a restart,
+  the human runs `/eddy:resurrect` in the envoy session. It relaunches the
+  orchestrator and the workers that came back without their flags (otherwise
+  briefs may wait for approval at the worker).
+- The human runs `/eddy:resurrect` before you `/clear` a restored worker. If you
+  cleared it first, resurrect adopts the session its pane now runs; check the
+  `adopted session` line before the next brief.
+
+## Own calls
+
+- Log every own call to `.eddy-runs/current/orchestration-decisions.md` with
+  its context. An own call becomes a card via `ask` instead when it is a
+  one-way door, has more than about 1 h of rework, falls outside the brief's
+  or a decision's scope, or touches permissions. The human's own decisions
+  stay in the numbered file. The two files never mix.
+
+## Deferred features
+
+These stay supported but sit off the default path; the minimal run does not
+use them.
+
+- Stacked branches: `project.yaml`'s `stacked: true` and the machete-based
+  worktree chain (`git m add`, `git m update`). For a stacked branch, an
+  implementer keeps the own-commit invariant described in
+  `templates/brief-implementation.md` and `eddy-role-implementer/SKILL.md`:
+  it commits only what it is responsible for on its own branch, never
+  reaching up or down the stack. Carrying every decision to each worktree
+  (see "Decisions" above) matters most here, where more than one worktree is
+  live at once.
+- Reviewer and post-notes work: briefs on `eddy-investigator` using the
+  `brief-review.md` and `brief-post-notes.md` templates.
+- The `spdd`, `crit`, and `tracker` keys in `project.yaml` and their
+  matching overlay files (`.claude/team/tracker.md`, spdd sync steps in
+  `brief-implementation.md`).

@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+# Establish a team: team id, decisions and plan files, config, allowlist baseline,
+# envoy tab record. This session becomes the envoy; the orchestrator starts in a
+# worker tab.
+# Exit codes: 0 ok, 1 refused (live agents, a failed herdr agent list in that
+# check, worktree in the way, archive failed, a template unreadable, or a
+# decisions/plan file in the way or unwritable), 2 bad arguments (also a ticket
+# that is not a plain file-name part), 4 the envoy pane lookup failed or the
+# orchestrator did not start. The team id choice ignores a herdr error.
+set -euo pipefail
+
+usage_text="usage: eddy-init <ticket> [--envoy-pane <id>]"
+usage() { echo "$usage_text" >&2; exit 2; }
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/run-dir.sh
+. "$here/../lib/run-dir.sh"
+# A relative run dir belongs to the project root. Stand there, so that every path below
+# (run dir, .claude/settings.local.json, the orchestrator's cwd) is the same after a shell cd.
+case "${EDDY_SCRATCH:-.eddy-runs/current}" in
+  /*) ;;
+  *) cd "$(eddy_project_root)" ;;
+esac
+scratch="${EDDY_SCRATCH:-.eddy-runs/current}"
+while [[ "$scratch" == */ ]]; do scratch="${scratch%/}"; done
+teamdir="$scratch/.eddy"
+
+json_get() { python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+print(d.get('$1', '') if isinstance(d, dict) else '')
+"; }
+
+[ $# -ge 1 ] || usage
+case "$1" in
+  -h|--help) echo "$usage_text"; exit 0 ;;
+  -*) echo "bad ticket: a ticket cannot start with '-': $1" >&2; usage ;;
+esac
+ticket="$1"; shift
+envoy_pane=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --envoy-pane) [ $# -ge 2 ] || usage; envoy_pane="$2"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+
+# The ticket is a part of two file names (decisions-<ticket>.md, progress-<ticket>.md) that the
+# mod and eddy-brief look up. Only a plain name is one part: the plain-name rule of eddy-forget.
+# This comes before the archive step, so a refused ticket leaves the previous run alone.
+TICKET="$ticket" python3 -c "
+import os, re, sys
+if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', os.environ['TICKET']):
+    sys.exit('bad ticket: %r is not one plain file-name part (letters, digits, . _ -, starting with a letter or digit)' % os.environ['TICKET'])
+" || usage
+
+[ -n "${EDDY_SESSION_ID:-}" ] || {
+  echo "EDDY_SESSION_ID is unset: the eddy mod did not load in this session (Claude Code too old, or the eddy plugin disabled)" >&2
+  exit 1
+}
+min_version="2.1.292"
+found_version="$(claude --version 2>/dev/null | awk '{print $1}')"
+FOUND="$found_version" MIN="$min_version" python3 -c "
+import os, sys
+v = lambda s: tuple(int(x) for x in s.split('.'))
+try:
+    sys.exit(0 if v(os.environ['FOUND']) >= v(os.environ['MIN']) else 1)
+except ValueError:
+    sys.exit(1)
+" || { echo "Claude Code ${found_version:-unknown} is older than $min_version" >&2; exit 1; }
+
+# A previous team whose agents are still live needs its files: refuse and name
+# them. Otherwise the previous run and every loose scratchpad entry move to
+# .archive/, out of sight of the new run. Check both the current-layout team
+# dir ($scratch/.eddy) and the old flat layout (<scratch root>/.eddy), since a
+# team started before .eddy-runs/current existed still keeps its state there.
+check_live_team() {
+  cfg="$1"
+  [ -e "$cfg" ] || return 0
+  tid="$(json_get team_id <"$cfg")"
+  result="$(OLD_EDDY_ID="$tid" python3 -c "
+import json, os, subprocess
+tid = os.environ['OLD_EDDY_ID']
+try:
+    out = subprocess.run(['herdr', 'agent', 'list'], capture_output=True, text=True)
+except OSError as e:
+    print('ERROR:cannot run herdr: %s' % e)
+else:
+    if out.returncode != 0:
+        reason = (out.stderr or out.stdout).strip() or 'exit %d' % out.returncode
+        print('ERROR:%s' % reason)
+    else:
+        try:
+            d = json.loads(out.stdout)
+        except ValueError as e:
+            print('ERROR:bad output from herdr agent list: %s' % e)
+        else:
+            names = [a.get('name') for a in d.get('result', {}).get('agents', []) if a.get('name')]
+            live = [n for n in names if tid and (n == tid or n.startswith(tid + '-'))]
+            print('OK:' + ' '.join(live))
+")"
+  case "$result" in
+    ERROR:*)
+      echo "cannot check live agents: ${result#ERROR:}" >&2
+      exit 1
+      ;;
+  esac
+  live="${result#OK:}"
+  if [ -n "$live" ]; then
+    echo "already initialised: $cfg (live agents: $live)" >&2
+    exit 1
+  fi
+}
+
+scratch_root="$(dirname "$scratch")"
+old_teamdir="$scratch_root/.eddy"
+
+check_live_team "$teamdir/config.json"
+if [ "$old_teamdir" != "$teamdir" ]; then
+  check_live_team "$old_teamdir/config.json"
+fi
+
+SCRATCH="$scratch" python3 - <<'PY' || exit 1
+import datetime, json, os, shutil, sys
+
+scratch = os.path.normpath(os.environ["SCRATCH"])
+root = os.path.dirname(scratch) or "."
+archive = os.path.join(root, ".archive")
+today = os.environ.get("EDDY_TODAY") or datetime.date.today().isoformat()
+
+def holds_git(path):
+    if os.path.basename(path) == ".git":
+        return True
+    if os.path.islink(path) or not os.path.isdir(path):
+        return False
+    for _, dirs, files in os.walk(path):
+        if ".git" in dirs or ".git" in files:
+            return True
+    return False
+
+def free_name(base):
+    path, n = os.path.join(archive, base), 2
+    while os.path.lexists(path):
+        path, n = os.path.join(archive, "%s-%d" % (base, n)), n + 1
+    return path
+
+def move(src, dst):
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src, dst)
+    except OSError as e:
+        sys.exit("cannot archive %s: %s" % (src, e))
+
+if os.path.isdir(scratch) and os.listdir(scratch):
+    if holds_git(scratch):
+        bad = next((os.path.join(scratch, e) for e in sorted(os.listdir(scratch)) if holds_git(os.path.join(scratch, e))),
+                   scratch)
+        if os.path.basename(scratch) == "current":
+            advice = "move it out with git worktree move"
+        else:
+            advice = "set EDDY_SCRATCH to a run dir such as .eddy-runs/current"
+        sys.exit("refusing to archive %s: %s holds a git worktree; %s" % (scratch, bad, advice))
+    try:
+        with open(os.path.join(scratch, ".eddy", "config.json")) as fh:
+            data = json.load(fh)
+        ticket = str(data.get("ticket") or "") if isinstance(data, dict) else ""
+    except (OSError, ValueError, AttributeError, TypeError):
+        ticket = ""
+    move(scratch, free_name("%s-%s" % (ticket.replace("/", "-") or "run", today)))
+
+if os.path.isdir(root) and os.path.basename(os.path.abspath(root)) == "scratchpad":
+    keep = {os.path.basename(scratch), ".archive"}
+    loose = None
+    for entry in sorted(os.listdir(root)):
+        src = os.path.join(root, entry)
+        if entry in keep:
+            continue
+        if holds_git(src):
+            print("❗️ worktree inside scratchpad: %s - move it out with git worktree move" % src,
+                  file=sys.stderr)
+            continue
+        loose = loose or free_name("loose-%s" % today)
+        move(src, os.path.join(loose, entry))
+PY
+
+mkdir -p "$teamdir"
+
+# Pick a team id whose <team_id>-* name namespace is free among live herdr
+# agents, so two teams (e.g. a prior run for the same ticket) never share names
+# and cross-poison each other. Start from the ticket slug, then numeric suffixes,
+# then random hashes.
+base="$("$here/eddy-id" for "$ticket")"
+team_id="$(HERE="$here" BASE="$base" python3 - <<'PY'
+import os, json, subprocess
+
+def live_names():
+    try:
+        out = subprocess.run(["herdr", "agent", "list"], capture_output=True, text=True)
+        d = json.loads(out.stdout)
+        return {a.get("name") for a in d.get("result", {}).get("agents", []) if a.get("name")}
+    except Exception:
+        return set()
+
+names = live_names()
+
+def free(tid):
+    if len(tid) + len("-orch") > 32:
+        return False
+    return not any(n == tid or n.startswith(tid + "-") for n in names)
+
+base = os.environ["BASE"]
+here = os.environ["HERE"]
+choice = None
+for cand in [base] + ["%s-%d" % (base, i) for i in range(2, 10)]:
+    if free(cand):
+        choice = cand
+        break
+if choice is None:
+    for _ in range(50):
+        h = subprocess.run([os.path.join(here, "eddy-id"), "hash"],
+                           capture_output=True, text=True).stdout.strip()
+        if h and free(h):
+            choice = h
+            break
+print(choice or base)
+PY
+)"
+orch="${team_id}-orch"
+
+# Write the decisions file and the plan file from the templates of this plugin root.
+# This comes before every step that can exit 4, so a run whose orchestrator did not
+# start still has both files. A file already there is never overwritten (exit 1).
+TICKET="$ticket" TEMPLATES="$here/../skills/eddy-orchestration/templates" RUN="$scratch" python3 - <<'PY' || exit 1
+import os, sys
+
+ticket, templates, run = os.environ["TICKET"], os.environ["TEMPLATES"], os.environ["RUN"]
+files = []
+for template, prefix in (("decisions.md", "decisions"), ("progress.md", "progress")):
+    path = os.path.join(templates, template)
+    try:
+        with open(path) as fh:
+            text = fh.read().replace("{{ticket}}", ticket)
+    except OSError as e:
+        sys.exit("cannot read template %s: %s" % (path, e))
+    files.append((os.path.join(run, "%s-%s.md" % (prefix, ticket)), text))
+for path, _ in files:
+    if os.path.lexists(path):
+        sys.exit("refusing to overwrite: %s" % path)
+for path, text in files:
+    try:
+        with open(path, "x") as fh:
+            fh.write(text)
+    except FileExistsError:
+        sys.exit("refusing to overwrite: %s" % path)
+    except OSError as e:
+        sys.exit("cannot write %s: %s" % (path, e))
+PY
+
+TICKET="$ticket" EDDY_ID="$team_id" ORCH="$orch" python3 - "$teamdir/config.json" <<'PY'
+import os, json, sys
+json.dump({"team_id": os.environ["EDDY_ID"], "ticket": os.environ["TICKET"],
+           "orchestrator": os.environ["ORCH"],
+           "envoy_session": os.environ["EDDY_SESSION_ID"]}, open(sys.argv[1], "w"))
+PY
+
+# Seed the safe permission allowlist, adding only what is missing. SendMessage
+# is there for brief_send: a message the eddy mod sends has no user request
+# behind it, so auto mode's classifier gives no verdict on it.
+python3 - <<'PY'
+import json, os
+path = os.path.join(".claude", "settings.local.json")
+base = ["Read", "Bash(ls:*)", "Bash(grep:*)", "Bash(git status:*)", "SendMessage"]
+os.makedirs(".claude", exist_ok=True)
+data = {}
+if os.path.exists(path):
+    try: data = json.load(open(path))
+    except Exception: data = {}
+perms = data.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+for a in base:
+    if a not in allow:
+        allow.append(a)
+json.dump(data, open(path, "w"), indent=2)
+PY
+
+# Record the envoy's tab as team-managed.
+if [ -n "$envoy_pane" ]; then
+  tab="$(herdr pane get "$envoy_pane" | python3 -c "import sys,json;print(json.load(sys.stdin)['result']['pane']['tab_id'])")" || exit 4
+  TAB="$tab" python3 - "$teamdir/tabs.json" <<'PY'
+import os, json, sys
+path = sys.argv[1]
+tabs = json.load(open(path)) if os.path.exists(path) else []
+t = os.environ["TAB"]
+if t not in tabs: tabs.append(t)
+json.dump(tabs, open(path, "w"))
+PY
+  TAB="$tab" python3 - "$teamdir/config.json" <<'PY'
+import os, json, sys
+cfg = json.load(open(sys.argv[1]))
+cfg["envoy_tab"] = os.environ["TAB"]
+json.dump(cfg, open(sys.argv[1], "w"))
+PY
+fi
+
+# Start the orchestrator in its own worker tab (eddy-orch-start, shared with the
+# mod's /eddy-envoy). A failed start leaves the config with envoy_session only:
+# the envoy tools work, the orchestrator half stays off.
+if ! start_err="$("$here/eddy-orch-start" 2>&1 >/dev/null)"; then
+  echo "$start_err" >&2
+  # eddy-start leaves a dialog pane open for the human. Its own advice is to re-run
+  # eddy-start; here the next step is /eddy:init, which records the orchestrator.
+  case "$start_err" in
+    "orchestrator did not start: "*"is at a startup dialog"*)
+      echo "After you answer it: close that pane, then run /eddy:init again; do not run eddy-start by hand, config.json would not know that orchestrator." >&2 ;;
+  esac
+  exit 4
+fi
+
+# Drop session index entries whose agent record is gone or names another
+# session, so a stale entry never claims a session for a finished run. A
+# record that cannot be read right now (another team writing it) is kept.
+INDEX="${EDDY_INDEX_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/eddy/sessions}" python3 - <<'PY'
+import glob, json, os
+for f in glob.glob(os.path.join(os.environ["INDEX"], "*.json")):
+    sid = os.path.splitext(os.path.basename(f))[0]
+    try:
+        e = json.load(open(f))
+        rec = json.load(open(os.path.join(e["scratch"], ".eddy", e["name"] + ".json")))
+        stale = rec.get("session") != sid
+    except FileNotFoundError:
+        stale = True
+    except (OSError, ValueError, KeyError, TypeError):
+        stale = False
+    if stale:
+        os.remove(f)
+PY
+
+echo "team_id=$team_id config=$teamdir/config.json"

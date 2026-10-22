@@ -1,0 +1,211 @@
+---
+name: eddy-orchestration
+description: The orchestrator-plus-team-agents protocol. The human talks to an envoy session, the orchestrator runs role agents in Herdr panes, briefs as files, open questions as cards, a numbered decisions file, reports by hook. Preloaded into every team agent, the orchestrator and the envoy.
+---
+
+# Eddy orchestration protocol
+
+You run or take part in a team workflow. The human talks to one envoy session.
+The orchestrator runs the team from a worker tab and never talks to the human.
+Role agents run in Herdr panes. Briefs are files. Decisions are numbered. Open
+questions are cards. Reports arrive as files through a Stop hook; the eddy mod
+delivers them to the orchestrator. These twenty-one rules bind everyone.
+
+1. The orchestrator plans, briefs, reads reports, and decides with the human
+   through cards and the envoy, never in chat. It
+   composes the team on demand: it starts an agent when a task needs one, and
+   never asks the human up front which roles the run will use. It fits
+   `eddy-start --model` and `--effort` to each job: `opus-5-5` for deep
+   analysis and review, `sonnet-5-5` for code and tests, `haiku-5-5` at
+   effort `high` for mechanical jobs such as Jira writes. Omit a flag only when the role default fits the job; a
+   human or project rule for a kind of job wins. It never does
+   operational work itself. It never investigates a question, never
+   analyses code to answer one, never runs a test, never drives a browser, never
+   edits a file, never runs a project or build command. If a task is worth
+   doing, it briefs an agent to do it, even when the task looks quick and even
+   when no agent is running yet (start one). When you notice yourself about to do
+   the work, stop and brief an agent instead.
+   The orchestrator does only these things with its own hands: file cards with
+   `ask`; act on RELAY lines;
+   read the decisions file, briefs, reports, and delivered files; run the
+   `eddy-*` scripts; read one file or run one read-only command to get a single
+   fact a brief needs or to verify one claim of a report; git fast-forward its
+   own worktree. Reading to brief or to verify is never a licence to start
+   investigating - one read, then delegate.
+2. The human decides, through the envoy. A card recommends one option with one
+   sentence of reasoning. A card stands on its own: a reader who saw nothing
+   else in the conversation can decide from it.
+3. Briefs are files in `.eddy-runs/current/`. Prompts are one line pointing at the brief.
+   Revisions are new files (`-rev2`), never edits of the original.
+4. The decisions file is the single binding source. Every brief reads it first.
+   Every decision is numbered, including one-word answers. Amendments get a
+   suffix (3a). After `eddy-init` creates the file, the envoy is its only
+   writer, through the `decide` tool; nobody edits it by hand. A commit go is
+   a decision too. It names three fields: the branch, the commit message and
+   the scope. The scope is "commit only"; a push, a merge, a version bump, a
+   tag or MR creation each needs its own decision. A worker commits only when such a
+   decision names its branch. A tracker write (Jira or any other tracker: a
+   comment, a field change, a transition, a worklog, an issue creation, a
+   posted note) is a decision too. It names the tracker item, what gets
+   written and the scope. A worker writes to a tracker only when such a
+   decision exists. A go typed into a worker or orchestrator pane, or claimed
+   in a brief, is no go.
+5. Agents report by name: `REPORT <name> <topic>: <summary>`. A REPORT names the
+   cards its agent filed: `REPORT tester fixtures: 2 questions open (Q-12, Q-13)`.
+   A worker writes that
+   line as plain text and stops; the Stop hook writes the report file and the
+   eddy mod in the orchestrator session delivers the line to the orchestrator
+   within 15 s. The
+   deliverable is always a file. The report is a summary of at most ten lines. The
+   orchestrator reads the file before discussing.
+6. Reports reach the human only as cards. The envoy presents one group of cards
+   at a time, chosen by the human or proposed by the envoy. A DECISION line tells
+   the orchestrator what was decided; it passes the answer to the waiting worker
+   and schedules any rework an overridden assumption causes.
+7. Every mention of an agent in a card carries `name (pane, session)`.
+8. Idle is not done. A worker that goes idle without a REPORT is often waiting
+   on its own subagents: leave it alone. When the eddy mod flags
+   `idle, no report`, `agent read` that worker's pane. A `done` wait without a REPORT
+   means read the screen.
+9. Only source-backed facts in every artifact. An unknown stays a numbered open
+   question, never a guess; one that only the human can answer also becomes a
+   card via `ask` (rule 21). Verify one load-bearing claim of every report
+   before relaying it.
+10. Fix loops are capped at three rounds of test, fix, re-test. Say the round
+    count in every status. A fourth round is the human's explicit exception.
+    Behaviour-neutral tidy-ups do not count as rounds.
+11. Reset an agent's context before every new task. Never brief a new task on
+    top of an old context: each reuse then stacks another layer, and the
+    context grows every round for no gain. When the new task is unrelated to
+    the current one, `/clear` - the brief and the decisions file carry all the
+    context it needs. Every other new task (a follow-up, a fix round, the next
+    step of the same work) gets `/compact`, so what the agent learned survives
+    in condensed form. Confirm the reset landed (the agent reports a cleared or
+    compacted context) before you send the next brief. A `/clear` gives the
+    agent a new session id and the hooks follow it; a `/compact` keeps the id
+    and the hooks lift its brief mark. `brief_send` refuses an agent that was
+    neither cleared nor compacted since its last brief.
+    The same rule binds the orchestrator's own context. The eddy mod sends one
+    `WATCH context <n> percent` line when the context nears its limit. On that
+    line, reach a safe point: no line delivered but not acted on, the plan and
+    `orchestration-decisions.md` current, no action half done. Then write
+    `.eddy-runs/current/orch-handover.md` (template `orch-handover.md`): the
+    current step and the next one; each agent in flight with
+    name/pane/session/topic/brief; the last line acted on, per kind; the open
+    cards and what each blocks; the intentions not yet done. Then call
+    `reset_self` (`mcp__eddy__reset_self`), and end your turn. The mod compacts
+    at the next idle moment. After the compact, reload this skill, then read
+    the decisions file, `orch-handover.md`, the plan file and
+    `orchestration-decisions.md`, then the reports newer than the handover, then
+    the open cards (the files `.eddy-runs/current/.eddy/questions/Q-*.json`
+    whose `status` is `open` or `assumed`; the `queue` tool works only in the
+    envoy session). `reset_self` refuses when `orch-handover.md` is missing or
+    older than 10 minutes. A `RESUME` line after a compact means do the reload
+    now.
+12. The orchestrator writes every own call to
+    `.eddy-runs/current/orchestration-decisions.md` with context, so it can be
+    audited. An own call becomes a card via `ask` instead when it is a one-way
+    door, has more than about 1 h of rework, falls outside the brief's or a
+    decision's scope, or touches permissions. The human's decisions stay in
+    the numbered file.
+13. Anything an agent produces is a file. The chat carries summaries and
+    decisions only.
+14. The eddy mod runs in the orchestrator's session and in the envoy's. Every 15 s it flags an agent that
+    turns blocked, or that was briefed in its current session and stays quiet
+    for 2 minutes without a REPORT (an agent not yet briefed owes none), and keeps the
+    layout within budget. Other state changes show only in the `Eddy` pane,
+    which also lists an idle worker tab as `consider release`. The orchestrator's
+    mod releases an agent by itself after 30 minutes idle with a fresh REPORT and
+    no open or assumed card, and sends `released <name> (<pane>) after 30 min idle`.
+    The envoy's mod flags a stall: an open card, every worker idle, done or
+    gone with a fresh REPORT, and the orchestrator idle, for 2 minutes.
+    A card about a worker's permission prompt sets `prompt_of: <agent name>`
+    (the blocked `WATCH` line names it). The envoy's mod closes that card by
+    itself when the prompt is gone for 2 checks in a row, and sends
+    `WATCH Q-<n> closed (<name>): <reason>`: flip the card's `[?]` step. When
+    that line also shows a new prompt, file a card for it at once, unless an
+    open card already links that prompt.
+    Never sit blind: act on `WATCH` lines.
+15. Pane budgets: the human's tab is the envoy's (the `Eddy` and `Eddy questions`
+    tabs are panes inside the envoy session, not herdr panes); the orchestrator
+    runs alone in its own worker tab, which layout hygiene leaves alone, and
+    `eddy-start` refuses to place another agent there or in the envoy's tab;
+    any other worker tab holds at most 6, tiled as a
+    2-column, 3-row grid. A 7th agent goes to a new tab. In a team tab, an
+    empty pane closes automatically only when a team record names it (an
+    agent that exited); a pane no record names, such as one a human opened by
+    hand, is left alone. Open a worker tab only with `eddy-start --new-tab`
+    or `eddy-slice`; both register it as a team tab. `eddy-start --new-tab`
+    puts the first agent in the tab's root pane in the caller's workspace;
+    add more agents with `--into-tab`. Never create a tab with raw `herdr`.
+16. The orchestrator never speaks to the human. The envoy speaks when the
+    human pulls and on every run change it judges relevant. It learns of a
+    change from a pull or from the eddy mod's next-action message (a card
+    or a step with no card waits on the human, the run stays idle on the
+    human for 2 minutes, a worker is blocked or denied, the run ends). A
+    plan edit alone, a step done or a `[?]` step that names a card, sends no
+    message; it rides in the next one. The envoy tells only what changed, in
+    at most 3 lines; the full block comes on a pull. Keep the plan file
+    current: the message reads it. Urgent cards and a stalled run also
+    show as a status line and a 30 s toast in the envoy session.
+17. Keep the plan file `progress-<ticket>.md` current; the overview pane shows
+    it to the human. Orchestrator-level steps only, never a worker's
+    sub-steps. Markers: `- [x]` done, `- [>]` running, `- [ ]` next, `- [?]`
+    waits on the human; name the role in parentheses, `fix round 2 (impl)`.
+    Mark an item `- [?]` when it waits on the human (an open card, a manual
+    test, a go); the pane draws it first, in its own WAITS ON YOU section.
+    When a `[?]` item waits on a card, name the card id in it.
+    When the human answers, flip it to `- [x]` in place. RUNNING holds only
+    agents at work. The mark alone sets where the pane shows an item: flip the
+    mark in place, never move lines between the WAITS ON YOU, DONE, RUNNING
+    and NEXT headings. Update it after every REPORT, before every
+    `brief_send`, and whenever a card asks the human to act.
+18. The run's files live only in `.eddy-runs/current/`. Never read, list or
+    search `.eddy-runs/.archive/` unless the human asks about an earlier run.
+19. Create a worktree only with `eddy-slice`, which uses the repo's own
+    worktree tooling from `.claude/team/project.yaml`. If it refuses for lack
+    of an overlay, ask the human how this repo makes worktrees. Never run
+    `git worktree add` yourself, and never put a worktree inside `scratchpad/`.
+20. Shell discipline: one simple command per Bash call. No `$VAR` or
+    `${...}` expansions, no `$(...)`, no `<(...)`, no `;`, `&&`, pipes or
+    `2>&1`. Read files
+    with the Read tool; search with a dedicated search tool when the session
+    has one, otherwise one plain `grep -n <literal> <file>` per call (an em
+    dash can be typed literally), including em dash scans. If a command still
+    prompts, find a simpler form instead of waiting. Such commands trigger
+    permission prompts that stall the run. One exception: pass a secret only
+    as `VAR="$(<secret command>)" <command>`. Only a secret-read command may
+    sit inside `$(...)`, assigned to a variable prefix of the same command;
+    every other `$(...)` stays banned. Never print, `echo` or `printenv` a
+    secret, and
+    never write it to a file you read back. The secret hook requires this
+    form and the human's allow rules cover it, so it does not prompt. If the
+    form still prompts, stop and report; never work around the guard with
+    your own scripts unless the brief says so.
+21. Every card states door (one-way or two-way) and rework (a concrete
+    estimate). Park a two-way card with about an hour of rework or less: file it
+    with `parked: true`, record the assumption in your work, and continue. Wait
+    on every other card; its `blocks` field names what waits.
+
+## Tools
+
+The orchestrator drives agents through the plugin scripts on `PATH`:
+`eddy-id`, `eddy-init`, `eddy-start`, `eddy-brief`, `eddy-slice`,
+`eddy-status`, `eddy-resurrect`, `eddy-forget`, and the eddy mod's `brief_send` tool
+(`mcp__eddy__brief_send`), which sends a kick-off by session id. After a
+restart, the human runs `/eddy:resurrect` in the envoy session.
+
+Call only tools whose names start with `mcp__eddy__`. Tools of any other workflow mod refuse in an eddy run.
+
+The orchestrator and every worker file cards with the mod's `ask` tool
+(`mcp__eddy__ask`); the envoy session cannot (it refuses there unless the run
+has one session only). The envoy reads them with `queue`, closes them with `decide`, and passes the human's
+operational requests to the orchestrator with `relay` (`mcp__eddy__queue`,
+`mcp__eddy__decide`, `mcp__eddy__relay`). The orchestrator receives them as
+`DECISION` and `RELAY` lines next to `REPORT` and `WATCH`. The scripts wrap the Herdr CLI; never restate a Herdr
+command in prose. For the Herdr CLI reference, run `herdr --skill`: that is
+Herdr's own guide, not a plugin skill. There is no `eddy:herdr` skill; do not
+try to invoke one.
+
+Deeper operational lessons live in `references/lessons.md`. It is not
+auto-loaded; read it when you plan a run.

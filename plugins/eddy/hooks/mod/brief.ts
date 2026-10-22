@@ -1,0 +1,61 @@
+import { activeConfig } from './activation'
+import { bySession, herdrAgents } from './herdr'
+import { readJson, writeJson } from './io'
+import type { Io, ToolResult } from './io'
+import { teamDir } from './paths'
+import type { TeamRecord } from './tick'
+
+export const BRIEF_TOOL = 'brief_send'
+export const BRIEF_TOOL_SPEC = {
+  name: BRIEF_TOOL,
+  description:
+    'Send a composed brief to a team agent by its session id. Run `eddy-brief compose` first. ' +
+    'Returns "<name>: <state>"; an error names the reason.',
+  inputSchema: {
+    type: 'object',
+    properties: { name: { type: 'string' }, topic: { type: 'string' } },
+    required: ['name', 'topic'],
+  },
+}
+// A hook gets 10 s and a clock wait counts against it; leave room for the send.
+const WAIT_MS = 6000
+const POLL_MS = 500
+
+const fail = (result: string): ToolResult => ({ result, isError: true })
+
+const briefedInThisSession = (rec: TeamRecord) =>
+  rec.session !== undefined && rec.brief_sent_session === rec.session
+
+/**
+ * The record once it is no longer briefed in its current session, or after
+ * WAIT_MS. A /clear moves `session` on; a /compact keeps it, and the
+ * SessionStart hook drops `brief_sent_session` instead.
+ */
+async function clearedRecord(io: Io, path: string): Promise<TeamRecord | null> {
+  for (let waited = 0; ; waited += POLL_MS) {
+    const rec = await readJson<TeamRecord>(io, path)
+    if (!rec || !briefedInThisSession(rec) || waited >= WAIT_MS) return rec
+    await io.sleep(POLL_MS)
+  }
+}
+
+export async function briefSend(io: Io, name: string, topic: string): Promise<ToolResult> {
+  if (!(await activeConfig(io))) return fail('brief_send works only in the orchestrator session')
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) return fail(`bad name: ${name}`)
+  const path = `${await teamDir(io)}/${name}.json`
+  const rec = await clearedRecord(io, path)
+  if (!rec) return fail(`no agent record: ${name}`)
+  if (!rec.session) return fail(`${name} has no session id; start it again with eddy-start`)
+  if (briefedInThisSession(rec)) return fail(`${name} was not cleared or compacted since its last brief`)
+
+  const prepared = await io.run([`${io.pluginRoot}/bin/eddy-brief`, 'prepare', name, '--topic', topic])
+  if (prepared.exitCode !== 0) return fail(prepared.stderr.trim() || `eddy-brief prepare failed (${prepared.exitCode})`)
+  const sent = await io.sendTo(rec.session, prepared.stdout.trim())
+  if (!sent.isDelivered) return fail(`not delivered: ${sent.reason ?? 'unknown reason'}`)
+
+  const latest = (await readJson<TeamRecord>(io, path)) ?? rec
+  await writeJson(io, path, { ...latest, brief_sent_session: rec.session, watch_session: rec.session })
+  const listed = await herdrAgents(io)
+  const state = listed.ok ? bySession(listed.agents).get(rec.session)?.agent_status ?? 'gone' : 'unknown'
+  return { result: `${name}: ${state}` }
+}
