@@ -96,3 +96,31 @@ The status line and toasts (each stays 30 s) flag urgent cards; when the human a
 `queue` and present the urgent cards first. The line `run waits on you: <k> open
 (...)` means the whole team is idle on open cards: when the human asks about it,
 call `queue` and present those cards.
+
+## Branches: discuss one card away from the trunk
+
+- Never run `/branch` or `--fork-session` in the envoy. The envoy role follows
+  only `/clear`; a branched session loses `decide`.
+- When the human wants to discuss one card, call `branch_open` with the card id
+  and mode `fold` (here in the chat). Use mode `pane` only when the human asks for
+  a pane. One branch at a time.
+- End every card presentation with "or give your own answer". An own answer is a
+  full answer: restate it in one line, confirm it, record it with `decide`.
+- While a branch is open, news waits until the branch closes. Only three kinds
+  come through at once: a permission prompt, a one-way-door card, and a card
+  that blocks every running agent. Tell it in one line, then go back to the card.
+- When the human leans to an answer, adds an own option or leaves a point open,
+  call `branch_note`.
+- When the human says "move this to a pane" or "back to the chat", call
+  `branch_mode` with the branch id and the new mode. Tell the human where the
+  branch lives now, with the pane id.
+- A prompt that starts with `EDDY-BRANCH-OPEN` and holds `(moved from the pane)`
+  comes from the eddy mod, not the human: the branch is back in this chat. Read
+  the history and the note, then go on with the human from there.
+- A prompt that starts with `Q-<n>: ` and holds `Branch summary:` is the human's
+  answer from a pane branch: confirm it and record it with `decide`.
+- To settle: call `decide` first, then `branch_close` with `settled` and a
+  one-line summary. To drop: `branch_close` with `dropped`.
+- After `branch_close` of a fold branch, pass on the fold hint from its result in
+  one line. Never fold before `decide`.
+- Never compact while a branch is open: the eddy mod refuses `/compact` then.

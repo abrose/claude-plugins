@@ -195,7 +195,9 @@ The orchestrator drives agents through the plugin scripts on `PATH`:
 (`mcp__eddy__brief_send`), which sends a kick-off by session id. After a
 restart, the human runs `/eddy:resurrect` in the envoy session.
 
-Call only tools whose names start with `mcp__eddy__`. Tools of any other workflow mod refuse in an eddy run.
+Of the workflow tools, call only tools whose names start with `mcp__eddy__`. Tools of any other workflow mod refuse in an eddy run.
+
+The five branch tools (`branch_open`, `branch_note`, `branch_mode`, `branch_settle`, `branch_close`) belong to the envoy and the discussant, never to a worker.
 
 The orchestrator and every worker file cards with the mod's `ask` tool
 (`mcp__eddy__ask`); the envoy session cannot (it refuses there unless the run

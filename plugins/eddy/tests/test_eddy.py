@@ -1945,7 +1945,9 @@ class TeamResurrect(Base):
         env = self.env(scenario="resurrect", CLAUDE_CONFIG_DIR=cfg)
         p = subprocess.run([os.path.join(copy, "bin", "eddy-resurrect")],
                            capture_output=True, text=True, env=env, cwd=self.proj)
-        self.assertNotIn("--plugin-dir", self.resurrect_argv(p))
+        argv = self.resurrect_argv(p)
+        self.assertNotIn("--plugin-dir", argv)
+        self.assertIn(" --agent eddy-investigator ", argv)
 
     def test_a_worktree_worker_relaunches_with_the_main_run_dir_as_an_added_dir(self):
         self.setup_team()
@@ -3582,6 +3584,15 @@ class EddyGuards(Base):
                 self.assertIn("refusing --into-tab %s" % tab, p.stderr)
                 self.assertFalse(any(c.startswith("agent start ") for c in self.herdr_calls()), self.herdr_calls())
 
+    def test_start_with_new_tab_skips_the_team_tab_guard(self):
+        # The guard (bin/eddy-start:157) tests only --into-tab, so --new-tab never meets it. This test bites
+        # on a regression that makes the guard refuse --new-tab.
+        self.team_config(envoy_tab="w1:tE", orchestrator_tab="w1:tO")
+        p = self.run_script("eddy-start", "scout", "investigator", "--new-tab", "--cwd", self.proj,
+                            env_extra=self.bar_env("Opus 5.5", cwd=self.proj))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(any(c.startswith("agent start ") for c in self.herdr_calls()), self.herdr_calls())
+
     def test_slice_prefixes_the_branch_once(self):
         d = os.path.join(self.proj, ".claude", "team")
         os.makedirs(d)
@@ -3717,6 +3728,27 @@ class Coexist(Base):
                 self.assertTrue(skills)
                 for skill in skills:
                     self.assertTrue(skill.startswith(("eddy-", "project-")), skill)
+
+
+class EddyBranchText(unittest.TestCase):
+    """The envoy skill carries two lines that the branch feature rests on."""
+
+    def envoy_skill(self):
+        return read_text(os.path.join(ROOT, "skills", "eddy-role-envoy", "SKILL.md"))
+
+    def test_envoy_skill_forbids_the_branch_command(self):
+        self.assertIn("Never run `/branch` or `--fork-session` in the envoy.", self.envoy_skill())
+
+    def test_envoy_skill_records_before_it_folds(self):
+        self.assertIn("Never fold before `decide`.", self.envoy_skill())
+
+    def test_orchestration_skill_keeps_the_branch_tools_for_envoy_and_discussant(self):
+        text = read_text(os.path.join(ROOT, "skills", "eddy-orchestration", "SKILL.md"))
+        self.assertIn(
+            "The five branch tools (`branch_open`, `branch_note`, `branch_mode`, `branch_settle`, `branch_close`) "
+            "belong to the envoy and the discussant, never to a worker.",
+            text,
+        )
 
 
 if __name__ == "__main__":

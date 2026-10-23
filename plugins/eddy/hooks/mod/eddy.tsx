@@ -1,9 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
-import type { TeamAgentRow, TeamCard, TeamPlan } from '../../types'
+import type { EddyBranchMode, EddyNewsHold, TeamAgentRow, TeamCard, TeamPlan } from '../../types'
 import { activeConfig, envoyConfig, noteClear, sessionRole } from './activation'
 import type { TeamConfig } from './activation'
 import { badgeText, freshStall, freshUrgent, pickStatus, stallIds, TOAST_MS, toastText } from './badge'
+import { paneDecideGuard, paneDropPrompt, paneFill, paneOnTurnComplete } from './branch-pane'
+import {
+  BRANCH_CLOSE_SPEC, BRANCH_MODE_SPEC, BRANCH_NOTE_SPEC, BRANCH_OPEN_SPEC, BRANCH_SETTLE_SPEC, branchCloseTool,
+  branchModeTool, branchNoteTool, branchOpenTool, branchSettleTool, branchStatus, openBranch,
+} from './branches'
 import { BRIEF_TOOL, BRIEF_TOOL_SPEC, briefSend } from './brief'
 import { denyText, eddyActive, teamToolCalls } from './coexist'
 import { logReceived } from './inbox'
@@ -11,6 +16,7 @@ import { readJson, writeJson } from './io'
 import type { Io } from './io'
 import { bySession, herdrAgents, herdrFocus } from './herdr'
 import type { HerdrListing } from './herdr'
+import { newsHolds } from './holds'
 import { closeHides, drawPane, drawQuestions, hiddenKey, pruneExpanded, QUESTIONS_PANE, EDDY_PANE } from './pane'
 import { mainCheckout, runDir, teamDir } from './paths'
 import { parsePlan } from './plan'
@@ -47,6 +53,8 @@ const planPath = atom({ plugin: 'eddy', key: 'planPath' } as const, '')
 const tickAt = atom({ plugin: 'eddy', key: 'tickAt' } as const, '')
 const version = atom({ plugin: 'eddy', key: 'version' } as const, '')
 const error = atom({ plugin: 'eddy', key: 'error' } as const, '')
+const branch = atom({ plugin: 'eddy', key: 'branch' } as const, null as { id: string; card: string; mode: EddyBranchMode } | null)
+const holds = atom({ plugin: 'eddy', key: 'holds' } as const, { list: [], waiting: 0 } as { list: EddyNewsHold[]; waiting: number })
 // One tick loop per module: a second session.start replaces it, never adds one.
 let tickTimer: Timer | null = null
 // True while a tick runs: a tick that finds it set returns at once.
@@ -59,6 +67,10 @@ let retryLines: string[] = []
 let sendsInFlight = 0
 // The status text this module set last; null until a session sets one, so its first tick always sets the line.
 let lastBadge: string | undefined | null = null
+// The three claimants of the status line as the last tick saw them, and how many news items the last push held
+// back. The push runs after the status is set, so a changed count sets the line once more.
+let claims: { notSent: string | undefined; urgent: string | undefined; stall: string | undefined } | null = null
+let heldWaiting = 0
 
 // The main checkout, resolved once per session root: the 15 s tick must not spawn git every time.
 // Keyed by the session root, which moves on a /cd. A git that could not run is not cached.
@@ -144,6 +156,13 @@ function makeIo($: EngineInterface): Io {
         return (await $.prompt.read()).text
       } catch {
         return ''
+      }
+    },
+    messages: async () => {
+      try {
+        return await $.session.messages()
+      } catch {
+        return []
       }
     },
     pluginRoot: $.plugin.root,
@@ -301,6 +320,8 @@ export const testing = {
     sendsInFlight = 0
     ticking = false
     lastBadge = null
+    claims = null
+    heldWaiting = 0
     clearResetState()
   },
   retryLines: () => [...retryLines],
@@ -348,13 +369,27 @@ async function envoyHalf(
     workers: stallWorkers(records, rows, idleRows.briefed, myId),
     orchestrator,
   })
-  const stalled = await urgentBadge($, io, teamdir, found, stall)
-  if (!canPush) return
+  // An open branch marks its card in the Questions tab; every hold in force shows on the status line.
+  const open = await openBranch(io, teamdir)
+  await update($, branch, () => (open ? { id: open.id, card: open.card, mode: open.mode } : null))
+  const held = await newsHolds(io)
+  if (held.length === 0) heldWaiting = 0
+  const stalled = await urgentBadge($, io, teamdir, found, stall, held)
+  if (!canPush) {
+    await update($, holds, () => ({ list: held, waiting: 0 }))
+    return
+  }
+  await paneFill(io, text => $.prompt.fill({ text }).then(r => r.isFilled))
   const input = await gatherInput(io, {
     run, cfg, teamdir, records, rows, listed, cards: found, plan: parsed, stalled, myId,
-    now: await $.clock.now(), dialogs: stale.dialogs,
+    now: await $.clock.now(), dialogs: stale.dialogs, holds: held,
   })
-  await pushNextAction(io, teamdir, input)
+  const waiting = await pushNextAction(io, teamdir, input)
+  await update($, holds, () => ({ list: held, waiting }))
+  if (waiting !== heldWaiting) {
+    heldWaiting = waiting
+    if (claims) await setStatus($, pickStatus(claims.notSent, claims.urgent, claims.stall, held.map(h => h.label), waiting))
+  }
 }
 
 /**
@@ -366,7 +401,7 @@ async function envoyHalf(
  * the stall line and toast. The next-action trigger T4 reads this flag, not `stall` itself.
  */
 async function urgentBadge(
-  $: EngineInterface, io: Io, teamdir: string, found: TeamCard[], stall: string[] | null,
+  $: EngineInterface, io: Io, teamdir: string, found: TeamCard[], stall: string[] | null, held: EddyNewsHold[],
 ): Promise<boolean> {
   await update($, urgent, () => found.filter(c => c.urgent && (c.status === 'open' || c.status === 'assumed')).length)
   const marksPath = `${teamdir}/toasted.json`
@@ -374,7 +409,8 @@ async function urgentBadge(
   const fresh = freshUrgent(found, read)
   const waiting = freshStall(stall, found.some(c => c.status === 'open'), fresh.seen, await $.clock.now())
   const notSent = lastBadge?.startsWith(NOT_SENT) ? lastBadge : undefined
-  await setStatus($, pickStatus(notSent, badgeText(found), waiting.text))
+  claims = { notSent, urgent: badgeText(found), stall: waiting.text }
+  await setStatus($, pickStatus(claims.notSent, claims.urgent, claims.stall, held.map(h => h.label), heldWaiting))
   for (const c of fresh.toast) await $.ui.toast(toastText(c), { timeoutMs: TOAST_MS })
   if (waiting.toast !== undefined) await $.ui.toast(waiting.toast, { timeoutMs: TOAST_MS })
   await writeJson(io, marksPath, waiting.seen)
@@ -421,6 +457,8 @@ export const register: Register = on => {
     const io = makeIo($)
     await $.env.set('EDDY_SESSION_ID', await $.session.id())
     lastBadge = null
+    claims = null
+    heldWaiting = 0
     resetNextAction()
     resetHolds()
     clearResetState()
@@ -432,6 +470,12 @@ export const register: Register = on => {
       name: 'eddy-envoy',
       description: 'Make this session the envoy of the live eddy run; starts a new orchestrator if its session is gone',
     })
+    await $.command.register({ name: 'eddy-branch', description: 'Show the open card branch' })
+    await $.tool.register(BRANCH_OPEN_SPEC)
+    await $.tool.register(BRANCH_NOTE_SPEC)
+    await $.tool.register(BRANCH_MODE_SPEC)
+    await $.tool.register(BRANCH_SETTLE_SPEC)
+    await $.tool.register(BRANCH_CLOSE_SPEC)
     await $.tool.register(BRIEF_TOOL_SPEC)
     await $.tool.register(RESET_TOOL_SPEC)
     await $.tool.register(ASK_TOOL_SPEC)
@@ -457,6 +501,13 @@ export const register: Register = on => {
   // Every compact of the orchestrator carries the handover instructions, Claude Code's own auto-compact too.
   // A subagent's compact (`agentId`) and a `precompute` (nothing installed) are left alone.
   on('session.compact', async ($, e, next) => {
+    // An open branch lives in the envoy transcript: a compact the human or a plugin starts would lose its rows.
+    // An auto compact passes, because a veto there could stall the envoy; a precompute installs nothing.
+    if (e.agentId === undefined && (e.trigger === 'manual' || e.trigger === 'plugin')) {
+      const io = makeIo($)
+      const open = (await envoyConfig(io)) ? await openBranch(io, await teamDir(io)) : null
+      if (open) return { skip: `An eddy branch is open (${open.id} on ${open.card}): settle it or drop it first.` }
+    }
     if (e.agentId !== undefined || !(await activeConfig(makeIo($)))) return next(e)
     const done = await next({ ...e, instructions: withHandoverInstructions(e.instructions) })
     if (done.skip === undefined && e.trigger !== 'precompute') onCompacted()
@@ -498,11 +549,26 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       noteTurnEnd()
       noteMainTurn(false)
+      await paneOnTurnComplete(makeIo($))
     }
     return next(e)
   })
 
-  on('tool.call', { tool: 'mcp__eddy__decide' }, async ($, e) => decideTool(makeIo($), e))
+  on('prompt.submit', async ($, e, next) => {
+    const drop = await paneDropPrompt(makeIo($), e)
+    return drop === null ? next(e) : { drop }
+  })
+
+  on('tool.call', { tool: 'mcp__eddy__decide' }, async ($, e) => {
+    const io = makeIo($)
+    return (await paneDecideGuard(io)) ?? decideTool(io, e)
+  })
+
+  on('tool.call', { tool: 'mcp__eddy__branch_open' }, async ($, e) => branchOpenTool(makeIo($), e))
+  on('tool.call', { tool: 'mcp__eddy__branch_note' }, async ($, e) => branchNoteTool(makeIo($), e))
+  on('tool.call', { tool: 'mcp__eddy__branch_mode' }, async ($, e) => branchModeTool(makeIo($), e))
+  on('tool.call', { tool: 'mcp__eddy__branch_settle' }, async () => branchSettleTool())
+  on('tool.call', { tool: 'mcp__eddy__branch_close' }, async ($, e) => branchCloseTool(makeIo($), e))
 
   on('tool.call', { tool: 'mcp__eddy__relay' }, async ($, e) => relayTool(makeIo($), e))
 
@@ -535,6 +601,8 @@ export const register: Register = on => {
     return { text: 'Eddy overview shown.' }
   })
 
+  on('command.run', { command: 'eddy-branch' }, async $ => ({ text: await branchStatus(makeIo($)) }))
+
   // The tabs open on the next tick, which finds the envoy role new to this session.
   on('command.run', { command: 'eddy-envoy' }, async $ => {
     const text = await reattach(makeIo($))
@@ -564,6 +632,7 @@ export const register: Register = on => {
       teamId: (await envoyConfig(makeIo($)))?.team_id ?? '',
       expanded: live,
       columns: e.props.bodyColumns,
+      discussing: await read($, branch),
       toggle: id => update($, expanded, ids => (ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id])),
     })
   })

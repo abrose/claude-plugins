@@ -1,4 +1,4 @@
-import type { TeamCard, TeamPlan } from '../../types'
+import type { EddyNewsHold, TeamCard, TeamPlan } from '../../types'
 import { queueGroups } from './cards'
 import { normalizeDialog, samePrompt } from './herdr'
 
@@ -33,6 +33,8 @@ export type NextActionInput = {
   stalled: boolean
   /** The last auto-mode denial of each agent: `.eddy/denials/<name>.json`. */
   denials: { name: string; tool: string; at: number }[]
+  /** The holds in force now (an open branch, later a pinned card). Absent means none. */
+  holds?: EddyNewsHold[]
   now: number
 }
 

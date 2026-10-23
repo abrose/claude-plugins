@@ -38,11 +38,11 @@ describe('the team mod tools in an eddy session', () => {
 })
 
 describe('names the engine and the human see', () => {
-  test('registers the commands eddy-overview and eddy-envoy', async ($, on) => {
+  test('registers the commands eddy-overview, eddy-envoy and eddy-branch', async ($, on) => {
     const w = world(on)
     await start($)
 
-    expect(w.commands).toEqual(['eddy-overview', 'eddy-envoy'])
+    expect(w.commands).toEqual(['eddy-overview', 'eddy-envoy', 'eddy-branch'])
   })
 
   test('eddy-overview outside an eddy run says no eddy run', async ($, on) => {

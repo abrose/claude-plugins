@@ -153,6 +153,8 @@ export type QuestionsView = {
   ascii?: boolean
   /** Cells across the pane body (`bodyColumns`). The headline is cut to fit; absent means no cut. */
   columns?: number
+  /** The card an open branch discusses, with its mode: its headline says so. */
+  discussing?: { card: string; mode: string } | null
 }
 
 /** The marker, a space and the status glyph that open a headline: each glyph is one column (live check, 40 columns). */
@@ -167,19 +169,21 @@ export function cutTail(text: string, room: number | undefined): string {
 
 /** The question log: every card newest first, one collapsible row each. Enter or a click expands the full card. */
 export function drawQuestions({ Box, Text, Button }: Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>,
-  { cards, teamId, expanded, toggle, ascii = ASCII_GLYPHS, columns }: QuestionsView,
+  { cards, teamId, expanded, toggle, ascii = ASCII_GLYPHS, columns, discussing }: QuestionsView,
 ) {
   const waiting = (c: TeamCard) => c.urgent && (c.status === 'open' || c.status === 'assumed')
   const status = (c: TeamCard) => (waiting(c) ? CARD_GLYPH.urgent : CARD_GLYPH.status[c.status])
   const glyph = (g: { glyph: string; ascii: string }) => (ascii ? g.ascii : g.glyph)
+  // The mark sits after the cut question, so a narrow pane cuts the question and keeps the mark.
+  const mark = (c: TeamCard) => (discussing?.card === c.id ? ` · in discussion (${discussing.mode})` : '')
   const headline = (c: TeamCard, open: boolean) => (
     <Text wrap="truncate-end" dimColor={status(c).dim}>
       {glyph(CARD_GLYPH.expand[open ? 'open' : 'collapsed'])} <Text color={status(c).color}>{glyph(status(c))}</Text>
       {cutTail(
         ` ${c.id}${c.decision === undefined ? '' : ` #${c.decision}`} ${glyph(CARD_GLYPH.door[c.door])} `
           + `${cardSource(c, teamId)}: ${c.question}`,
-        columns === undefined ? undefined : columns - HEAD_COLUMNS,
-      )}
+        columns === undefined ? undefined : columns - HEAD_COLUMNS - Array.from(mark(c)).length,
+      )}{mark(c)}
     </Text>
   )
   const lines = (c: TeamCard) => [

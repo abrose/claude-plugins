@@ -1,12 +1,13 @@
-import type { TeamAgentRow, TeamCard, TeamPlan } from '../../types'
+import type { EddyNewsHold, TeamAgentRow, TeamCard, TeamPlan } from '../../types'
 import type { TeamConfig } from './activation'
 import { readDenials } from './denial'
 import { bySession, herdrDialog } from './herdr'
 import type { HerdrListing } from './herdr'
+import { newsHolds, passedNews } from './holds'
 import { readJson, writeJson } from './io'
 import type { Io } from './io'
 import {
-  carryDialogs, changeList, draftHeld, nextActionDue, nextActionPrompt, nextActionView, triggersOf,
+  carryDialogs, changeList, draftHeld, nextActionBlock, nextActionDue, nextActionPrompt, nextActionView, triggersOf,
 } from './next-action'
 import type { DraftMark, NextActionInput, NextActionMarks, NextActionSnapshot } from './next-action'
 import type { TeamRecord } from './tick'
@@ -56,6 +57,8 @@ export async function gatherInput(io: Io, from: {
   now: number
   /** Dialogs this tick already read, pane to text: a blocked agent in it is not read again. */
   dialogs?: Map<string, string>
+  /** The holds in force now (`newsHolds`). */
+  holds?: EddyNewsHold[]
 }): Promise<NextActionInput> {
   const agents: NextActionInput['agents'] = []
   const filers: NextActionInput['filers'] = []
@@ -83,6 +86,7 @@ export async function gatherInput(io: Io, from: {
     orchestratorGone: from.listed.ok && !!orchestrator && !bySession(from.listed.agents).has(orchestrator),
     stalled: from.stalled,
     denials: (await readDenials(io, from.teamdir)).map(d => ({ name: d.name, tool: d.tool, at: d.at })),
+    holds: from.holds ?? [],
     now: from.now,
   }
 }
@@ -92,15 +96,17 @@ export async function gatherInput(io: Io, from: {
  * keep the burst and the draft marks, and submit a NEXT-ACTION prompt when one is due and the envoy is idle
  * and its prompt box holds no draft (an urgent message waits only for a draft that still changes). The marks
  * are written as sent before the submit; a rejected submit puts them back, so the next tick tries again.
+ * Returns how many changes wait behind a hold (0 when no hold is in force). A message that passes a hold tells
+ * the passing news only; the count then holds the changes that stay.
  */
-export async function pushNextAction(io: Io, teamdir: string, input: NextActionInput): Promise<void> {
+export async function pushNextAction(io: Io, teamdir: string, input: NextActionInput): Promise<number> {
   const fromInput = nextActionView(input)
   lastView = { key: fromInput.key, snapshot: fromInput.snapshot }
   const path = marksPath(teamdir)
   const read = await readJson<unknown>(io, path)
   if (!isStored(read)) {
     await writeJson(io, path, { key: fromInput.key, snapshot: fromInput.snapshot, pending: null, draft: null } satisfies Stored)
-    return
+    return 0
   }
   // A failed dialog read must not store an empty dialog: it would match any later prompt of that worker.
   const view = { ...fromInput, snapshot: carryDialogs(fromInput.snapshot, read.snapshot) }
@@ -113,20 +119,59 @@ export async function pushNextAction(io: Io, teamdir: string, input: NextActionI
   const kept: Stored = {
     key: stored.key, snapshot: carryDialogs(stored.snapshot, view.snapshot), pending: due.pending, draft: draft.mark,
   }
-  if (!due.due || isBusy(input.now) || draft.held) {
+  // A hold keeps the message back, with its burst marks, unless the change is one of the three kinds that pass
+  // (decision 26). A message that passes tells only those changes: the snapshot it leaves behind (`sent`) holds
+  // them alone, so every other change stays a change and goes out in the one message after the last hold lifts.
+  const holding = (input.holds?.length ?? 0) > 0
+  const passed = holding ? passedNews(stored.snapshot, view.snapshot, input.cards) : null
+  if (!due.due || isBusy(input.now) || draft.held || (holding && passed === null)) {
     if (JSON.stringify(kept) !== JSON.stringify(stored)) await writeJson(io, path, kept)
-    return
+    return holding ? changeList(stored.snapshot, input).length : 0
   }
-  const text = nextActionPrompt(view.block, changeList(stored.snapshot, input))
-  await writeJson(io, path, { key: view.key, snapshot: view.snapshot, pending: null, draft: draft.mark } satisfies Stored)
+  const sent = passed ?? view.snapshot
+  const changes = changeList(stored.snapshot, input)
+  const held = passed === null ? [] : changeList(passed, input)
+  // The lines of the changes that wait come off the list one by one (a line can repeat).
+  const told = [...changes]
+  for (const line of held) {
+    const at = told.indexOf(line)
+    if (at >= 0) told.splice(at, 1)
+  }
+  // The block of a partial message names the passing cards only: a held card stays out of it, or the envoy would
+  // tell it mid-branch. The block after the last hold lifts lists every card as before.
+  const block = passed === null
+    ? view.block
+    : nextActionBlock({ ...input, cards: input.cards.filter(c => c.status !== 'open' || passed.open.includes(c.id)) })
+  const text = nextActionPrompt(block, told)
+  // The key stays the old one while news waits: the waiting change must still count as due once the hold lifts.
+  const key = passed === null ? view.key : stored.key
+  await writeJson(io, path, { key, snapshot: sent, pending: null, draft: draft.mark } satisfies Stored)
   // Not awaited: the submit settles whenever the session takes the prompt, and a tick must end before that.
   void io.submit(text).catch(() => writeJson(io, path, kept).catch(() => undefined))
+  return held.length
 }
 
-/** A `queue` call showed the human's cards to the envoy: the state of the last tick counts as sent. */
+/**
+ * A `queue` call showed the human's cards to the envoy: the state of the last tick counts as sent. While a hold is
+ * in force it counts for the cards alone (the ids the envoy saw); every other held change stays a change against the
+ * stored snapshot, and the stored key stays, so the one message after the last hold lifts still tells them.
+ */
 export async function markShown(io: Io, teamdir: string): Promise<void> {
   if (lastView === null) return
   const read = await readJson<unknown>(io, marksPath(teamdir))
   if (!isStored(read)) return
-  await writeJson(io, marksPath(teamdir), { ...read, key: lastView.key, snapshot: lastView.snapshot, pending: null })
+  if ((await newsHolds(io)).length === 0) {
+    await writeJson(io, marksPath(teamdir), { ...read, key: lastView.key, snapshot: lastView.snapshot, pending: null })
+    return
+  }
+  const seen = lastView.snapshot
+  const both = (a: string[], b: string[]) => [...a, ...b.filter(id => !a.includes(id))]
+  const snapshot: NextActionSnapshot = {
+    ...read.snapshot,
+    open: both(read.snapshot.open, seen.open),
+    parked: both(read.snapshot.parked, seen.parked),
+    urgent: seen.urgent,
+    linked: seen.linked,
+  }
+  await writeJson(io, marksPath(teamdir), { ...read, snapshot })
 }

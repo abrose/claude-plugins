@@ -61,10 +61,19 @@ export function stallIds(input: StallInput): string[] | null {
 
 /**
  * The one status line has three claimants, in this order: a `prompt not sent` error (`notSent`, the line
- * as it shows now when it is one), the urgent badge, the stall text.
+ * as it shows now when it is one), the urgent badge, the stall text. The error stands alone. The other two
+ * give one part; a hold adds its part after it (`holds`, one label each), and `waiting` news adds
+ * `<k> news wait` last. The parts join with " · ": one status line per plugin, so parts join, never replace.
  */
-export const pickStatus = (notSent: string | undefined, urgent: string | undefined, stall: string | undefined) =>
-  notSent ?? urgent ?? stall
+export function pickStatus(
+  notSent: string | undefined, urgent: string | undefined, stall: string | undefined,
+  holds: string[] = [], waiting = 0,
+): string | undefined {
+  if (notSent !== undefined) return notSent
+  const lead = urgent ?? stall
+  const parts = [...(lead === undefined ? [] : [lead]), ...holds, ...(holds.length > 0 && waiting > 0 ? [`${waiting} news wait`] : [])]
+  return parts.length > 0 ? parts.join(' · ') : undefined
+}
 
 export const stallText = (ids: string[]) => `run waits on you: ${ids.length} open (${ids.join(', ')})`
 

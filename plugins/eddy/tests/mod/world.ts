@@ -84,6 +84,12 @@ export type World = {
   closed: string[]
   /** The names of the commands the plugin registered, in order. */
   commands: string[]
+  /** What `$.session.messages()` answers: the transcript rows of the main conversation. */
+  messages: { role: 'user' | 'assistant'; text: string; toolUses: unknown[]; toolResults?: unknown[] }[]
+  /** The text of each `$.prompt.fill` that the box took, in order. */
+  filled: string[]
+  /** The next `$.prompt.fill` answers `isFilled: false`, once. */
+  fillFails: boolean
   clock: ReturnType<typeof mock.clock>
   write: (path: string, text: string, mtimeMs?: number) => void
   writeJson: (path: string, value: unknown, mtimeMs?: number) => void
@@ -245,6 +251,9 @@ export function world(on: On): World {
     opened: [],
     closed: [],
     commands: [],
+    messages: [],
+    filled: [],
+    fillFails: false,
     clock,
     write: (path, text, mtimeMs) => w.files.set(path, { text, mtimeMs: mtimeMs ?? clock.now() }),
     writeJson: (path, value, mtimeMs) => w.write(path, JSON.stringify(value), mtimeMs),
@@ -370,6 +379,12 @@ export function world(on: On): World {
       const hold = w.holdReleases.shift()
       return hold ? hold.then(answer) : answer()
     }
+    if (bin.endsWith('/bin/eddy-branch')) {
+      // Stands for the script: it starts a discussant for the branch and prints its name, pane and session.
+      const failure = w.fails.get('eddy-branch')
+      if (failure) return out('', 1, failure)
+      return out(JSON.stringify({ name: `b${(argv[1] ?? '').replace('B-', '')}-1`, pane: 'w1:p30', session: 'sid-b1-1' }))
+    }
     if (bin.endsWith('/bin/eddy-orch-start')) {
       // Stands for eddy-start in a new tab, then the config writes of the real script.
       const failure = w.fails.get('eddy-orch-start')
@@ -421,6 +436,15 @@ export function world(on: On): World {
     return hold ? hold.then(() => ({ text: e.text })) : { text: e.text }
   })
   on('prompt.read', () => ({ value: { text: w.draft, cursor: w.draft.length } }))
+  on('prompt.fill', ($, e) => {
+    if (w.fillFails) {
+      w.fillFails = false
+      return { isFilled: false }
+    }
+    w.filled.push(e.text)
+    return { isFilled: true }
+  })
+  on('session.messages', () => ({ value: w.messages as never }))
   // The engine's bottoms of the turn events and of the auto-mode denial: the plugin under test sits above them.
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))

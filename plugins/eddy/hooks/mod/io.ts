@@ -2,6 +2,14 @@ export type RunResult = { exitCode: number; stdout: string; stderr: string }
 
 export type ToolResult = { result: string; isError?: true }
 
+/** One row of the transcript, as much of `SessionMessage` as the mod reads. */
+export type TranscriptRow = {
+  role: 'user' | 'assistant'
+  text: string
+  toolUses?: readonly { text?: string }[]
+  toolResults?: readonly { text?: string }[]
+}
+
 /** Everything the mod's logic needs from the engine, built over `$` in eddy.tsx. */
 export type Io = {
   sessionId: () => Promise<string>
@@ -26,6 +34,8 @@ export type Io = {
   submit: (text: string) => Promise<unknown>
   /** The draft in the prompt box; '' where there is none or the read fails. */
   draft: () => Promise<string>
+  /** The rows of the main conversation; [] where the read fails. */
+  messages: () => Promise<TranscriptRow[]>
   pluginRoot: string
 }
 
