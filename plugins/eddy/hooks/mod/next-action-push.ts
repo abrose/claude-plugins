@@ -138,10 +138,13 @@ export async function pushNextAction(io: Io, teamdir: string, input: NextActionI
     if (at >= 0) told.splice(at, 1)
   }
   // The block of a partial message names the passing cards only: a held card stays out of it, or the envoy would
-  // tell it mid-branch. The block after the last hold lifts lists every card as before.
-  const block = passed === null
-    ? view.block
-    : nextActionBlock({ ...input, cards: input.cards.filter(c => c.status !== 'open' || passed.open.includes(c.id)) })
+  // tell it mid-branch. An open card stays when it passes (`passed.open`), a parked one when an earlier message
+  // told it (`passed.parked`). Today the block reads open cards only, so the parked rule is a guard for a block that
+  // lists parked cards one day. The block after the last hold lifts lists every card as before.
+  const shown = (c: TeamCard) => c.status === 'open'
+    ? passed?.open.includes(c.id)
+    : c.status !== 'assumed' || passed?.parked.includes(c.id)
+  const block = passed === null ? view.block : nextActionBlock({ ...input, cards: input.cards.filter(shown) })
   const text = nextActionPrompt(block, told)
   // The key stays the old one while news waits: the waiting change must still count as due once the hold lifts.
   const key = passed === null ? view.key : stored.key

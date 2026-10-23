@@ -4,6 +4,7 @@ import type { EddyBranchMode, EddyNewsHold, TeamAgentRow, TeamCard, TeamPlan } f
 import { activeConfig, envoyConfig, noteClear, sessionRole } from './activation'
 import type { TeamConfig } from './activation'
 import { badgeText, freshStall, freshUrgent, pickStatus, stallIds, TOAST_MS, toastText } from './badge'
+import { snapshotOnAutoCompact } from './branch-fold'
 import { paneDecideGuard, paneDropPrompt, paneFill, paneOnTurnComplete } from './branch-pane'
 import {
   BRANCH_CLOSE_SPEC, BRANCH_MODE_SPEC, BRANCH_NOTE_SPEC, BRANCH_OPEN_SPEC, BRANCH_SETTLE_SPEC, branchCloseTool,
@@ -508,9 +509,31 @@ export const register: Register = on => {
       const open = (await envoyConfig(io)) ? await openBranch(io, await teamDir(io)) : null
       if (open) return { skip: `An eddy branch is open (${open.id} on ${open.card}): settle it or drop it first.` }
     }
-    if (e.agentId !== undefined || !(await activeConfig(makeIo($)))) return next(e)
-    const done = await next({ ...e, instructions: withHandoverInstructions(e.instructions) })
-    if (done.skip === undefined && e.trigger !== 'precompute') onCompacted()
+    // An auto compact passes, but the rows of an open fold branch go into its record first. A veto further down
+    // (the compact does not happen) puts the record back as it was. The snapshot is new IO on a path that runs near
+    // the context limit: a failure there must never stop the compact, so the record stays as it was and the compact goes on.
+    let undo: (() => Promise<void>) | null = null
+    if (e.agentId === undefined && e.trigger === 'auto') {
+      try {
+        const io = makeIo($)
+        undo = (await envoyConfig(io)) ? await snapshotOnAutoCompact(io, e.messages) : null
+      } catch {
+        undo = null
+      }
+    }
+    const carriesHandover = e.agentId === undefined && !!(await activeConfig(makeIo($)))
+    let done: Awaited<ReturnType<typeof next>>
+    try {
+      done = carriesHandover
+        ? await next({ ...e, instructions: withHandoverInstructions(e.instructions) })
+        : await next(e)
+    } catch (err) {
+      // A compact that throws did not happen either: the rows stay in the transcript, so the record goes back.
+      await undo?.().catch(() => undefined)
+      throw err
+    }
+    if (done.skip !== undefined && undo) await undo().catch(() => undefined)
+    if (carriesHandover && done.skip === undefined && e.trigger !== 'precompute') onCompacted()
     return done
   })
 

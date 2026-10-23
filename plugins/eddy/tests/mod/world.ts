@@ -43,6 +43,8 @@ export type World = {
   draft: string
   /** The next prompt.submit calls each wait on one of these, in order: it is recorded in `submits` at once, answers when the promise settles. */
   holdSubmits: Promise<void>[]
+  /** `$.session.messages()` throws while this is true. */
+  messagesFail: boolean
   /** The next `herdr agent list` waits on this, once: it holds a tick open. */
   holdList: Promise<void> | null
   /** The next eddy-release calls each wait on one of these, in order: the call is recorded in `runs` at once, answers when the promise settles. */
@@ -235,6 +237,7 @@ export function world(on: On): World {
     pluginJson: null,
     dirs: new Set(),
     raceMkdir: new Set(),
+    messagesFail: false,
     statuses: [],
     toasts: [],
     toastMs: [],
@@ -351,6 +354,12 @@ export function world(on: On): World {
       w.dirs.add(p)
       return out('')
     }
+    if (bin === 'rmdir') {
+      // An empty directory made with mkdir: it goes, or the call fails like the real one.
+      const p = argv[argv.length - 1] ?? ''
+      if (!w.dirs.delete(p)) return out('', 1, `rmdir: ${p}: No such file or directory`)
+      return out('')
+    }
     if (bin.endsWith('/bin/eddy-brief')) {
       return out(`Read scratchpad/eddy/current/brief-${argv[2]}-${argv[4]}.md and execute it fully.\n`)
     }
@@ -444,7 +453,10 @@ export function world(on: On): World {
     w.filled.push(e.text)
     return { isFilled: true }
   })
-  on('session.messages', () => ({ value: w.messages as never }))
+  on('session.messages', () => {
+    if (w.messagesFail) throw new Error('transcript refused')
+    return { value: w.messages as never }
+  })
   // The engine's bottoms of the turn events and of the auto-mode denial: the plugin under test sits above them.
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))

@@ -13,6 +13,8 @@ const ORCH = { pane_id: 'w1:p1', agent_status: 'idle', agent_session: { value: '
 const scout = (state = 'idle') => ({ pane_id: 'w1:p2', agent_status: state, agent_session: { value: 'sid-scout' } })
 const MESSAGES = [{ role: 'user' as const, text: 'summary', toolUses: [] }]
 const branchPath = (w: { team: string }, id = 'B-1') => `${w.team}/branches/${id}.json`
+const openIds = (w: any): string[] => [...w.files.keys()].filter(p => /\/branches\/B-\d+\.json$/.test(p))
+  .filter(p => w.json(p).state === 'open')
 
 /** An envoy session with the orchestrator and the scout idle in herdr and card Q-3 open, one tick past its baseline. */
 async function envoyWithCard($: any, on: any) {
@@ -120,7 +122,41 @@ describe('branch_open', () => {
       .filter(p => w.json(p).state === 'open')
     expect(opened).toHaveLength(1)
     const refused = [a, b].find(r => r.isError)!
-    expect(refused.result).toContain(w.json(opened[0]!).id)
+    // The loser meets the lock, and the winner's record may not be written yet: it names the winner or the lock.
+    expect(refused.result).toMatch(new RegExp(`${w.json(opened[0]!).id} is already open|another branch_open is running`))
+  })
+
+  // The lock is `branches/open`, taken by a mkdir (it fails when the path exists). The fakes settle the awaits of
+  // two parallel calls in lockstep, so they cannot make call B claim and re-check before call A writes (the order
+  // of the T4 re-test, section 4). This test pins the lock itself: whoever finds it taken opens nothing.
+  test('branch_open takes a lock that stays until every close path lets it go', async ($, on) => {
+    const w = await envoyWithCard($, on)
+    fileCard(w, 4)
+    const lock = `${w.team}/branches/open`
+
+    w.raceMkdir.add(lock)
+    const refused = await call($, 'branch_open', { card: 'Q-3', mode: 'fold' })
+    expect(refused.isError).toBe(true)
+    // A lock left over by a crash is cleared by hand: the refusal names the path and the step.
+    expect(refused.result).toContain('another branch_open is running, or a lock is left over')
+    expect(refused.result).toContain(`remove the empty directory ${lock}`)
+    expect([...w.files.keys()].filter(p => /\/branches\/B-\d+\.json$/.test(p))).toEqual([])
+    w.raceMkdir.delete(lock)
+    w.dirs.delete(lock)
+
+    expect((await call($, 'branch_open', { card: 'Q-3', mode: 'fold' })).isError).toBeUndefined()
+    expect(w.dirs.has(lock)).toBe(true)
+    expect((await call($, 'branch_open', { card: 'Q-4', mode: 'fold' })).isError).toBe(true)
+
+    await call($, 'branch_close', { id: 'B-1', outcome: 'dropped' })
+    expect(w.dirs.has(lock)).toBe(false)
+    expect((await call($, 'branch_open', { card: 'Q-4', mode: 'fold' })).isError).toBeUndefined()
+    expect(w.dirs.has(lock)).toBe(true)
+
+    fileCard(w, 4, { status: 'answered', decision: 1 })
+    await call($, 'branch_close', { id: 'B-2', outcome: 'settled', summary: 'fine' })
+    expect(w.dirs.has(lock)).toBe(false)
+    expect(openIds(w)).toEqual([])
   })
 
   test('branch_open refuses a card that is answered or obsolete', async ($, on) => {
@@ -405,6 +441,21 @@ describe('the hold of news while a branch is open', () => {
     await ticks(w, 3)
     expect(pushes(w)).toHaveLength(2)
     expect(pushes(w)[1]).toContain('Q-4')
+  })
+
+  test('a passing message names no held parked card', async ($, on) => {
+    const w = await openFold($, on)
+    // A new parked (assumed) card is held like any two-way card; the one-way card passes. Neither the block nor the
+    // change list of the passing message may name the held one. (Today the block reads open cards only, so this
+    // test also passes without the parked rule of the filter: it pins the outcome, not the filter.)
+    fileCard(w, 4, { status: 'assumed', door: 'two-way', urgent: false })
+    fileCard(w, 5, { door: 'one-way', urgent: false })
+    await ticks(w, 3)
+
+    expect(pushes(w)).toHaveLength(1)
+    const text = pushes(w)[0]!
+    expect(text).toContain('Q-5')
+    expect(text).not.toContain('Q-4')
   })
 
   test('a queue call during a branch keeps the held news due', async ($, on) => {

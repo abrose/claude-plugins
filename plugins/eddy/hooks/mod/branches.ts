@@ -1,6 +1,6 @@
-import type { EddyBranch, EddyBranchMode, EddyBranchRow } from '../../types'
+import type { EddyBranch, EddyBranchMode, EddyBranchRow, TeamCard } from '../../types'
 import { envoyConfig } from './activation'
-import { foldHome, foldOpenText } from './branch-fold'
+import { foldCloseHint, foldHome, foldMarkerSeen, foldOpenText } from './branch-fold'
 import { paneHome } from './branch-pane'
 import { envoyOnly } from './decide'
 import { readJson, writeJson } from './io'
@@ -17,18 +17,21 @@ export type Refusal = { refused: string }
 /**
  * One mode of a branch (its home). Each method answers a refusal or a value (plan 5.4):
  * `busy` null when the branch may move, `collect` the rows the home holds, `enter` the new owner and the text
- * the caller reads, `leave` null when the old home let go.
+ * the caller reads, `leave` null when the old home let go. Each gets the `Io` of the caller.
  */
 export type BranchHome = {
-  busy: (rec: EddyBranch) => Promise<Refusal | null>
-  collect: (rec: EddyBranch) => Promise<EddyBranchRow[] | Refusal>
-  enter: (rec: EddyBranch) => Promise<{ owner: string; text: string } | Refusal>
-  leave: (rec: EddyBranch) => Promise<Refusal | null>
+  busy: (rec: EddyBranch, io: Io) => Promise<Refusal | null>
+  collect: (rec: EddyBranch, io: Io) => Promise<EddyBranchRow[] | Refusal>
+  enter: (rec: EddyBranch, io: Io) => Promise<{ owner: string; text: string } | Refusal>
+  leave: (rec: EddyBranch, io: Io) => Promise<Refusal | null>
 }
 export type BranchHomes = Record<EddyBranchMode, BranchHome>
 
-/** The two homes of the spike. T5 fills the fold home, T6 the pane home. */
-export const HOMES: BranchHomes = { fold: foldHome, pane: paneHome }
+/**
+ * The two homes of the spike. A function, not a constant: `branch-fold.ts` imports this module too, and a constant
+ * would read `foldHome` while that import is still loading.
+ */
+export const branchHomes = (): BranchHomes => ({ fold: foldHome, pane: paneHome })
 
 const fail = (result: string): ToolResult => ({ result, isError: true })
 
@@ -49,21 +52,20 @@ export const readBranch = (io: Io, teamdir: string, id: string) =>
 export const writeBranch = (io: Io, teamdir: string, rec: EddyBranch) =>
   writeJson(io, `${branchesDir(teamdir)}/${rec.id}.json`, rec)
 
-/** Every record with `state: 'open'`. One branch at a time is the rule; more than one is a lost race. */
-async function openBranches(io: Io, teamdir: string): Promise<EddyBranch[]> {
-  const dir = branchesDir(teamdir)
-  const found: EddyBranch[] = []
-  for (const name of await io.list(dir)) {
-    if (!branchNumber(name)) continue
-    const rec = await readJson<EddyBranch>(io, `${dir}/${name}`)
-    if (rec?.state === 'open') found.push(rec)
-  }
-  return found
-}
+/** The lock for "one open branch": a directory that exists from `branch_open` to the close of that branch. */
+const openLock = (teamdir: string) => `${branchesDir(teamdir)}/open`
+
+const releaseOpenLock = (io: Io, teamdir: string) => io.run(['rmdir', openLock(teamdir)])
 
 /** The one record with `state: 'open'`, or null. One branch at a time. */
 export async function openBranch(io: Io, teamdir: string): Promise<EddyBranch | null> {
-  return (await openBranches(io, teamdir))[0] ?? null
+  const dir = branchesDir(teamdir)
+  for (const name of await io.list(dir)) {
+    if (!branchNumber(name)) continue
+    const rec = await readJson<EddyBranch>(io, `${dir}/${name}`)
+    if (rec?.state === 'open') return rec
+  }
+  return null
 }
 
 /** Takes the next free branch number. A claim is a directory: mkdir fails when the path exists. */
@@ -114,8 +116,38 @@ export async function branchOpenTool(io: Io, input: unknown): Promise<ToolResult
     return fail(`${card.id} is ${card.status}: only an open or parked card can be discussed`)
   }
   if (v.mode === 'pane') return fail('pane mode not built yet')
+  // One open branch is one lock, taken by a mkdir (it fails when the path exists). The checks above only give a
+  // fast refusal; two parallel calls can both pass them, and only this lock lets one of them through. Every close
+  // path lets it go (`releaseOpenLock`); so does a call that fails after it took the lock.
+  await io.run(['mkdir', '-p', branchesDir(teamdir)])
+  if ((await io.run(['mkdir', openLock(teamdir)])).exitCode !== 0) {
+    const holder = await openBranch(io, teamdir)
+    return fail(holder
+      ? `${holder.id} is already open on ${holder.card}: close it first, one branch at a time`
+      : 'another branch_open is running, or a lock is left over: if this repeats, ' +
+        `remove the empty directory ${openLock(teamdir)}`)
+  }
+  try {
+    return await openLocked(io, teamdir, card, v.mode)
+  } catch (e) {
+    await releaseOpenLock(io, teamdir)
+    throw e
+  }
+}
+
+/** The second half of `branch_open`, with the lock held. Gives the lock back when it refuses. */
+async function openLocked(io: Io, teamdir: string, card: TeamCard, mode: EddyBranchMode): Promise<ToolResult> {
+  // A branch that predates the lock holds no lock: look once more, now that nobody else can open one.
+  const holder = await openBranch(io, teamdir)
+  if (holder) {
+    await releaseOpenLock(io, teamdir)
+    return fail(`${holder.id} is already open on ${holder.card}: close it first, one branch at a time`)
+  }
   const n = await claimBranch(io, teamdir)
-  if (n === null) return fail(`no free branch number after ${MAX_CLAIM_TRIES} tries`)
+  if (n === null) {
+    await releaseOpenLock(io, teamdir)
+    return fail(`no free branch number after ${MAX_CLAIM_TRIES} tries`)
+  }
   const session = await io.sessionId()
   const now = await io.now()
   const id = `B-${n}`
@@ -125,19 +157,12 @@ export async function branchOpenTool(io: Io, input: unknown): Promise<ToolResult
       context: card.context, question: card.question, options: card.options, recommendation: card.recommendation,
       refs: card.refs, blocks: card.blocks, door: card.door, rework: card.rework,
     },
-    mode: v.mode, owner: session, envoy: session, state: 'open',
+    mode, owner: session, envoy: session, state: 'open',
     mark: markerOf(id, card.id), opened_by: await openingPrompt(io), base: 0, history: [],
     note: { leaning: '', own_options: [], open_points: [] }, agents: [],
-    log: [{ from: 'none', to: v.mode, at: now }], opened_at: now,
+    log: [{ from: 'none', to: mode, at: now }], opened_at: now,
   }
   await writeBranch(io, teamdir, rec)
-  // Two calls in one turn can both pass the check above. After the write each looks again: the lowest number
-  // keeps the branch, every other open record drops itself and refuses with the id that stays.
-  const keeper = (await openBranches(io, teamdir)).reduce((a, b) => (b.n < a.n ? b : a), rec)
-  if (keeper.id !== rec.id) {
-    await writeBranch(io, teamdir, { ...rec, state: 'dropped', closed_at: await io.now() })
-    return fail(`${keeper.id} is already open on ${keeper.card}: close it first, one branch at a time`)
-  }
   return { result: foldOpenText(rec) }
 }
 
@@ -168,7 +193,7 @@ export async function branchModeTool(io: Io, input: unknown): Promise<ToolResult
   const v = (input ?? {}) as { id?: unknown; mode?: unknown }
   if (typeof v.id !== 'string' || !BRANCH_ID.test(v.id)) return fail('id must be a B-<n> id')
   if (v.mode !== 'fold' && v.mode !== 'pane') return fail('mode must be fold or pane')
-  const done = await switchBranch(io, v.id, v.mode, await callerOf(io), HOMES)
+  const done = await switchBranch(io, v.id, v.mode, await callerOf(io), branchHomes())
   return 'refused' in done ? fail(done.refused) : { result: done.text }
 }
 
@@ -188,9 +213,30 @@ export async function branchCloseTool(io: Io, input: unknown): Promise<ToolResul
   if (!rec || rec.state !== 'open') return fail(`no open branch ${v.id}`)
   const closed_at = await io.now()
   const question = `${rec.seed.question} (${rec.card})`
+  // A fold branch lives in the envoy transcript: the record keeps its rows before the fold takes them away.
+  // A transcript that cannot be read must not make the branch impossible to close: it closes with the rows the
+  // record already holds, and the close text says so. A transcript without the marker counts as unreadable too.
+  let history = rec.history
+  let unread = false
+  if (rec.mode === 'fold') {
+    try {
+      if (await foldMarkerSeen(rec, io)) {
+        const rows = await foldHome.collect(rec, io)
+        if (Array.isArray(rows)) history = rows
+      } else {
+        unread = true
+      }
+    } catch {
+      unread = true
+    }
+  }
+  const unreadNote = unread ? '\nThe rows after the marker could not be read: the record keeps the rows it held before.' : ''
   if (v.outcome === 'dropped') {
-    await writeBranch(io, teamdir, { ...rec, state: 'dropped', closed_at, ...(isText(v.summary) ? { summary: v.summary } : {}) })
-    return { result: `Branch ${rec.id} on ${question} dropped. Back at the trunk.` }
+    await writeBranch(io, teamdir, {
+      ...rec, state: 'dropped', history, closed_at, ...(isText(v.summary) ? { summary: v.summary } : {}),
+    })
+    await releaseOpenLock(io, teamdir)
+    return { result: `Branch ${rec.id} on ${question} dropped. Back at the trunk.${unreadNote}` }
   }
   if (!isText(v.summary)) return fail('summary is required to settle a branch')
   const card = (await readCards(io, teamdir)).find(c => c.id === rec.card)
@@ -198,8 +244,10 @@ export async function branchCloseTool(io: Io, input: unknown): Promise<ToolResul
     return fail(`${rec.card} is not answered yet: call decide first, then branch_close`)
   }
   const summary = v.summary.trim().replace(/\.+$/, '')
-  await writeBranch(io, teamdir, { ...rec, state: 'settled', summary, decision: card.decision, closed_at })
-  return { result: `Back from the branch on ${question}: ${summary}. Recorded as decision ${card.decision}.` }
+  await writeBranch(io, teamdir, { ...rec, state: 'settled', summary, decision: card.decision, history, closed_at })
+  await releaseOpenLock(io, teamdir)
+  const back = `Back from the branch on ${question}: ${summary}. Recorded as decision ${card.decision}.`
+  return { result: rec.mode === 'fold' ? `${back}${unreadNote}\n${foldCloseHint(rec)}` : back }
 }
 
 /** Text for the `/eddy-branch` command. */
@@ -225,9 +273,9 @@ export async function switchBranch(
     return { refused: `${id} lives in ${before.mode} mode: only the envoy or its owner may move it` }
   }
   const from = homes[before.mode]
-  const busy = await from.busy(before)
+  const busy = await from.busy(before, io)
   if (busy) return busy
-  const history = await from.collect(before)
+  const history = await from.collect(before, io)
   if (!Array.isArray(history)) return history
   const moved: EddyBranch = {
     ...before, mode: to, history, base: history.length,
@@ -235,7 +283,7 @@ export async function switchBranch(
   }
   await writeBranch(io, teamdir, moved)
   // A refusal and a throw of the new home both put the record back as step 1 read it.
-  const entered = await homes[to].enter(moved).catch((e: unknown): Refusal => ({
+  const entered = await homes[to].enter(moved, io).catch((e: unknown): Refusal => ({
     refused: `${to} mode could not start: ${e instanceof Error ? e.message : String(e)}`,
   }))
   if ('refused' in entered) {
@@ -243,7 +291,7 @@ export async function switchBranch(
     return entered
   }
   await writeBranch(io, teamdir, { ...moved, owner: entered.owner })
-  await from.leave(moved)
+  await from.leave(moved, io)
   return { text: entered.text }
 }
 
