@@ -18,6 +18,18 @@ type Block = { type?: string; text?: string; name?: string }
 /** Tools that hand the turn to the person: the text before them is the answer they read, not narration. */
 const HAND_OFF = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
+/** Longer text than this is an answer that more work follows, not narration. */
+const NARRATION_MAX = 300
+
+/** Markdown structure an answer has and narration has not: a heading, a table delimiter row, a list item, a code fence. */
+const STRUCTURE = [/^#{1,6}\s/m, /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/m, /^\s*([-*+]|\d+[.)])\s/m, /^\s*(```|~~~)/m]
+
+/**
+ * Narration is a short plain line such as "I read the file now". A pipe row without a
+ * delimiter row (the reply's status line) is no table, so it does not count as structure.
+ */
+const isNarration = (text: string) => text.length <= NARRATION_MAX && !STRUCTURE.some(re => re.test(text))
+
 /** A queued prompt stops waiting once it enters the conversation: as a new turn, or delivered into the running one. */
 async function deliver($: EngineInterface, has: (text: string) => boolean) {
   const list = await read($, sent)
@@ -75,9 +87,11 @@ export function registerNotes(on: On) {
         } else if (block.type === 'tool_use' && HAND_OFF.has(block.name ?? '')) {
           pending = []
         } else if (block.type === 'tool_use' && pending.length > 0) {
-          const said = pending
+          const said = pending.filter(isNarration)
           pending = []
-          await update($, narration, list => [...list, ...said].slice(-1000))
+          if (said.length > 0) {
+            await update($, narration, list => [...list, ...said].slice(-1000))
+          }
         }
       }
     }

@@ -34,6 +34,35 @@ describe('Reply style', () => {
     expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
   })
 
+  // Narration is a short plain line; an answer that more work follows still has structure or length.
+  const answers = {
+    'a heading and a table': '## Q1: the plugin\n\n| Plugin | Layer |\n| --- | --- |\n| `gitlab` | yes |',
+    'a list': 'Two things:\n\n- the token\n- the network rules',
+    'a numbered list': 'Steps:\n\n1. build\n2. run',
+    'a code fence': 'Run this:\n\n```bash\nnpm test\n```',
+    'more than 300 characters': 'word '.repeat(70),
+  }
+  for (const [what, text] of Object.entries(answers)) {
+    test(`keeps text with ${what} bright, though a tool call followed`, async ($, on) => {
+      await start($, on)
+      await append($, assistant([{ type: 'text', text }, { type: 'tool_use', name: 'Bash' }]))
+      const ui = await mount($, 'AssistantMessage', { text, isFirstOfReply: true })
+
+      expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeDefined()
+    })
+  }
+
+  // The status line of a reply is a pipe row, not a table: without a delimiter row it stays narration.
+  test('draws a status line and a short narration as dim narration', async ($, on) => {
+    await start($, on)
+    const text = '| 🤖 Debugging | 🛠️ | - | - | - |\n\nI check the config now.'
+    await append($, assistant([{ type: 'text', text }, { type: 'tool_use', name: 'Read' }]))
+    const ui = await mount($, 'AssistantMessage', { text, isFirstOfReply: true })
+
+    expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'AssistantMessage' })).toBeUndefined()
+  })
+
   test('keeps the text after the last tool call bright', async ($, on) => {
     await start($, on)
     await append($, assistant([{ type: 'text', text: 'Looking.' }, { type: 'tool_use', name: 'Read' }]))
