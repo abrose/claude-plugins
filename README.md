@@ -7,7 +7,23 @@ Alfred Brose's personal Claude Code **marketplace** (`abrose-plugins`).
 | [`adhd-friendly-simple-technical-english`](plugins/adhd-friendly-simple-technical-english/) | Output style | Combines Simplified Technical English (ASD-STE100) short, direct sentences with an ADHD action-first shape (numbered, skimmable, no fluff) and keeps the depth (the "why"). Code is exempt. Select it from `/config`. |
 | [`chebu-ui`](plugins/chebu-ui/) | Mod (function hooks) | Personal UI tweaks. Bold, numbered prompts (`/prompt-style`), a `/prompts` pane with a toggle button, a separator after each turn, quiet tool rows, dim narration and framed answers. |
 | [`quota-statusline`](plugins/quota-statusline/) | `bin/` executable | A quota-spend projection engine (`quota-statusline`). Reads the Claude Code rate-limit payload, logs a rolling per-profile usage sample, and prints a JSON verdict per window (5h/7d): on pace to blow the limit before it resets, or coasting under it? The weekly projection counts active hours, not 24/7. Bring your own rendering. |
-| [`team`](plugins/team/) | Skills + agents + commands + hook + `bin/` | Envoy-and-orchestrator workflow with Herdr. One envoy session you talk to, an orchestrator that runs role agents in panes, briefs as files, open questions as cards, a numbered decisions file, reports by a Stop hook. Kernel only; each project adds a small overlay. |
+
+## Archived
+
+These plugins are abandoned. They are not in the marketplace any more, get no fixes, and stay
+in the repo only for reference. Claude Code's native modes gave better results for the effort.
+
+| Plugin | What it was |
+|--------|-------------|
+| [`team`](plugins/team/) | Envoy-and-orchestrator workflow with Herdr: an envoy session, an orchestrator that runs role agents in panes, briefs as files, question cards, a decisions file. |
+| [`eddy`](plugins/eddy/) | A spike copy of `team` with card branches in the chat or in a pane. |
+
+If you installed one of them, uninstall it, because its hooks still run in every session:
+
+```
+claude plugin uninstall team
+claude plugin uninstall eddy
+```
 
 ## Install
 
@@ -35,8 +51,6 @@ Each plugin uses a different mechanism; its own README has the details.
   messages stay as they were. One file, `notes.ts`, holds every state write.
 - **`quota-statusline`** ships an executable. A plugin cannot register a `statusLine`, so you
   wire your own `statusLine.command` to call `bin/quota-statusline` and render its JSON.
-- **`team`** ships skills, agents, commands, a Stop hook and `bin/` scripts that drive Herdr.
-  Each project adds a small overlay under `.claude/team/`.
 
 ## Repo layout
 
@@ -71,17 +85,7 @@ plugins/quota-statusline/                        # bin/ executable plugin
 ├── README.md
 └── LICENSE
 
-plugins/team/                                    # orchestration workflow plugin
-├── .claude-plugin/plugin.json                  # plugin manifest
-├── skills/                                      # protocol + role rules + templates
-├── agents/                                      # team-envoy, -orchestrator, -investigator, -implementer, -tester
-├── commands/                                     # /team:init, brief, status, release, resurrect
-├── hooks/                                        # Stop and SessionStart hooks and the team mod (hooks/mod/)
-├── bin/                                          # team-init, team-start, team-brief, team-status, team-forget, ...
-├── lib/                                          # shared: teamlib.py, plugin-dir.sh
-├── tests/test_team.py                            # behaviour tests against fake CLIs
-├── README.md
-└── LICENSE
+plugins/team/, plugins/eddy/                     # archived, not in the marketplace
 ```
 
 ## License

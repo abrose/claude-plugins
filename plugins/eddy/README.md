@@ -1,5 +1,10 @@
 # eddy
 
+> [!WARNING]
+> **Archived on 2026-11-10.** This plugin is abandoned: it is not in the `abrose-plugins`
+> marketplace any more and gets no fixes, also no security fixes. If it is installed, run
+> `claude plugin uninstall eddy`, because its hooks run in every session.
+
 A spike: a copy of the team mod with card branches shown in the chat (fold) or in a pane, switchable.
 It installs once from the `abrose-plugins` marketplace (see "Install eddy") and loads in every session. In a session that no eddy run names, eddy stays inert.
 `SPEC.md` is the team spec under eddy names. The rest of this file is the team README under eddy names.

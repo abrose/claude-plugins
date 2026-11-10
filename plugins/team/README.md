@@ -1,5 +1,10 @@
 # team
 
+> [!WARNING]
+> **Archived on 2026-11-10.** This plugin is abandoned: it is not in the `abrose-plugins`
+> marketplace any more and gets no fixes, also no security fixes. If it is installed, run
+> `claude plugin uninstall team`, because its hooks run in every session.
+
 **Orchestrator-plus-team-agents workflow for Claude Code with Herdr.** One
 envoy session you talk to, an orchestrator that runs the team, role agents in
 panes, briefs as files, open questions as cards, a numbered decisions file,
